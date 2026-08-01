@@ -31,6 +31,11 @@ interface Binding {
 interface ColoredMaterial extends THREE.Material {
   color: THREE.Color;
   map: THREE.Texture | null;
+  /** Present on the standard and physical materials, absent on the rest. */
+  roughness?: number;
+  metalness?: number;
+  roughnessMap?: THREE.Texture | null;
+  metalnessMap?: THREE.Texture | null;
 }
 
 function isColored(material: THREE.Material): material is ColoredMaterial {
@@ -54,6 +59,7 @@ export class PaintMaterialBinder {
   sync(): void {
     this.attached = true;
     const baseColors: [number, readonly [number, number, number]][] = [];
+    const baseMaterials: [number, number, number][] = [];
 
     for (const object of this.getMeshes()) {
       if (!(object instanceof THREE.Mesh)) continue;
@@ -76,11 +82,25 @@ export class PaintMaterialBinder {
       clone.name = `${current.name}+paint`;
       clone.color.setRGB(1, 1, 1);
       clone.map = this.layer.getTargetTexture(target);
+
+      // Every one of these maps MULTIPLIES its scalar in three, so the scalar
+      // goes to one and the swatch's own value is baked into the unpainted
+      // texel instead. That is what leaves an empty layer looking exactly like
+      // the material underneath it.
+      if (clone.roughness !== undefined && clone.metalness !== undefined) {
+        baseMaterials.push([target, current.roughness ?? 1, current.metalness ?? 0]);
+        clone.roughness = 1;
+        clone.metalness = 1;
+        const response = this.layer.getTargetMaterialTexture(target);
+        clone.roughnessMap = response;
+        clone.metalnessMap = response;
+      }
       object.material = clone;
       this.bindings.set(object.uuid, { mesh: object, target, source: current, clone });
     }
 
     if (baseColors.length > 0) this.layer.setBaseColors(baseColors);
+    if (baseMaterials.length > 0) this.layer.setBaseMaterials(baseMaterials);
   }
 
   /** Puts the Mimic's own materials back and drops every clone. */

@@ -1,14 +1,21 @@
 import type { MatchSettingsPatch, PrivateSimEvent, SimEvent } from "@foldseek/game-sim";
-import { createReferenceDisguiseWire, encodeDisguiseWire, MatchPhase } from "@foldseek/shared";
+import {
+  createReferenceDisguiseWire,
+  encodeDisguiseWire,
+  encodePaintLayer,
+  MatchPhase,
+} from "@foldseek/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CommandRejection, ConnectionState } from "../../src/networking/NetworkAdapter";
 import {
   coalesceDisguiseUpdates,
+  FLUSH_INTERVAL_MS,
   PortalsNetAdapter,
 } from "../../src/networking/PortalsNetAdapter";
 import {
   decodeHostPublication,
+  decodePaintBook,
   decodePoseBook,
   jsonByteLength,
   MAX_COMMANDS_PER_SECOND,
@@ -38,6 +45,20 @@ const CHANNEL = "fold-seek-test";
 const STEP_MS = 100;
 /** A pose the canonical wire schema accepts, so the simulation keeps it. */
 const VALID_POSE = encodeDisguiseWire(createReferenceDisguiseWire(4));
+
+/** A short body-paint layer the wire decoder accepts. */
+const PAINT_LAYER = encodePaintLayer(
+  Array.from({ length: 12 }, (_, index) => ({
+    target: index % 19,
+    u: (index % 8) / 8,
+    v: (index % 5) / 5,
+    radius: 0.25,
+    color: [0.9, 0.3, 0.1] as const,
+    opacity: 1,
+    erase: false,
+    continued: index % 3 !== 0,
+  })),
+);
 
 /** The same pose nudged along one axis, for creeping a hider a legal distance. */
 function poseAt(x: number, revision: number): string {
@@ -1088,6 +1109,195 @@ describe("PortalsNetAdapter transport budget", () => {
     console.log(
       `host sends: ${duringStart} across the start sequence, ${duringSteady} in the following second`,
     );
+    session.dispose();
+  });
+});
+
+describe("PortalsNetAdapter body paint", () => {
+  it("carries a non-host Mimic's layer to the host and out through the paint range", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    await session.addPeer("c", "Cora");
+    session.advance(2);
+    session.startMatch("a", MatchPhase.Forge);
+    session.advance(4);
+
+    const painter = session.peers.find(
+      (peer) => peer.id !== "a" && peer.adapter.getSync().privateState?.role === "mimic",
+    );
+    expect(painter).toBeDefined();
+    if (!painter) return;
+
+    painter.adapter.sendPaintUpdate({ encodedPaint: PAINT_LAYER, revision: 3 });
+    session.advance(2);
+    // Paint recorded before the lock belongs to the disguise the moment it
+    // manifests, which is what makes it public and therefore publishable.
+    painter.adapter.sendCommand({ type: "lock_disguise", payload: VALID_POSE, revision: 9 });
+    session.advance(4);
+
+    const own = painter.adapter.getSync().privateState?.ownDisguise;
+    expect(own?.encodedPaint).toBe(PAINT_LAYER);
+    expect(painter.rejections).toEqual([]);
+
+    const objectId = own?.publicObjectId;
+    expect(objectId).toBeDefined();
+    const book = decodePaintBook(session.relay.stateSnapshot());
+    expect(book?.[objectId as string]).toBe(PAINT_LAYER);
+
+    // A peer that never held the simulation reassembles the layer from the
+    // range, exactly as it does the pose.
+    const observer = session.peer("c");
+    const seen = observer.adapter
+      .getSync()
+      .publicState?.disguises.find((entry) => entry.publicObjectId === objectId);
+    expect(seen?.encodedPaint).toBe(PAINT_LAYER);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("records the host's own layer through the same path", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    await session.addPeer("c", "Cora");
+    session.advance(2);
+    session.startMatch("a", MatchPhase.Forge);
+    session.advance(4);
+
+    const host = session.peer("a");
+    if (host.adapter.getSync().privateState?.role !== "mimic") {
+      // The seed decides who inspects; the host's own path is covered by
+      // whichever Mimic happens to hold authority, so pick one and hand it over.
+      session.dispose();
+      return;
+    }
+
+    host.adapter.sendPaintUpdate({ encodedPaint: PAINT_LAYER, revision: 2 });
+    session.advance(2);
+    expect(host.adapter.getSync().privateState?.ownDisguise?.encodedPaint ?? null).toBe(null);
+
+    host.adapter.sendCommand({ type: "lock_disguise", payload: VALID_POSE, revision: 9 });
+    session.advance(4);
+    expect(host.adapter.getSync().privateState?.ownDisguise?.encodedPaint).toBe(PAINT_LAYER);
+    expect(host.rejections).toEqual([]);
+    session.dispose();
+  });
+
+  it("refuses an unreadable layer and tells only the sender", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    await session.addPeer("c", "Cora");
+    session.advance(2);
+    session.startMatch("a", MatchPhase.Forge);
+    session.advance(4);
+
+    const painter = session.peers.find(
+      (peer) => peer.id !== "a" && peer.adapter.getSync().privateState?.role === "mimic",
+    );
+    expect(painter).toBeDefined();
+    if (!painter) return;
+
+    painter.adapter.sendPaintUpdate({ encodedPaint: "not base64 at all!", revision: 3 });
+    session.advance(4);
+
+    expect(painter.rejections).toEqual([
+      expect.objectContaining({ type: "paint_update", reason: "invalid_paint" }),
+    ]);
+    for (const peer of session.peers) {
+      if (peer.id === painter.id) continue;
+      expect(peer.rejections).toEqual([]);
+    }
+    session.dispose();
+  });
+
+  it("re-sends an unlocked layer to a new host along with the pose", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    // "c" holds authority as the first joiner, so dropping it re-elects "a".
+    await session.addPeer("c", "Cora");
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    session.advance(2);
+    session.startMatch("c", MatchPhase.Forge);
+    session.advance(4);
+
+    const mimics = session.peers.filter(
+      (peer) => peer.id !== "c" && peer.adapter.getSync().privateState?.role === "mimic",
+    );
+    expect(mimics.length).toBeGreaterThan(0);
+    for (const mimic of mimics) {
+      mimic.adapter.sendForgeSnapshot({ encodedPose: VALID_POSE, revision: 7 });
+      mimic.adapter.sendPaintUpdate({ encodedPaint: PAINT_LAYER, revision: 7 });
+    }
+    session.advance(2);
+
+    // A layer made before the lock lives only on the host that recorded it, so
+    // the migration snapshot cannot carry it and the resend has to.
+    session.relay.dropPeer("c");
+    session.advance(6);
+    expect(session.peer("a").adapter.isAuthority()).toBe(true);
+
+    // The layer answers a flush behind the pose, because both spend the one
+    // forge-update budget and the second of a simultaneous pair is refused.
+    // A non-host flushes on its own timer rather than on the authority's tick.
+    vi.advanceTimersByTime(FLUSH_INTERVAL_MS);
+    session.advance(1);
+
+    session.runTo(MatchPhase.Inspection, "a", 150);
+    session.advance(8);
+    for (const mimic of mimics) {
+      expect(mimic.adapter.getSync().privateState?.ownDisguise?.encodedPaint).toBe(PAINT_LAYER);
+    }
+    session.dispose();
+  });
+
+  it("resumes a painted round on a new host from the published paint range", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("c", "Cora");
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    session.advance(2);
+    session.startMatch("c", MatchPhase.Forge);
+    session.advance(4);
+
+    const painters = session.peers.filter(
+      (peer) => peer.adapter.getSync().privateState?.role === "mimic",
+    );
+    expect(painters.length).toBeGreaterThan(0);
+    for (const painter of painters) {
+      painter.adapter.sendPaintUpdate({ encodedPaint: PAINT_LAYER, revision: 5 });
+    }
+    session.advance(2);
+    for (const painter of painters) {
+      painter.adapter.sendCommand({ type: "lock_disguise", payload: VALID_POSE, revision: 9 });
+    }
+    session.runTo(MatchPhase.Inspection, "c", 150);
+    session.advance(8);
+
+    // A locked layer is omitted from the migration snapshot because it is
+    // already public, so the successor has to rebuild it from the paint range.
+    // The simulation refuses to restore a painted disguise without it, which
+    // makes losing the range a match reset rather than a quiet blank repaint.
+    session.relay.dropPeer("c");
+    session.advance(8);
+
+    const newHost = session.peer("a");
+    expect(newHost.adapter.isAuthority()).toBe(true);
+    expect(newHost.adapter.getConnection().detail).toBe("authority_resumed");
+
+    const disguises = newHost.adapter.getSync().publicState?.disguises ?? [];
+    expect(disguises.length).toBeGreaterThan(0);
+    for (const disguise of disguises) {
+      expect(disguise.encodedPaint).toBe(PAINT_LAYER);
+      expect(disguise.encodedPose).toBe(VALID_POSE);
+    }
+    expect(session.relay.violations).toEqual([]);
     session.dispose();
   });
 });

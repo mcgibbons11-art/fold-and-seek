@@ -11,16 +11,24 @@ import { hsvToRgb, rgbToHsv, sameColorByte, type Hsv, type Rgb } from "./color";
 
 export const RECENT_COLOR_COUNT = 8;
 
+/** MECCHA's quick-swap row: colours the player pinned, not ones they happened to use. */
+export const SAVED_COLOR_COUNT = 8;
+
 export interface PaintPanelState {
   readonly active: boolean;
   readonly hsv: Hsv;
   readonly color: Rgb;
+  /** The colour in the brush when the panel last committed a stroke, for comparison. */
+  readonly previousColor: Rgb;
   readonly brushSize: number;
   readonly opacity: number;
+  readonly metallic: number;
+  readonly smoothness: number;
   readonly eraser: boolean;
   readonly eyedropperArmed: boolean;
   readonly shadow: boolean;
   readonly recentColors: readonly Rgb[];
+  readonly savedColors: readonly Rgb[];
   readonly strokeCount: number;
   readonly maxStrokes: number;
   readonly status: string;
@@ -37,12 +45,16 @@ export class PaintStore {
       active: false,
       hsv: DEFAULT_HSV,
       color: hsvToRgb(DEFAULT_HSV),
+      previousColor: hsvToRgb(DEFAULT_HSV),
       brushSize,
       opacity: 1,
+      metallic: 0,
+      smoothness: 0.35,
       eraser: false,
       eyedropperArmed: false,
       shadow: true,
       recentColors: [],
+      savedColors: [],
       strokeCount: 0,
       maxStrokes: MAX_PAINT_STROKES,
       status: "Drag on your body to paint. F samples a colour from the room.",
@@ -84,6 +96,19 @@ export class PaintStore {
    */
   rememberColor(color: Rgb): void {
     const kept = this.state.recentColors.filter((entry) => !sameColorByte(entry, color));
-    this.patch({ recentColors: [color, ...kept].slice(0, RECENT_COLOR_COUNT) });
+    this.patch({
+      recentColors: [color, ...kept].slice(0, RECENT_COLOR_COUNT),
+      previousColor: color,
+    });
+  }
+
+  /** Pins the current colour to the quick-swap row, or unpins it if already there. */
+  toggleSavedColor(color: Rgb): void {
+    const existing = this.state.savedColors;
+    if (existing.some((entry) => sameColorByte(entry, color))) {
+      this.patch({ savedColors: existing.filter((entry) => !sameColorByte(entry, color)) });
+      return;
+    }
+    this.patch({ savedColors: [...existing, color].slice(0, SAVED_COLOR_COUNT) });
   }
 }

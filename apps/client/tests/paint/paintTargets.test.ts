@@ -58,11 +58,11 @@ describe("paint target uv normalization", () => {
     expect(normalizeTargetUv(PANEL_TARGET_OFFSET - 1, 0, 1)).toEqual([0, 1]);
   });
 
-  it("recentres the extruder's uv on a panel plate", () => {
-    // ExtrudeGeometry writes the shape's own coordinates, so a unit plate spans
-    // -0.5..0.5 rather than 0..1.
-    expect(normalizeTargetUv(PANEL_TARGET_OFFSET, -0.5, 0.5)).toEqual([0, 1]);
-    expect(normalizeTargetUv(PANEL_TARGET_OFFSET, 0, 0)).toEqual([0.5, 0.5]);
+  it("passes a panel plate's own uv through as well", () => {
+    // createPanelGeometry writes the plate's unit square itself, so there is no
+    // longer an extruder offset to undo here.
+    expect(normalizeTargetUv(PANEL_TARGET_OFFSET, 0, 1)).toEqual([0, 1]);
+    expect(normalizeTargetUv(PANEL_TARGET_OFFSET, 0.5, 0.5)).toEqual([0.5, 0.5]);
   });
 
   it("keeps a hit inside the square whatever arrives", () => {

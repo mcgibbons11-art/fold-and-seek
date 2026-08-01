@@ -22,18 +22,24 @@ export const PAINT_TARGET_IDS = [...RIG_SEGMENT_BONES, ...PANEL_SOCKET_NAMES] as
 
 export type PaintTargetId = (typeof PAINT_TARGET_IDS)[number];
 
-export const PAINT_WIRE_VERSION = 1;
+/**
+ * Version 2 added the per-stroke material response (metallic, smoothness). The
+ * decoder refuses version 1 outright rather than widening old strokes with
+ * defaults: nothing has shipped, so there is no v1 layer in the world worth
+ * carrying, and a silent upgrade path is a bug waiting for the first real one.
+ */
+export const PAINT_WIRE_VERSION = 2;
 
 /**
  * Ceiling on a layer's stroke log. Older strokes are dropped, never refused.
  *
- * A full log is 6,915 bytes, which is 9,220 base64 characters: more than one
+ * A full log is 8,451 bytes, which is 11,268 base64 characters: more than one
  * relay value holds, so a paint layer always travels on a chunked key range of
  * its own and never inside an encoded pose.
  */
 export const MAX_PAINT_STROKES = 768;
 
-export const PAINT_STROKE_BYTES = 9;
+export const PAINT_STROKE_BYTES = 11;
 export const PAINT_WIRE_HEADER_BYTES = 3;
 
 export const PAINT_WIRE_MAX_BYTES =
@@ -66,6 +72,14 @@ export interface PaintStrokeWire {
   readonly radius: number;
   readonly color: readonly [number, number, number];
   readonly opacity: number;
+  /**
+   * Material response painted along with the colour, both 0..1. Smoothness is
+   * carried rather than roughness because that is what the panel offers and
+   * what MECCHA's own slider means; the renderer inverts it, since three's
+   * roughness map is the inverse quantity.
+   */
+  readonly metallic: number;
+  readonly smoothness: number;
   readonly erase: boolean;
   readonly continued: boolean;
 }
@@ -109,6 +123,8 @@ export function quantizePaintStroke(stroke: PaintStrokeWire): PaintStrokeWire {
       dequantize(quantize(stroke.color[2], BYTE_STEPS), BYTE_STEPS),
     ],
     opacity: dequantize(quantize(stroke.opacity, BYTE_STEPS), BYTE_STEPS),
+    metallic: dequantize(quantize(stroke.metallic, BYTE_STEPS), BYTE_STEPS),
+    smoothness: dequantize(quantize(stroke.smoothness, BYTE_STEPS), BYTE_STEPS),
     erase: stroke.erase,
     continued: stroke.continued,
   };
@@ -133,6 +149,8 @@ export function writePaintStroke(
     (quantize(stroke.radius, RADIUS_STEPS) << 2) |
     (stroke.erase ? ERASE_FLAG : 0) |
     (stroke.continued ? CONTINUED_FLAG : 0);
+  bytes[offset + 9] = quantize(stroke.metallic, BYTE_STEPS);
+  bytes[offset + 10] = quantize(stroke.smoothness, BYTE_STEPS);
 }
 
 export function readPaintStroke(bytes: Uint8Array, offset: number): PaintStrokeWire {
@@ -152,6 +170,8 @@ export function readPaintStroke(bytes: Uint8Array, offset: number): PaintStrokeW
       dequantize(bytes[offset + 6] ?? 0, BYTE_STEPS),
     ],
     opacity: dequantize(bytes[offset + 7] ?? 0, BYTE_STEPS),
+    metallic: dequantize(bytes[offset + 9] ?? 0, BYTE_STEPS),
+    smoothness: dequantize(bytes[offset + 10] ?? 0, BYTE_STEPS),
     erase: (flags & ERASE_FLAG) !== 0,
     continued: (flags & CONTINUED_FLAG) !== 0,
   };

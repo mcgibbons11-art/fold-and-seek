@@ -99,6 +99,8 @@ export type CommandRejectionReason =
   | "already_locked"
   | "stale_revision"
   | "invalid_pose"
+  /** The paint layer failed to decode or exceeded its ceiling. */
+  | "invalid_paint"
   | "duplicate_vote"
   /** A creeping hider tried to cover more ground than hiderCreepSpeed allows. */
   | "moved_too_fast"

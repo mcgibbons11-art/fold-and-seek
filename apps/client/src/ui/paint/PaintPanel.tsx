@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 
 import { FORGE_UI_ATTRIBUTE } from "../../forge/ForgeController";
-import { rgbToCss, rgbToHex } from "../../paint/color";
+import { hexToRgb, rgbToCss, rgbToHex, sameColorByte, type Rgb } from "../../paint/color";
 import { MAX_BRUSH_RADIUS, MIN_BRUSH_RADIUS } from "../../paint/PaintBrushController";
 import type { PaintPanelState } from "../../paint/paintStore";
 import type { PaintTool } from "../../paint/createPaintTool";
@@ -75,7 +75,63 @@ const swatchRowStyle: CSSProperties = {
   marginTop: 8,
 };
 
+const fieldStyle: CSSProperties = {
+  background: "rgba(232, 221, 205, 0.08)",
+  color: CREAM,
+  border: EDGE,
+  borderRadius: 6,
+  padding: "4px 6px",
+  font: "inherit",
+  fontVariantNumeric: "tabular-nums",
+  pointerEvents: "auto",
+};
+
+const hexFieldStyle: CSSProperties = { ...fieldStyle, flex: 1, minWidth: 0 };
+
+const numberFieldStyle: CSSProperties = { ...fieldStyle, width: "100%", boxSizing: "border-box" };
+
+const pinButtonStyle: CSSProperties = {
+  background: "none",
+  border: "none",
+  color: BRASS,
+  font: "inherit",
+  fontSize: 10,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+  cursor: "pointer",
+  padding: 0,
+  pointerEvents: "auto",
+};
+
 const hudProps = { [FORGE_UI_ATTRIBUTE]: "" };
+
+interface SwatchButtonProps {
+  readonly color: Rgb | undefined;
+  readonly onPick: (color: Rgb) => void;
+}
+
+function SwatchButton(props: SwatchButtonProps): ReactElement {
+  const { color, onPick } = props;
+  return (
+    <button
+      type="button"
+      disabled={color === undefined}
+      title={color === undefined ? "Empty" : rgbToHex(color)}
+      onClick={() => {
+        if (color !== undefined) onPick(color);
+      }}
+      style={{
+        height: 18,
+        borderRadius: 4,
+        border: EDGE,
+        padding: 0,
+        cursor: color === undefined ? "default" : "pointer",
+        pointerEvents: "auto",
+        background: color === undefined ? "rgba(232, 221, 205, 0.06)" : rgbToCss(color),
+      }}
+    />
+  );
+}
 
 interface PaintPanelProps {
   readonly tool: PaintTool;
@@ -85,6 +141,11 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
   const { tool } = props;
   const [state, setState] = useState<PaintPanelState>(() => tool.getState());
   const [confirmingClear, setConfirmingClear] = useState(false);
+  /**
+   * Held only while the field has focus. Without it, typing "#f" would be
+   * rewritten to the full hex of whatever that parsed to on every keystroke.
+   */
+  const [hexDraft, setHexDraft] = useState<string | null>(null);
 
   useEffect(() => tool.store.subscribe(setState), [tool]);
 
@@ -111,6 +172,7 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
   if (!state.active) return null;
 
   const budget = Math.round((state.strokeCount / state.maxStrokes) * 100);
+  const isSaved = state.savedColors.some((entry) => sameColorByte(entry, state.color));
 
   return (
     <div style={panelStyle} {...hudProps}>
@@ -130,46 +192,139 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
       />
 
       <div style={rowStyle}>
+        {/* Old beside new, the comparison the reference panel puts under its
+            wheel: the colour a stroke last went down in, against the one the
+            wheel is holding now. */}
         <span
+          title={`Previous ${rgbToHex(state.previousColor)}`}
           style={{
             width: 34,
             height: 34,
-            borderRadius: 6,
+            borderRadius: "6px 0 0 6px",
+            border: EDGE,
+            borderRight: "none",
+            background: rgbToCss(state.previousColor),
+          }}
+        />
+        <span
+          title={`Current ${rgbToHex(state.color)}`}
+          style={{
+            width: 34,
+            height: 34,
+            marginLeft: -8,
+            borderRadius: "0 6px 6px 0",
             border: EDGE,
             background: rgbToCss(state.color),
           }}
         />
-        <div>
-          <div style={labelStyle}>Current</div>
-          <div style={{ fontVariantNumeric: "tabular-nums" }}>{rgbToHex(state.color)}</div>
-        </div>
+        <input
+          value={hexDraft ?? rgbToHex(state.color)}
+          spellCheck={false}
+          aria-label="Hex colour"
+          style={hexFieldStyle}
+          onChange={(event) => {
+            const text = event.target.value;
+            setHexDraft(text);
+            const parsed = hexToRgb(text);
+            if (parsed !== null) tool.setColor(parsed);
+          }}
+          onBlur={() => {
+            setHexDraft(null);
+          }}
+        />
+      </div>
+
+      <div style={{ ...labelStyle, marginTop: 10 }}>RGB 0-255</div>
+      <div style={{ display: "flex", gap: 6 }}>
+        {(["R", "G", "B"] as const).map((channel, index) => (
+          <label key={channel} style={{ flex: 1 }}>
+            <input
+              type="number"
+              min={0}
+              max={255}
+              aria-label={`${channel} 0 to 255`}
+              value={Math.round((state.color[index] ?? 0) * 255)}
+              style={numberFieldStyle}
+              onChange={(event) => {
+                const value = Number(event.target.value);
+                if (!Number.isFinite(value)) return;
+                const next: [number, number, number] = [
+                  state.color[0],
+                  state.color[1],
+                  state.color[2],
+                ];
+                next[index] = Math.min(255, Math.max(0, Math.round(value))) / 255;
+                tool.setColor(next);
+              }}
+            />
+          </label>
+        ))}
+      </div>
+
+      <div style={{ ...labelStyle, marginTop: 10 }}>
+        Metallic {Math.round(state.metallic * 100)}
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={state.metallic}
+        style={sliderStyle}
+        onChange={(event) => {
+          tool.setMetallic(Number(event.target.value));
+        }}
+      />
+
+      <div style={labelStyle}>Smoothness {Math.round(state.smoothness * 100)}</div>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={state.smoothness}
+        style={sliderStyle}
+        onChange={(event) => {
+          tool.setSmoothness(Number(event.target.value));
+        }}
+      />
+
+      <div style={{ ...labelStyle, marginTop: 10, display: "flex", justifyContent: "space-between" }}>
+        <span>Saved</span>
+        <button
+          type="button"
+          aria-label={isSaved ? "Unpin colour" : "Pin colour"}
+          style={pinButtonStyle}
+          onClick={() => {
+            tool.toggleSavedColor();
+          }}
+        >
+          {isSaved ? "unpin" : "pin"}
+        </button>
+      </div>
+      <div style={swatchRowStyle}>
+        {Array.from({ length: 8 }, (_, index) => (
+          <SwatchButton
+            key={index}
+            color={state.savedColors[index]}
+            onPick={(color) => {
+              tool.setColor(color);
+            }}
+          />
+        ))}
       </div>
 
       <div style={{ ...labelStyle, marginTop: 10 }}>Recent</div>
       <div style={swatchRowStyle}>
-        {Array.from({ length: 8 }, (_, index) => {
-          const color = state.recentColors[index];
-          return (
-            <button
-              key={index}
-              type="button"
-              disabled={color === undefined}
-              title={color === undefined ? "Empty" : rgbToHex(color)}
-              onClick={() => {
-                if (color !== undefined) tool.setColor(color);
-              }}
-              style={{
-                height: 18,
-                borderRadius: 4,
-                border: EDGE,
-                padding: 0,
-                cursor: color === undefined ? "default" : "pointer",
-                pointerEvents: "auto",
-                background: color === undefined ? "rgba(232, 221, 205, 0.06)" : rgbToCss(color),
-              }}
-            />
-          );
-        })}
+        {Array.from({ length: 8 }, (_, index) => (
+          <SwatchButton
+            key={index}
+            color={state.recentColors[index]}
+            onPick={(color) => {
+              tool.setColor(color);
+            }}
+          />
+        ))}
       </div>
 
       <div style={{ ...labelStyle, marginTop: 10 }}>

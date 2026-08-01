@@ -74,6 +74,27 @@ export function rgbToHex(rgb: Rgb): string {
   return `#${value.toString(16).padStart(6, "0").toUpperCase()}`;
 }
 
+/**
+ * Reads a hex colour the way a person types one: with or without the hash, in
+ * three or six digits, in either case. Returns null on anything else, so the
+ * field can keep what the player is still typing instead of snapping to black.
+ */
+export function hexToRgb(text: string): [number, number, number] | null {
+  const digits = text.trim().replace(/^#/, "");
+  if (!/^[0-9a-fA-F]+$/.test(digits)) return null;
+  if (digits.length === 3) {
+    const r = Number.parseInt(digits[0] ?? "", 16);
+    const g = Number.parseInt(digits[1] ?? "", 16);
+    const b = Number.parseInt(digits[2] ?? "", 16);
+    return [(r * 17) / 255, (g * 17) / 255, (b * 17) / 255];
+  }
+  if (digits.length === 6) {
+    const value = Number.parseInt(digits, 16);
+    return [((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255];
+  }
+  return null;
+}
+
 /** True when two colours are the same to the byte the wire would carry. */
 export function sameColorByte(a: Rgb, b: Rgb): boolean {
   return (

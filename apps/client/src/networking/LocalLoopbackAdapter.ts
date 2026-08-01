@@ -15,6 +15,7 @@ import {
   type ForgeSnapshot,
   type MatchSync,
   type NetworkAdapter,
+  type PaintUpdate,
   type RosterEntry,
   type Unsubscribe,
 } from "./NetworkAdapter";
@@ -142,6 +143,26 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
         result.detail === undefined
           ? { type: "forge_snapshot", reason: result.reason ?? "rejected" }
           : { type: "forge_snapshot", reason: result.reason ?? "rejected", detail: result.detail },
+      );
+    }
+    this.publish(result);
+    this.emitSync();
+  }
+
+  sendPaintUpdate(update: PaintUpdate): void {
+    const sim = this.sim;
+    if (!sim) return;
+    const result = sim.recordPaintUpdate(
+      LOCAL_SELF_ID,
+      update.encodedPaint,
+      update.revision,
+      this.clock(),
+    );
+    if (!result.accepted) {
+      this.rejectionSignal.emit(
+        result.detail === undefined
+          ? { type: "paint_update", reason: result.reason ?? "rejected" }
+          : { type: "paint_update", reason: result.reason ?? "rejected", detail: result.detail },
       );
     }
     this.publish(result);

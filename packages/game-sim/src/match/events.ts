@@ -21,6 +21,13 @@ export type DisguiseSource = "player_lock" | "recovered_pose" | "default_arrange
 
 export type PlayerLifeState = "active" | "caught" | "spectating";
 
+export interface MissedFindsEntry {
+  readonly displayName: string;
+  readonly publicPlayerId: string;
+  /** Bucketed while the round runs, exact on the reveal board. */
+  readonly points: number;
+}
+
 /** 0 unobserved, 1 inside the Inspector's cone, 2 held at close range. */
 export type WatchedLevel = 0 | 1 | 2;
 
@@ -124,6 +131,21 @@ export type SimEvent =
       readonly revision: number;
       /** True when the root actually moved, rather than only reshaping. */
       readonly moved: boolean;
+      /** True when the paint layer changed rather than the pose. */
+      readonly painted: boolean;
+    })
+  | (SimEventBase & {
+      /**
+       * The live missed-finds board. Entries name players, never their
+       * disguises: which object someone is stays secret, and "not an Inspector
+       * and not a spectator" already implied "hider" before this existed.
+       */
+      readonly type: "missed_finds_update";
+      readonly entries: readonly MissedFindsEntry[];
+      /** When the next board lands, so a countdown can be truthful. */
+      readonly nextUpdateAtMs: number;
+      /** The reveal board, carrying exact rather than bucketed points. */
+      readonly final: boolean;
     })
   | (SimEventBase & {
       readonly type: "taunt_performed";

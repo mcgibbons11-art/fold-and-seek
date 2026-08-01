@@ -25,6 +25,8 @@ function stroke(index: number): PaintStrokeWire {
     radius: 0.02 + ((index * 0.003) % 0.2),
     color: [(index % 256) / 255, ((index * 7) % 256) / 255, ((index * 13) % 256) / 255],
     opacity: 0.2 + ((index * 0.011) % 0.8),
+    metallic: ((index * 17) % 256) / 255,
+    smoothness: ((index * 23) % 256) / 255,
     erase: index % 5 === 0,
     continued: index % 3 !== 0,
   });
@@ -89,12 +91,67 @@ describe("paint layer encoding", () => {
     // transport quietly skips. Base64 is ASCII, so characters are bytes.
     const strokes = Array.from({ length: MAX_PAINT_STROKES }, (_, index) => stroke(index));
     expect(MAX_PAINT_STROKES).toBe(768);
-    expect(PAINT_WIRE_MAX_BYTES).toBe(6_915);
-    expect(PAINT_WIRE_MAX_BASE64_LENGTH).toBe(9_220);
-    expect(encodePaintLayer(strokes).length).toBe(9_220);
+    expect(PAINT_STROKE_BYTES).toBe(11);
+    expect(PAINT_WIRE_MAX_BYTES).toBe(8_451);
+    expect(PAINT_WIRE_MAX_BASE64_LENGTH).toBe(11_268);
+    expect(encodePaintLayer(strokes).length).toBe(11_268);
     // One relay value holds 8,192 bytes, so a full layer needs two chunks, and
-    // a full room of twelve needs a key range wider than the twelve-key default.
+    // a full room of twelve needs twenty keys rather than the twelve a pose
+    // book uses. Raising this without widening PAINT_STATE_KEYS would make the
+    // transport skip the write instead of rejecting it.
     expect(PAINT_WIRE_MAX_BASE64_LENGTH).toBeGreaterThan(8_192);
+    expect(Math.ceil((PAINT_WIRE_MAX_BASE64_LENGTH * 12) / 8_192)).toBeLessThanOrEqual(20);
+  });
+
+  it("carries the material response through the wire byte for byte", () => {
+    const strokes = [
+      quantizePaintStroke({
+        target: 3,
+        u: 0.5,
+        v: 0.5,
+        radius: 0.1,
+        color: [1, 0, 0],
+        opacity: 1,
+        metallic: 1,
+        smoothness: 0,
+        erase: false,
+        continued: false,
+      }),
+      quantizePaintStroke({
+        target: 3,
+        u: 0.25,
+        v: 0.75,
+        radius: 0.1,
+        color: [0, 1, 0],
+        opacity: 1,
+        metallic: 0,
+        smoothness: 1,
+        erase: false,
+        continued: true,
+      }),
+    ];
+    const decoded = decodePaintLayer(encodePaintLayer(strokes));
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) return;
+    expect(decoded.layer.strokes[0]?.metallic).toBe(1);
+    expect(decoded.layer.strokes[0]?.smoothness).toBe(0);
+    expect(decoded.layer.strokes[1]?.metallic).toBe(0);
+    expect(decoded.layer.strokes[1]?.smoothness).toBe(1);
+    expect(decoded.layer.strokes).toEqual(strokes);
+  });
+
+  it("refuses a version 1 layer outright", () => {
+    // A v1 stroke was nine bytes and carried no material response. Reading one
+    // as v2 would silently reinterpret the next stroke's bytes as this one's
+    // metallic and smoothness, so the version check has to come first.
+    const v1 = new Uint8Array(3 + 9);
+    v1[0] = 1;
+    v1[2] = 1;
+    expect(decodePaintLayer(bytesToBase64(v1))).toEqual({
+      ok: false,
+      issue: "paint_version_mismatch",
+    });
+    expect(PAINT_WIRE_VERSION).toBe(2);
   });
 
   it("reports why a bad payload was refused", () => {

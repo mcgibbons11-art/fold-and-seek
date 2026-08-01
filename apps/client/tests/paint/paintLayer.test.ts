@@ -25,13 +25,18 @@ function makeLayer(): PaintLayer {
   return new PaintLayer({ atlasSize: ATLAS, canvas: null });
 }
 
-/** FNV-1a over the atlas, so "identical image" is one comparison. */
+/**
+ * FNV-1a over both atlases, so "identical image" is one comparison and every
+ * determinism check below covers the material response as well as the colour.
+ */
 function hashOf(layer: PaintLayer): number {
-  const { data } = layer.pixelSource();
   let hash = 0x811c9dc5;
-  for (let i = 0; i < data.length; i++) {
-    hash ^= data[i] ?? 0;
-    hash = Math.imul(hash, 0x01000193);
+  for (const source of [layer.pixelSource(), layer.materialPixelSource()]) {
+    const { data } = source;
+    for (let i = 0; i < data.length; i++) {
+      hash ^= data[i] ?? 0;
+      hash = Math.imul(hash, 0x01000193);
+    }
   }
   return hash >>> 0;
 }
@@ -227,6 +232,141 @@ describe("paint atlas tile mapping", () => {
     expect(panel.readTargetPixel(panelTarget, 0.03, 0.5)).toEqual(
       makeLayer().readTargetPixel(panelTarget, 0.03, 0.5),
     );
+  });
+});
+
+describe("paint layer material response", () => {
+  function materialAt(layer: PaintLayer, target: number): [number, number] {
+    const pixel = layer.readTargetMaterialPixel(target, 0.5, 0.5);
+    expect(pixel).not.toBeNull();
+    return pixel ?? [0, 0];
+  }
+
+  it("leaves the swatch's own response in an unpainted texel", () => {
+    // Both maps multiply their material scalar in three, and the binder sets
+    // those scalars to one, so an unpainted texel has to carry the swatch's
+    // values verbatim or an empty layer would change how the body reads.
+    const layer = makeLayer();
+    layer.setBaseMaterials([[2, 0.55, 0.9]]);
+    const [roughness, metalness] = materialAt(layer, 2);
+    expect(roughness).toBeCloseTo(0.55, 2);
+    expect(metalness).toBeCloseTo(0.9, 2);
+
+    // Painting one part leaves every other part's response untouched.
+    layer.applyStroke(
+      stroke(0, { segmentId: 2, uv: [0.5, 0.5], radius: 0.3, opacity: 1, kind: "brush" }),
+    );
+    expect(materialAt(layer, 3)).toEqual(materialAt(makeLayer(), 3));
+  });
+
+  it("writes metallic and the inverse of smoothness where it paints", () => {
+    const layer = makeLayer();
+    layer.setBaseMaterials([[4, 0.9, 0]]);
+    layer.applyStroke(
+      stroke(0, {
+        segmentId: 4,
+        uv: [0.5, 0.5],
+        radius: 0.3,
+        opacity: 1,
+        kind: "brush",
+        metallic: 1,
+        smoothness: 0.8,
+      }),
+    );
+    const [roughness, metalness] = materialAt(layer, 4);
+    // Smoothness 0.8 is roughness 0.2, which is what three's map channel means.
+    expect(roughness).toBeCloseTo(0.2, 1);
+    expect(metalness).toBeCloseTo(1, 1);
+  });
+
+  it("erases the response back to the swatch, not to zero", () => {
+    const layer = makeLayer();
+    layer.setBaseMaterials([[5, 0.6, 0.1]]);
+    const base = materialAt(layer, 5);
+    layer.applyStroke(
+      stroke(0, {
+        segmentId: 5,
+        uv: [0.5, 0.5],
+        radius: 0.3,
+        opacity: 1,
+        kind: "brush",
+        metallic: 1,
+        smoothness: 1,
+      }),
+    );
+    expect(materialAt(layer, 5)).not.toEqual(base);
+
+    layer.applyStroke(
+      stroke(0, { segmentId: 5, uv: [0.5, 0.5], radius: 0.3, opacity: 1, kind: "eraser" }),
+    );
+    // The eraser is as soft as the brush, so one pass leaves a trace of what it
+    // covered rather than snapping back exactly. A couple of levels out of 255
+    // is the residue, and it is the same residue the colour atlas keeps.
+    const erased = materialAt(layer, 5);
+    expect(Math.abs(erased[0] - base[0])).toBeLessThan(0.02);
+    expect(Math.abs(erased[1] - base[1])).toBeLessThan(0.02);
+  });
+
+  it("survives the wire with its response intact", () => {
+    const painted = makeLayer();
+    painted.setBaseMaterials([[6, 0.4, 0.2]]);
+    painted.applyStrokes([
+      stroke(1, {
+        segmentId: 6,
+        uv: [0.3, 0.3],
+        kind: "brush",
+        metallic: 0.75,
+        smoothness: 0.25,
+        continued: false,
+      }),
+      stroke(1, {
+        segmentId: 6,
+        uv: [0.6, 0.6],
+        kind: "brush",
+        metallic: 0.75,
+        smoothness: 0.25,
+        continued: true,
+      }),
+    ]);
+
+    const received = makeLayer();
+    received.setBaseMaterials([[6, 0.4, 0.2]]);
+    expect(received.fromWireData(painted.toDataForWire())).toBe(true);
+    expect(hashOf(received)).toBe(hashOf(painted));
+  });
+
+  it("keeps the response in step with the colour after a rebuild", () => {
+    const layer = makeLayer();
+    layer.applyStroke(
+      stroke(0, {
+        segmentId: 7,
+        uv: [0.5, 0.5],
+        radius: 0.2,
+        opacity: 1,
+        kind: "brush",
+        metallic: 0.5,
+        smoothness: 0.5,
+      }),
+    );
+    // A base change rebuilds both atlases from the same log in one pass.
+    layer.setBaseColors([[7, [0.1, 0.1, 0.1]]]);
+    layer.setBaseMaterials([[7, 0.8, 0.05]]);
+
+    const rebuilt = makeLayer();
+    rebuilt.setBaseColors([[7, [0.1, 0.1, 0.1]]]);
+    rebuilt.setBaseMaterials([[7, 0.8, 0.05]]);
+    rebuilt.applyStroke(
+      stroke(0, {
+        segmentId: 7,
+        uv: [0.5, 0.5],
+        radius: 0.2,
+        opacity: 1,
+        kind: "brush",
+        metallic: 0.5,
+        smoothness: 0.5,
+      }),
+    );
+    expect(hashOf(layer)).toBe(hashOf(rebuilt));
   });
 });
 

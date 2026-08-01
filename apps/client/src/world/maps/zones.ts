@@ -169,8 +169,11 @@ export const CABINET_BLOCKS: readonly THREE.Box3[] = [
  * crossing aisles form the circular route; the remaining boxes are the zone
  * rooms the ring connects. Boxes share edges where they meet, so an adjacency
  * walk over the list visits every one.
+ *
+ * This is the plan only. `nav.ts` turns it into the level-0 surfaces of the
+ * navigation contract and adds the elevated topology on top of it.
  */
-export const NAV_FLOORS: readonly THREE.Box3[] = [
+export const FLOOR_PLAN: readonly THREE.Box3[] = [
   // Zone rooms.
   volume(SHOP_MIN_X + 0.1, SHOP_MIN_Z + 0.1, 3.9, -3.2),
   volume(SHOP_MIN_X + 0.1, -3.2, -4.6, 2.2),
@@ -191,38 +194,7 @@ export const NAV_FLOORS: readonly THREE.Box3[] = [
  * Ring and crossing segments, kept separately so the aisle-width and
  * keep-clear rules can be asserted against exactly the route that matters.
  */
-export const NAV_ROUTE_SEGMENTS: readonly THREE.Box3[] = NAV_FLOORS.slice(5);
-
-/**
- * Simplified collision proxy for furniture (§10.2). Small clutter is not
- * listed: the Inspector steps around a book stack rather than being blocked by
- * it, and a Mimic is allowed to overlap ordinary props slightly (§10.4).
- */
-export const NAV_BLOCKERS: readonly THREE.Box3[] = [
-  // A — front window display platform and its east plinth cluster.
-  volume(-6.6, -5.4, -0.9, -4.5, 0.35),
-  volume(0.4, -5.4, 1.6, -4.6, 1.1),
-  // B — clock wall shelf run and the longcase clock.
-  volume(-7.4, -3.0, -6.7, 1.8, 2.4),
-  volume(-7.4, 1.9, -6.85, 2.15, 2.35),
-  // C — armchair, side table, low shelf, umbrella stand.
-  volume(-6.9, 3.0, -5.9, 4.0, 1.05),
-  volume(-5.7, 3.2, -5.1, 3.8, 0.68),
-  volume(-7.4, 4.3, -6.8, 5.4, 1.15),
-  volume(-4.4, 4.9, -4.1, 5.3, 0.62),
-  // D — counter and back cabinet.
-  volume(0.6, 3.6, 3.6, 4.4, 1.08),
-  volume(0.4, 5.0, 4.0, 5.4, 2.1),
-  // E — the four cabinet blocks.
-  ...CABINET_BLOCKS,
-  // F — workbench, shelving, crate stack, ladder.
-  volume(6.2, -2.0, 7.4, 0.6, 0.95),
-  volume(6.6, -4.6, 7.4, -2.6, 2.3),
-  volume(4.1, 1.0, 5.1, 2.0, 1.15),
-  volume(4.2, -1.4, 4.7, -0.6, 2.2),
-  // G — security desk.
-  volume(6.4, 3.0, 7.4, 4.4, 0.95),
-];
+export const NAV_ROUTE_SEGMENTS: readonly THREE.Box3[] = FLOOR_PLAN.slice(5);
 
 export const SECURITY_OFFICE_BOUNDS: THREE.Box3 = volume(
   OFFICE_MIN_X,
@@ -230,48 +202,6 @@ export const SECURITY_OFFICE_BOUNDS: THREE.Box3 = volume(
   SHOP_MAX_X - 0.1,
   SHOP_MAX_Z - 0.1,
 );
-
-export interface NavSpawnPoints {
-  readonly mimic: readonly THREE.Vector3[];
-  readonly inspector: readonly THREE.Vector3[];
-}
-
-/**
- * Navigation contract shared with the Inspector controller. Boxes only: the
- * blockout deliberately has no navmesh, and the controller resolves movement
- * against walkable floors minus blocked volumes.
- */
-export interface NavData {
-  readonly floors: readonly THREE.Box3[];
-  readonly blockers: readonly THREE.Box3[];
-  readonly spawnPoints: NavSpawnPoints;
-  /** Inspectors are held here during Forge and may not be entered by a Mimic (§10.4). */
-  readonly securityOffice: THREE.Box3;
-}
-
-function point(x: number, z: number): THREE.Vector3 {
-  return new THREE.Vector3(x, 0, z);
-}
-
-export const NAV_DATA: NavData = {
-  floors: NAV_FLOORS,
-  blockers: NAV_BLOCKERS,
-  spawnPoints: {
-    // One legal Mimic start per zone, spread so no two players fold in the
-    // same sight line (§5.7).
-    mimic: [
-      point(-5.5, -3.8),
-      point(-6.0, 0.0),
-      point(-5.0, 3.6),
-      point(2.0, 2.9),
-      point(0.0, -0.5),
-      point(5.5, -3.0),
-    ],
-    // Inspection entry points: the street door and the office door approach.
-    inspector: [point(1.0, -4.0), point(3.0, 4.6), point(-3.0, 4.6)],
-  },
-  securityOffice: SECURITY_OFFICE_BOUNDS,
-};
 
 /** True when two boxes share interior space or a common edge in the XZ plane. */
 export function floorsAdjacent(a: THREE.Box3, b: THREE.Box3, epsilon = 0.001): boolean {
@@ -281,14 +211,4 @@ export function floorsAdjacent(a: THREE.Box3, b: THREE.Box3, epsilon = 0.001): b
     a.min.z <= b.max.z + epsilon &&
     b.min.z <= a.max.z + epsilon
   );
-}
-
-/** True when a point stands on one of the walkable boxes, ignoring height. */
-export function isOnFloor(nav: NavData, x: number, z: number): boolean {
-  return nav.floors.some((box) => x >= box.min.x && x <= box.max.x && z >= box.min.z && z <= box.max.z);
-}
-
-/** True when a point is inside a blocked volume, ignoring height. */
-export function isBlocked(nav: NavData, x: number, z: number): boolean {
-  return nav.blockers.some((box) => x > box.min.x && x < box.max.x && z > box.min.z && z < box.max.z);
 }

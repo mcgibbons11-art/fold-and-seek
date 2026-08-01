@@ -2,15 +2,23 @@ import { MatchSimulation, type PublicMatchState } from "@foldseek/game-sim";
 import { MatchPhase } from "@foldseek/shared";
 import { describe, expect, it } from "vitest";
 
-import { createReferenceDisguiseWire, encodeDisguiseWire } from "@foldseek/shared";
+import {
+  createReferenceDisguiseWire,
+  encodeDisguiseWire,
+  encodePaintLayer,
+  MAX_PAINT_STROKES,
+  PAINT_WIRE_MAX_BASE64_LENGTH,
+} from "@foldseek/shared";
 import {
   decodeHostPublication,
+  decodePaintBook,
   decodePoseBook,
   encodeChunks,
   jsonByteLength,
   parseEnvelope,
   MAX_PAYLOAD_BYTES,
   MAX_SNAPSHOT_CHUNKS,
+  PAINT_STATE_KEYS,
   PORTALS_PROTOCOL_VERSION,
   POSE_STATE_KEYS,
   RateWindow,
@@ -78,21 +86,28 @@ function snapshotWithPoses(state: PublicMatchState, poseChars: number): HostPubl
   };
 }
 
-/** Writes chunks into the shape net.getState() returns. */
-function asState(chunks: ReturnType<typeof encodeChunks>): Record<string, unknown> {
+/** Writes chunks into the shape net.getState() returns, for one key range. */
+function asState(
+  chunks: ReturnType<typeof encodeChunks>,
+  keys: readonly string[],
+): Record<string, unknown> {
   const state: Record<string, unknown> = {};
   (chunks ?? []).forEach((chunk, index) => {
-    const key = SNAPSHOT_STATE_KEYS[index];
+    const key = keys[index];
     if (key !== undefined) state[key] = chunk;
   });
   return state;
 }
 
 describe("snapshot chunking", () => {
-  it("round trips a twelve player match with long poses across several keys", () => {
-    const snapshot = snapshotWithPoses(inspectionState(12), 1_800);
-    const chunks = encodeChunks(snapshot, snapshot.seq, SNAPSHOT_STATE_KEYS.length);
+  it("round trips a value that needs several keys", () => {
+    // Publications no longer carry pose bodies, so the multi-chunk path is
+    // exercised by the range that does: a book of canonical poses.
+    const pose = encodeDisguiseWire(createReferenceDisguiseWire(1));
+    const book: Record<string, string> = {};
+    for (let index = 0; index < 6; index += 1) book[`obj_${index}`] = pose;
 
+    const chunks = encodeChunks(book, 3, POSE_STATE_KEYS.length);
     expect(chunks).not.toBeNull();
     expect((chunks ?? []).length).toBeGreaterThan(1);
     for (const chunk of chunks ?? []) {
@@ -100,12 +115,22 @@ describe("snapshot chunking", () => {
       expect(chunk.n).toBe((chunks ?? []).length);
     }
 
-    const decoded = decodeHostPublication(asState(chunks));
-    expect(decoded).toEqual(snapshot);
+    expect(decodePoseBook(asState(chunks, POSE_STATE_KEYS))).toEqual(book);
+  });
 
-    console.log(
-      `12 players at 1800-char poses: ${jsonByteLength(snapshot)} bytes in ${(chunks ?? []).length} key(s), largest ${Math.max(...(chunks ?? []).map(jsonByteLength))} bytes`,
-    );
+  it("ignores chunks left behind by an older, longer write", () => {
+    const pose = encodeDisguiseWire(createReferenceDisguiseWire(1));
+    const large: Record<string, string> = {};
+    for (let index = 0; index < 6; index += 1) large[`obj_${index}`] = pose;
+    const small: Record<string, string> = { obj_0: pose };
+
+    const state = asState(encodeChunks(large, 7, POSE_STATE_KEYS.length), POSE_STATE_KEYS);
+    const fresh = encodeChunks(small, 8, POSE_STATE_KEYS.length) ?? [];
+    expect(fresh.length).toBe(1);
+    // The newer write only touches the first key, leaving the older tail behind.
+    state[POSE_STATE_KEYS[0] as string] = fresh[0];
+
+    expect(decodePoseBook(state)).toEqual(small);
   });
 
   it("refuses a publication that its own key range cannot hold", () => {
@@ -115,25 +140,17 @@ describe("snapshot chunking", () => {
     expect(encodeChunks(snapshot, snapshot.seq, SNAPSHOT_STATE_KEYS.length)).toBeNull();
   });
 
-  it("ignores chunks left behind by an older, longer snapshot", () => {
-    const large = snapshotWithPoses(inspectionState(12), 1_800);
-    const small: HostPublication = { ...large, seq: large.seq + 1, publicState: inspectionState(4) };
-
-    const state = asState(encodeChunks(large, large.seq, SNAPSHOT_STATE_KEYS.length));
-    const fresh = encodeChunks(small, small.seq, SNAPSHOT_STATE_KEYS.length);
-    expect((fresh ?? []).length).toBe(1);
-    // The newer write only touches `match`, leaving the older tail in place.
-    state["match"] = (fresh ?? [])[0];
-
-    expect(decodeHostPublication(state)).toEqual(small);
-  });
-
   it("returns nothing when a chunk of the newest set is missing", () => {
-    const snapshot = snapshotWithPoses(inspectionState(12), 1_800);
-    const state = asState(encodeChunks(snapshot, snapshot.seq, SNAPSHOT_STATE_KEYS.length));
-    delete state[SNAPSHOT_STATE_KEYS[1]];
+    const pose = encodeDisguiseWire(createReferenceDisguiseWire(1));
+    const book: Record<string, string> = {};
+    for (let index = 0; index < 6; index += 1) book[`obj_${index}`] = pose;
 
-    expect(decodeHostPublication(state)).toBeNull();
+    const chunks = encodeChunks(book, 9, POSE_STATE_KEYS.length) ?? [];
+    expect(chunks.length).toBeGreaterThan(1);
+    const state = asState(chunks, POSE_STATE_KEYS);
+    delete state[POSE_STATE_KEYS[1] as string];
+
+    expect(decodePoseBook(state)).toBeNull();
   });
 
   it("reports the measured size of a realistic eight player match", () => {
@@ -163,16 +180,60 @@ describe("locked pose range", () => {
       expect(jsonByteLength(chunk)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
     }
 
-    const state: Record<string, unknown> = {};
-    (chunks ?? []).forEach((chunk, index) => {
-      const key = POSE_STATE_KEYS[index];
-      if (key !== undefined) state[key] = chunk;
-    });
-    expect(decodePoseBook(state)).toEqual(book);
+    expect(decodePoseBook(asState(chunks, POSE_STATE_KEYS))).toEqual(book);
 
     console.log(
       `12-player room: ${jsonByteLength(book)} bytes of poses in ${(chunks ?? []).length} of ${POSE_STATE_KEYS.length} key(s), one pose is ${pose.length} chars`,
     );
+  });
+});
+
+describe("body paint range", () => {
+  it("holds a full room of maximum paint layers inside its key budget", () => {
+    // The worst case the wire permits: every Mimic in the largest room has
+    // filled its stroke log to the ceiling. Ten Mimics, because a roster that
+    // big fields a second Inspector.
+    const layer = encodePaintLayer(
+      Array.from({ length: MAX_PAINT_STROKES }, (_, index) => ({
+        target: index % 19,
+        u: (index % 64) / 64,
+        v: (index % 32) / 32,
+        radius: 0.25,
+        color: [0.8, 0.2, 0.4] as const,
+        opacity: 1,
+        erase: false,
+        continued: index % 4 !== 0,
+      })),
+    );
+    expect(layer.length).toBe(PAINT_WIRE_MAX_BASE64_LENGTH);
+
+    const book: Record<string, string> = {};
+    for (let index = 0; index < 10; index += 1) book[`obj_${index}`] = layer;
+
+    const chunks = encodeChunks(book, 1, PAINT_STATE_KEYS.length);
+    expect(chunks).not.toBeNull();
+    for (const chunk of chunks ?? []) {
+      expect(jsonByteLength(chunk)).toBeLessThanOrEqual(MAX_PAYLOAD_BYTES);
+    }
+    expect(decodePaintBook(asState(chunks, PAINT_STATE_KEYS))).toEqual(book);
+
+    console.log(
+      `12-player room: ${jsonByteLength(book)} bytes of paint in ${(chunks ?? []).length} of ${PAINT_STATE_KEYS.length} key(s), one layer is ${layer.length} chars`,
+    );
+  });
+
+  it("refuses a book of layers its own key range cannot hold", () => {
+    // Sized from the range rather than written down, so this stays a genuine
+    // over-capacity case when the stroke format grows and each layer with it.
+    // The caller has to report this, never skip it.
+    const layer = "p".repeat(PAINT_WIRE_MAX_BASE64_LENGTH);
+    const capacity = PAINT_STATE_KEYS.length * MAX_PAYLOAD_BYTES;
+    const tooMany = Math.ceil(capacity / PAINT_WIRE_MAX_BASE64_LENGTH) + 2;
+
+    const book: Record<string, string> = {};
+    for (let index = 0; index < tooMany; index += 1) book[`obj_${index}`] = layer;
+
+    expect(encodeChunks(book, 1, PAINT_STATE_KEYS.length)).toBeNull();
   });
 });
 

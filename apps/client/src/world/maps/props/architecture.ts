@@ -59,7 +59,7 @@ export function buildArchitecture(ctx: PropContext): void {
 
 function buildFloor(ctx: PropContext): void {
   const b = ctx.batcher;
-  b.begin("shop.floor", [0, 0, 0], 0, false);
+  b.begin("shop.floor", [0, 0, 0], 0, false, 1, "standard", true);
 
   // Two close walnut tones with an occasional pale board. A wider spread reads
   // as stripes rather than as a floor.
@@ -162,7 +162,7 @@ function buildWalls(ctx: PropContext): void {
     },
   ];
 
-  b.begin("shop.walls", [0, 0, 0], 0, true);
+  b.begin("shop.walls", [0, 0, 0], 0, true, 1, "standard", true);
   for (const piece of pieces) {
     b.part(
       ctx.geometry.get(`wall#${piece.width.toFixed(2)}x${piece.height.toFixed(2)}x${piece.depth.toFixed(2)}`, () =>
@@ -174,7 +174,7 @@ function buildWalls(ctx: PropContext): void {
   }
   b.end();
 
-  b.begin("shop.trim", [0, 0, 0], 0, false);
+  b.begin("shop.trim", [0, 0, 0], 0, false, 1, "standard", true);
   const skirting = ctx.geometry.get("trim.skirting", () => chamferedBox(1, 0.19, 0.05, 0.008));
   const runs: readonly (readonly [number, number, number, number])[] = [
     [WIDTH, 0, SHOP_MIN_Z + 0.025, 0],
@@ -195,7 +195,7 @@ function buildCeiling(ctx: PropContext): void {
 
   // The slab casts: the moon key comes in high and would otherwise light the
   // back rooms straight through the roof.
-  b.begin("shop.ceiling", [0, 0, 0], 0, true);
+  b.begin("shop.ceiling", [0, 0, 0], 0, true, 1, "standard", true);
   b.part(
     ctx.geometry.get("ceiling.slab", () =>
       chamferedSlab(WIDTH + WALL_THICKNESS * 2, WALL_THICKNESS, DEPTH + WALL_THICKNESS * 2, 0.014),
@@ -205,7 +205,7 @@ function buildCeiling(ctx: PropContext): void {
   );
   b.end();
 
-  b.begin("shop.beams", [0, 0, 0], 0, false);
+  b.begin("shop.beams", [0, 0, 0], 0, false, 1, "standard", true);
   const beam = ctx.geometry.get("ceiling.beam", () => chamferedBox(WIDTH, 0.26, 0.22, 0.016));
   for (const z of [-3.6, -1.2, 1.2, 3.6]) {
     b.part(beam, beamMaterial, { y: WALL_HEIGHT - 0.13, z }, { shadow: false });
@@ -222,7 +222,7 @@ function buildWindowBay(ctx: PropContext): void {
   const centreX = (WINDOW_MIN_X + WINDOW_MAX_X) / 2;
   const frameZ = SHOP_MIN_Z + 0.02;
 
-  b.begin("shop.window", [0, 0, 0], 0, true);
+  b.begin("shop.window", [0, 0, 0], 0, true, 1, "standard", true);
   b.part(
     ctx.geometry.get("window.sill", () => chamferedSlab(openingWidth + 0.4, 0.1, 0.42, 0.014)),
     wood,
@@ -239,7 +239,7 @@ function buildWindowBay(ctx: PropContext): void {
   }
   b.end();
 
-  b.begin("shop.windowBars", [0, 0, 0], 0, false);
+  b.begin("shop.windowBars", [0, 0, 0], 0, false, 1, "standard", true);
   const mullion = ctx.geometry.get("window.mullion", () => chamferedBox(0.055, openingHeight, 0.1, 0.008));
   for (let i = 1; i <= 3; i += 1) {
     b.part(
@@ -273,7 +273,7 @@ function buildStreetDoor(ctx: PropContext): void {
   const centreX = (DOOR_MIN_X + DOOR_MAX_X) / 2;
   const z = SHOP_MIN_Z + 0.03;
 
-  b.begin("shop.door", [centreX, 0, z], 0, false);
+  b.begin("shop.door", [centreX, 0, z], 0, false, 1, "standard", true);
   b.part(ctx.geometry.get("door.leaf", () => chamferedBox(width - 0.08, DOOR_HEIGHT - 0.06, 0.06, 0.012)), wood, {
     y: (DOOR_HEIGHT - 0.06) / 2,
   });
@@ -305,7 +305,7 @@ function buildOfficePartition(ctx: PropContext): void {
   const northLength = SHOP_MAX_X - OFFICE_MIN_X;
   const westLength = SHOP_MAX_Z - OFFICE_MIN_Z;
 
-  b.begin("shop.officePartition", [0, 0, 0], 0, true);
+  b.begin("shop.officePartition", [0, 0, 0], 0, true, 1, "standard", true);
   // North face: solid dado, glazed centre, solid header.
   b.part(
     ctx.geometry.get(`partition.dado#${northLength.toFixed(2)}`, () => chamferedBox(northLength, 1.0, 0.1, 0.012)),
@@ -339,7 +339,7 @@ function buildOfficePartition(ctx: PropContext): void {
   );
   b.end();
 
-  b.begin("shop.officeGlazing", [0, 0, 0], 0, false);
+  b.begin("shop.officeGlazing", [0, 0, 0], 0, false, 1, "standard", true);
   b.part(
     ctx.geometry.get(`partition.glass#${northLength.toFixed(2)}`, () => new THREE.PlaneGeometry(northLength, 1.6)),
     glass,
@@ -388,7 +388,7 @@ function buildDisplayPlatform(ctx: PropContext): void {
 function buildThresholds(ctx: PropContext): void {
   const b = ctx.batcher;
   const brass = ctx.materials.get("brass_aged_02");
-  b.begin("shop.thresholds", [0, 0, 0], 0, false);
+  b.begin("shop.thresholds", [0, 0, 0], 0, false, 1, "standard", true);
 
   const strip = ctx.geometry.get("threshold.strip", () => chamferedSlab(1, 0.012, 0.09, 0.004));
   const crossings: readonly (readonly [number, number, number, number])[] = [

@@ -4,6 +4,7 @@ import {
   MatchPhase,
   MatchSnapshotSchema,
   decodeDisguiseWire,
+  decodePaintLayerWire,
   type MatchSettings,
   type PlayerRole,
   type StarterArrangementId,
@@ -24,10 +25,19 @@ import {
   CORRECT_ACCUSATION_COOLDOWN_MS,
   CREEP_SPEED_TOLERANCE,
   LOADING_TIMEOUT_MS,
+  MISSED_FINDS_JITTER_MS,
+  MISSED_FINDS_MIN_INTERVAL_MS,
+  MISSED_FINDS_POINT_BUCKET,
   MIN_LOCK_GRACE_MS,
   PUBLIC_ID_LENGTH,
   RESULT_VOTE_CATEGORIES,
   SCORE_INSPECTOR_MAX_FOCUSED_OBJECTS,
+  SCORE_MIMIC_MAX_LINE_OF_SIGHT_POINTS,
+  SCORE_MIMIC_MAX_OBSERVED_TAUNTS,
+  SCORE_MIMIC_PER_CLOSE_PASS,
+  SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE,
+  SCORE_MIMIC_PER_LINE_OF_SIGHT_SECOND,
+  SCORE_MIMIC_PER_OBSERVED_TAUNT,
   TAUNT_COOLDOWN_MS,
   WATCHED_THROTTLE_MS,
   finalCountdownMs,
@@ -39,6 +49,7 @@ import type {
   DisguiseSource,
   MatchResults,
   MatchWinner,
+  MissedFindsEntry,
   PlayerLeftReason,
   PlayerLifeState,
   PlayerResult,
@@ -310,9 +321,46 @@ function rehydratedPoses(
   return poses;
 }
 
+/**
+ * Paint layers for a pose-omitted snapshot. Paint is public appearance, so it
+ * comes back from the same public state the poses do. A disguise that carried
+ * no paint needs none, and asking for one that was never there is not an error.
+ */
+function rehydratedPaints(
+  snapshot: MatchSnapshot,
+  supplied: readonly PoseSource[] | undefined,
+): ReadonlyMap<string, string> {
+  if (!snapshot.po) return new Map();
+
+  const byObjectId = new Map(
+    (supplied ?? [])
+      .filter((entry) => typeof entry.encodedPaint === "string" && entry.encodedPaint.length > 0)
+      .map((entry) => [entry.publicObjectId, entry.encodedPaint as string]),
+  );
+  const paints = new Map<string, string>();
+  const missing: string[] = [];
+  for (const disguise of snapshot.dg) {
+    // A non-zero paint revision means a layer existed and has to come back.
+    if (disguise.pv === 0) continue;
+    const paint = byObjectId.get(disguise.o);
+    if (paint === undefined) {
+      missing.push(disguise.o);
+      continue;
+    }
+    paints.set(disguise.o, paint);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `snapshot omitted paint but ${missing.length} could not be supplied: ${missing.join(", ")}`,
+    );
+  }
+  return paints;
+}
+
 function restoreDisguise(
   entry: SnapshotDisguise,
   poses: ReadonlyMap<string, string>,
+  paints: ReadonlyMap<string, string>,
 ): DisguiseRecord {
   return {
     publicObjectId: entry.o,
@@ -321,6 +369,8 @@ function restoreDisguise(
     ownerDisplayName: entry.on,
     encodedPose: poses.get(entry.o) ?? entry.e,
     revision: entry.rv,
+    encodedPaint: paints.get(entry.o) ?? entry.pt,
+    paintRevision: entry.pv,
     source: entry.s,
     defaultArrangementId: entry.a,
     autoLocked: entry.al,
@@ -345,6 +395,14 @@ function restorePlayer(
       : entry.vp === null
         ? null
         : { encodedPose: entry.vp[0], revision: entry.vp[1] };
+  // A locked painter's recorded layer is the one on the disguise, so an
+  // omitted snapshot rebuilds it from there rather than repeating it.
+  const lastValidPaint =
+    posesOmitted && disguise !== null && disguise.encodedPaint !== null
+      ? { encodedPaint: disguise.encodedPaint, revision: disguise.paintRevision }
+      : entry.vt === null
+        ? null
+        : { encodedPaint: entry.vt[0], revision: entry.vt[1] };
   return {
     playerId: entry.i,
     publicPlayerId: entry.p,
@@ -363,6 +421,7 @@ function restorePlayer(
     // capture both write through this reference.
     disguise,
     lastValidPose,
+    lastValidPaint,
     caughtAtMs: entry.ct,
     stats: {
       directLookEscapes: entry.st.e,
@@ -413,6 +472,8 @@ export class MatchSimulation {
 
   private warrantsRemaining = 0;
   private warrantsTotal = 0;
+  private nextMissedFindsAtMs = 0;
+  private missedFindsCount = 0;
   private inspectionStartedAtMs = 0;
   private inspectionEndsAtMs = 0;
   private inspectionEndedAtMs = 0;
@@ -583,6 +644,9 @@ export class MatchSimulation {
     this.expireDisconnectedPlayers();
     this.resolvePendingEscapes();
     this.advanceAll();
+    if (this.isInspectionPhase() && this.nowMs >= this.nextMissedFindsAtMs) {
+      this.emitMissedFinds(false);
+    }
     this.deliverWatchedLevels();
     return this.drain();
   }
@@ -684,6 +748,57 @@ export class MatchSimulation {
         revision,
         moved,
         painted: false,
+      });
+    }
+    return this.accept();
+  }
+
+  /**
+   * A paint layer from a Mimic. It follows the same rules as a pose update and
+   * shares the same command budget, so alternating the two cannot buy a player
+   * twice the rate (§36.5). The revision is the paint layer's own: paint and
+   * pose are edited independently and neither rewrites the other.
+   */
+  recordPaintUpdate(
+    playerId: string,
+    encodedPaint: string,
+    revision: number,
+    nowMs?: number,
+  ): CommandResult {
+    if (nowMs !== undefined) this.setNow(nowMs);
+    const player = this.players.get(playerId);
+    if (!player) return reject("unknown_player");
+    if (player.role !== "mimic") return reject("wrong_role");
+
+    const record = player.disguise;
+    const editable = record ? this.isPostLockEditPhase() : this.isForgePhase();
+    if (!editable) return reject("wrong_phase");
+    if (player.lifeState !== "active") return reject("player_not_active");
+    if (record && this.resolvedObjects.has(record.publicObjectId)) {
+      return reject("player_not_active", "disguise_resolved");
+    }
+
+    const lastRevision = record ? record.paintRevision : (player.lastValidPaint?.revision ?? -1);
+    if (revision <= lastRevision) return reject("stale_revision");
+
+    const limited = this.rateLimitForgeUpdate(player);
+    if (limited) return limited;
+
+    const decoded = decodePaintLayerWire(encodedPaint);
+    if (!decoded.ok) return reject("invalid_paint", decoded.issue);
+
+    player.lastValidPaint = { encodedPaint, revision };
+    player.lastForgeUpdateAtMs = this.nowMs;
+
+    if (record) {
+      record.encodedPaint = encodedPaint;
+      record.paintRevision = revision;
+      this.emit({
+        type: "disguise_updated",
+        publicObjectId: record.publicObjectId,
+        revision: record.revision,
+        moved: false,
+        painted: true,
       });
     }
     return this.accept();
@@ -805,6 +920,94 @@ export class MatchSimulation {
       player.watchedDeliveredAtMs = this.nowMs;
       this.emitPrivate(player.playerId, { type: "watched", level });
     }
+  }
+
+  /**
+   * Deception points so far: the part of the §6.2 hider score that is already
+   * settled mid-round. Survival and the full-round bonus are excluded because
+   * they are not yet earned, so the board never promises points a hider could
+   * still lose.
+   */
+  private deceptionPointsOf(player: InternalPlayer): number {
+    // Watched time is only banked when a hold ends, so a hider under a steady
+    // stare would otherwise sit at the same number for as long as it lasted.
+    // The board projects the open hold without banking it, which keeps the
+    // published figure honest and leaves the accounting untouched.
+    const watchedMs = player.stats.lineOfSightMs + this.openLineOfSightMs(player);
+    const lineOfSight = Math.min(
+      Math.floor(watchedMs / 1_000) * SCORE_MIMIC_PER_LINE_OF_SIGHT_SECOND,
+      SCORE_MIMIC_MAX_LINE_OF_SIGHT_POINTS,
+    );
+    const taunts = Math.min(player.stats.observedTaunts, SCORE_MIMIC_MAX_OBSERVED_TAUNTS);
+    return (
+      lineOfSight +
+      player.stats.directLookEscapes * SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE +
+      taunts * SCORE_MIMIC_PER_OBSERVED_TAUNT +
+      player.stats.closePasses * SCORE_MIMIC_PER_CLOSE_PASS
+    );
+  }
+
+  /** Watched time from focus holds that are still open, not yet banked. */
+  private openLineOfSightMs(player: InternalPlayer): number {
+    const record = player.disguise;
+    if (!record || this.resolvedObjects.has(record.publicObjectId)) return 0;
+    let open = 0;
+    for (const hold of this.focusHolds.values()) {
+      if (hold.objectId !== record.publicObjectId) continue;
+      open += Math.max(0, this.nowMs - hold.sinceMs);
+    }
+    return open;
+  }
+
+  /**
+   * Publishes the board. Mid-round the points are floored into buckets; the
+   * reveal board is exact, because by then who was which object is public and
+   * there is nothing left to infer.
+   */
+  private emitMissedFinds(final: boolean): void {
+    const entries: MissedFindsEntry[] = [];
+    for (const player of this.players.values()) {
+      if (player.role !== "mimic") continue;
+      const points = this.deceptionPointsOf(player);
+      entries.push({
+        displayName: player.displayName,
+        publicPlayerId: player.publicPlayerId,
+        points: final
+          ? points
+          : Math.floor(points / MISSED_FINDS_POINT_BUCKET) * MISSED_FINDS_POINT_BUCKET,
+      });
+    }
+    if (entries.length === 0) return;
+
+    // Ranked, with a stable tie-break so two runs of one seed agree.
+    entries.sort((a, b) =>
+      b.points - a.points || (a.publicPlayerId < b.publicPlayerId ? -1 : 1),
+    );
+    if (!final) this.scheduleNextMissedFinds();
+    this.emit({
+      type: "missed_finds_update",
+      entries,
+      nextUpdateAtMs: final ? 0 : this.nextMissedFindsAtMs,
+      final,
+    });
+  }
+
+  /**
+   * Sets the next board time. The jitter comes from the seeded generator, so a
+   * replay lands on the same cycle, and the floor keeps a short configured
+   * interval from turning into a spin.
+   */
+  private scheduleNextMissedFinds(): void {
+    const jitterRng = new DeterministicRng(
+      mixSeeds(this.seedSalt, this.round, 0x4d66, this.missedFindsCount),
+    );
+    const jitter = jitterRng.int(MISSED_FINDS_JITTER_MS * 2 + 1) - MISSED_FINDS_JITTER_MS;
+    const interval = Math.max(
+      MISSED_FINDS_MIN_INTERVAL_MS,
+      this.settings.missedFindsUpdateMs + jitter,
+    );
+    this.missedFindsCount += 1;
+    this.nextMissedFindsAtMs = this.nowMs + interval;
   }
 
   /** Lobby players have no role yet; a spectator is sitting out a live round. */
@@ -962,6 +1165,8 @@ export class MatchSimulation {
       pe: this.phaseEndsAt,
       wr: this.warrantsRemaining,
       wt: this.warrantsTotal,
+      mf: this.nextMissedFindsAtMs,
+      mc: this.missedFindsCount,
       is: this.inspectionStartedAtMs,
       ie: this.inspectionEndsAtMs,
       ix: this.inspectionEndedAtMs,
@@ -989,6 +1194,10 @@ export class MatchSimulation {
           player.lastValidPose === null || omitPoses
             ? null
             : ([player.lastValidPose.encodedPose, player.lastValidPose.revision] as const),
+        vt:
+          player.lastValidPaint === null || omitPoses
+            ? null
+            : ([player.lastValidPaint.encodedPaint, player.lastValidPaint.revision] as const),
         ct: player.caughtAtMs,
         st: {
           e: player.stats.directLookEscapes,
@@ -1012,6 +1221,8 @@ export class MatchSimulation {
         on: record.ownerDisplayName,
         e: omitPoses ? EMPTY_POSE : record.encodedPose,
         rv: record.revision,
+        pt: omitPoses ? null : record.encodedPaint,
+        pv: record.paintRevision,
         s: record.source,
         a: record.defaultArrangementId,
         al: record.autoLocked,
@@ -1083,6 +1294,8 @@ export class MatchSimulation {
     sim.phaseEndsAt = snapshot.pe;
     sim.warrantsRemaining = snapshot.wr;
     sim.warrantsTotal = snapshot.wt;
+    sim.nextMissedFindsAtMs = snapshot.mf;
+    sim.missedFindsCount = snapshot.mc;
     sim.inspectionStartedAtMs = snapshot.is;
     sim.inspectionEndsAtMs = snapshot.ie;
     sim.inspectionEndedAtMs = snapshot.ix;
@@ -1094,8 +1307,9 @@ export class MatchSimulation {
     // Disguises come first: a player holds the same record object the map does,
     // so that catching one is visible through both paths.
     const poses = rehydratedPoses(snapshot, deps.poses);
+    const paints = rehydratedPaints(snapshot, deps.poses);
     for (const entry of snapshot.dg) {
-      sim.disguises.set(entry.o, restoreDisguise(entry, poses));
+      sim.disguises.set(entry.o, restoreDisguise(entry, poses, paints));
     }
     for (const entry of snapshot.pl) {
       sim.players.set(entry.i, restorePlayer(entry, sim.disguises, snapshot.po));
@@ -1726,6 +1940,7 @@ export class MatchSimulation {
     this.inspectionEndedAtMs = 0;
     this.warrantsRemaining = this.countRemainingMimics() + this.settings.warrantsBonus;
     this.warrantsTotal = this.warrantsRemaining;
+    this.scheduleNextMissedFinds();
     this.emit({
       type: "inspection_started",
       endsAt: this.inspectionEndsAtMs,
@@ -1739,6 +1954,8 @@ export class MatchSimulation {
     // Whoever was still being watched when the clock ran out is paid for it.
     for (const hold of this.focusHolds.values()) this.creditLineOfSight(hold);
     this.focusHolds.clear();
+    // One last board with the real numbers, now that nothing is secret.
+    this.emitMissedFinds(true);
     this.pendingEscapes = [];
     for (const player of this.players.values()) {
       if (player.role === "mimic" && player.lifeState === "active") {
@@ -1850,6 +2067,8 @@ export class MatchSimulation {
     this.accusationCounter = 0;
     this.warrantsRemaining = 0;
     this.warrantsTotal = 0;
+    this.nextMissedFindsAtMs = 0;
+    this.missedFindsCount = 0;
     this.inspectionStartedAtMs = 0;
     this.inspectionEndsAtMs = 0;
     this.inspectionEndedAtMs = 0;

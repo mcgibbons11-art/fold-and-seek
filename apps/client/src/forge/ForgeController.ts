@@ -58,6 +58,7 @@ import {
   swatchById,
   type MaterialSwatch,
 } from "../mimic/visual/materialSwatches";
+import { createPaintTool, type PaintTool } from "../paint/createPaintTool";
 import type { QualitySettings } from "../rendering/quality";
 import { AudioPlayer } from "./AudioPlayer";
 import {
@@ -114,9 +115,15 @@ import {
  * know about it.
  */
 
-export type ForgeToolMode = "pose" | "shape" | "panels" | "material";
+export type ForgeToolMode = "pose" | "shape" | "panels" | "material" | "paint";
 
-export const FORGE_TOOL_MODES: readonly ForgeToolMode[] = ["pose", "shape", "panels", "material"];
+export const FORGE_TOOL_MODES: readonly ForgeToolMode[] = [
+  "pose",
+  "shape",
+  "panels",
+  "material",
+  "paint",
+];
 
 /** Form parameters a slider can drive, as opposed to the profile enum. */
 export type SegmentFormNumericKey =
@@ -170,6 +177,17 @@ export interface ForgeHudState {
    * while ordinary editing leaves the live DOM values alone.
    */
   readonly formEpoch: number;
+}
+
+/**
+ * What a successful lock produces. Paint travels beside the pose rather than
+ * inside it, which is how the sim carries it too: `recordPaintUpdate` takes an
+ * `encodedPaint` of its own with its own revision, so the two are edited and
+ * validated independently.
+ */
+export interface LockedDisguise {
+  readonly disguise: DisguiseState;
+  readonly encodedPaint: string;
 }
 
 export interface ForgeControllerOptions {
@@ -351,8 +369,13 @@ export class ForgeController {
   private readonly pinned = new Set<IkTargetName>();
   private readonly listeners = new Set<(state: ForgeHudState) => void>();
 
+  private readonly paintMeshes: readonly THREE.Object3D[];
+  private readonly visiblePaintMeshes: THREE.Object3D[] = [];
+  private readonly paintPickTargets: THREE.Object3D[] = [];
+  private readonly paintTool: PaintTool;
+
   private state: DisguiseState;
-  private lockedPayload: DisguiseState | null = null;
+  private lockedPayload: LockedDisguise | null = null;
 
   private orbitTarget = new THREE.Vector3();
   private yaw = 0.7;
@@ -364,7 +387,7 @@ export class ForgeController {
   private mode: ForgeToolMode = "pose";
   private mirror = false;
   private locked = false;
-  private status = "Drag a handle to pose. 1 pose  2 shape  3 panels  4 material.";
+  private status = "Drag a handle to pose. 1 pose  2 shape  3 panels  4 material  5 paint.";
   private sampledSwatchId: string | null = null;
   private selectedSlot = -1;
   private selectedSocket: PanelSocketName | null = null;
@@ -447,6 +470,25 @@ export class ForgeController {
     this.scene.add(this.handleGroup);
     this.indexAnchorSurfaces();
 
+    this.paintMeshes = [...this.mimic.segmentMeshes, ...this.mimic.panelMeshes];
+    this.paintTool = createPaintTool({
+      canvas: this.canvas,
+      camera: this.camera,
+      raycaster: this.raycaster,
+      getMimicMeshes: () => this.paintableMeshes(),
+      // The eyedropper reads the room as well as the body: copying a shelf's own
+      // colour onto a panel is the whole point of the MECCHA dropper.
+      getPickTargets: () => {
+        this.paintPickTargets.length = 0;
+        this.paintPickTargets.push(...this.paintableMeshes(), ...this.roomObjects);
+        return this.paintPickTargets;
+      },
+      setCastShadow: (enabled) => {
+        this.mimic.setCastShadow(enabled);
+      },
+      ownsPointerEvent: (event) => this.ownsPointerEvent(event),
+    });
+
     this.orbitTarget.set(origin.x, origin.y + 0.55, origin.z);
     this.updateCamera();
     this.applyQuality(options.quality);
@@ -497,6 +539,9 @@ export class ForgeController {
 
   update(): void {
     this.layoutHandles();
+    // Cheap when nothing was painted: a reference check per part and an upload
+    // only while the atlas is dirty.
+    this.paintTool.update();
   }
 
   setViewport(width: number, height: number): void {
@@ -512,6 +557,9 @@ export class ForgeController {
 
   dispose(): void {
     this.setSilhouette(false);
+    // Before the Mimic goes: the binder hands each part its own material back,
+    // and those belong to the Mimic's cache.
+    this.paintTool.dispose();
     this.mimic.dispose();
     this.handleGroup.removeFromParent();
     this.handleGroup.clear();
@@ -581,11 +629,40 @@ export class ForgeController {
 
   // --- Tools ---------------------------------------------------------------
 
+  /** The body-painting tool, for the HUD panel that drives it. */
+  get paint(): PaintTool {
+    return this.paintTool;
+  }
+
+  /**
+   * Shells and the panel plates that are actually out. A stowed plate keeps its
+   * unscaled geometry inside the body and the raycaster does not skip hidden
+   * objects, so leaving them in would let a metre-wide invisible plate swallow
+   * every brush stroke aimed at the torso behind it. The buffer is reused: the
+   * brush copies what it is handed.
+   */
+  private paintableMeshes(): readonly THREE.Object3D[] {
+    this.visiblePaintMeshes.length = 0;
+    for (const mesh of this.paintMeshes) {
+      if (mesh.visible) {
+        this.visiblePaintMeshes.push(mesh);
+      }
+    }
+    return this.visiblePaintMeshes;
+  }
+
   setToolMode(mode: ForgeToolMode): void {
     if (this.mode === mode || this.locked) {
       return;
     }
+    const wasPainting = this.mode === "paint";
     this.mode = mode;
+    // Paint itself survives the switch. Only the pointer changes hands.
+    if (mode === "paint") {
+      this.paintTool.activate();
+    } else if (wasPainting) {
+      this.paintTool.deactivate();
+    }
     this.mimic.setSocketMarkersVisible(mode === "panels");
     this.layoutPanelTipHandles();
     this.status = TOOL_HINTS[mode];
@@ -964,8 +1041,12 @@ export class ForgeController {
       this.emit();
       return;
     }
-    this.lockedPayload = serializeDisguiseState(this.state);
+    this.lockedPayload = {
+      disguise: serializeDisguiseState(this.state),
+      encodedPaint: this.paintTool.layer.toDataForWire(),
+    };
     this.locked = true;
+    this.paintTool.deactivate();
     this.handleGroup.visible = false;
     this.layoutAnchorMarkers();
     this.mimic.setSocketMarkersVisible(false);
@@ -981,6 +1062,9 @@ export class ForgeController {
     }
     this.locked = false;
     this.lockedPayload = null;
+    if (this.mode === "paint") {
+      this.paintTool.activate();
+    }
     this.handleGroup.visible = true;
     this.layoutAnchorMarkers();
     this.mimic.setSocketMarkersVisible(this.mode === "panels");
@@ -990,8 +1074,8 @@ export class ForgeController {
     this.emit();
   }
 
-  /** The serialized disguise produced by the last successful lock. */
-  get lockedDisguise(): DisguiseState | null {
+  /** The serialized disguise and paint produced by the last successful lock. */
+  get lockedDisguise(): LockedDisguise | null {
     return this.lockedPayload;
   }
 
@@ -1835,6 +1919,12 @@ export class ForgeController {
   private attachInput(): void {
     const onPointerDown = (event: PointerEvent): void => {
       if (!this.ownsPointerEvent(event)) return;
+      // The brush listens on the canvas, and these handlers run at the window in
+      // the capture phase, so stopping propagation here would swallow the press
+      // before it ever reached the brush. In paint mode the left button belongs
+      // to the brush and the Forge does not touch the event at all. Right-drag
+      // orbit, middle-drag and shift-drag pan still work while painting.
+      if (this.paintOwnsPointer() && event.button === 0 && !event.shiftKey) return;
       event.stopPropagation();
       event.preventDefault();
       this.lastPointerX = event.clientX;
@@ -1855,6 +1945,9 @@ export class ForgeController {
 
     const onPointerMove = (event: PointerEvent): void => {
       if (!this.ownsPointerEvent(event)) return;
+      // The brush tracks the drag on the window, so the same rule applies here:
+      // unless the Forge is already turning the camera, it stays out of the way.
+      if (this.paintOwnsPointer()) return;
       event.stopPropagation();
       this.updatePointerNdc(event);
 
@@ -1881,6 +1974,7 @@ export class ForgeController {
 
     const onPointerUp = (event: PointerEvent): void => {
       if (!this.ownsPointerEvent(event) && event.pointerId !== this.dragPointerId) return;
+      if (this.paintOwnsPointer()) return;
       event.stopPropagation();
       if (this.draggedHandle !== null) {
         const released = this.draggedHandle;
@@ -1967,6 +2061,14 @@ export class ForgeController {
     return target instanceof Element && target.closest(FORGE_UI_SELECTOR) === null;
   }
 
+  /**
+   * True while the brush, not the Forge, should be reading the pointer. A camera
+   * drag already in progress keeps the pointer it captured until it is released.
+   */
+  private paintOwnsPointer(): boolean {
+    return this.mode === "paint" && !this.locked && this.cameraDrag === null;
+  }
+
   private handleKey(event: KeyboardEvent): void {
     const key = event.key.toLowerCase();
     if (event.ctrlKey || event.metaKey) {
@@ -1997,6 +2099,9 @@ export class ForgeController {
       case "4":
         this.setToolMode("material");
         break;
+      case "5":
+        this.setToolMode("paint");
+        break;
       case " ":
         // Held, not toggled: §7.5 lists Space as "hold Inspector preview".
         this.setPreview("inspector");
@@ -2005,7 +2110,11 @@ export class ForgeController {
         this.setSilhouette(!this.silhouette);
         break;
       case "f":
-        this.sampleUnderPointer();
+        // In paint mode F belongs to the brush's eyedropper, which the paint
+        // panel binds. Sampling a swatch here as well would fight it.
+        if (this.mode !== "paint") {
+          this.sampleUnderPointer();
+        }
         break;
       case "m":
         this.setMirror(!this.mirror);
@@ -2358,6 +2467,7 @@ const TOOL_HINTS: Readonly<Record<ForgeToolMode, string>> = {
   shape: "Click a body part, then stretch it with the sliders.",
   panels: "Click a brass stud to fold a panel out, then shape it.",
   material: "Point at the room and press F to sample, then click a part to paint it.",
+  paint: "Drag on your body to paint it. F copies a colour from anything you point at.",
 };
 
 function clamp(value: number, min: number, max: number): number {

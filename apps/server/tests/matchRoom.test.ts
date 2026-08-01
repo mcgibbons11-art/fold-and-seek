@@ -3,7 +3,12 @@ import type { MatchSettingsPatch, PrivateSimEvent, SimEvent } from "@foldseek/ga
 import { DEFAULT_MATCH_SETTINGS, MatchPhase } from "@foldseek/shared";
 import { describe, expect, it } from "vitest";
 
-import { MatchRoom, SERVER_MESSAGE, FORGE_SNAPSHOT_MESSAGE } from "../src/rooms/MatchRoom";
+import {
+  MatchRoom,
+  SERVER_MESSAGE,
+  FORGE_SNAPSHOT_MESSAGE,
+  PAINT_UPDATE_MESSAGE,
+} from "../src/rooms/MatchRoom";
 import { MAX_COMMANDS_PER_SECOND, MAX_MESSAGE_BYTES } from "../src/rooms/messageGuards";
 
 /**
@@ -184,6 +189,17 @@ describe("MatchRoom payload validation", () => {
       { type: FORGE_SNAPSHOT_MESSAGE, reason: "invalid_payload" },
     ]);
   });
+
+  it("rejects a malformed paint update", () => {
+    const harness = new TestRoom();
+    const client = harness.join("s1", "Ada");
+
+    harness.room.handlePaintUpdate(client.asClient(), { revision: 1, encodedPaint: 7 });
+
+    expect(client.messagesOfType(SERVER_MESSAGE.commandRejected)).toEqual([
+      { type: PAINT_UPDATE_MESSAGE, reason: "invalid_payload" },
+    ]);
+  });
 });
 
 describe("MatchRoom wire limits", () => {
@@ -298,6 +314,44 @@ describe("MatchRoom live hider contract", () => {
     expect(only.type).toBe(FORGE_SNAPSHOT_MESSAGE);
     // The simulation's own reason travels, not a generic failure.
     expect(["wrong_phase", "wrong_role", "invalid_pose"]).toContain(only.reason);
+  });
+
+  it("returns a refused paint update to the sender rather than dropping it", () => {
+    const harness = new TestRoom();
+    const client = harness.join("s1", "Ada");
+
+    // Schema-valid, but not a layer the paint wire can decode.
+    harness.room.handlePaintUpdate(client.asClient(), {
+      revision: 3,
+      encodedPaint: "not base64 at all!",
+    });
+
+    const rejections = client.messagesOfType(SERVER_MESSAGE.commandRejected);
+    expect(rejections).toHaveLength(1);
+    const only = rejections[0] as { type: string; reason: string };
+    expect(only.type).toBe(PAINT_UPDATE_MESSAGE);
+    expect(["wrong_phase", "wrong_role", "invalid_paint"]).toContain(only.reason);
+  });
+
+  it("charges paint and poses to one forge budget so alternating buys no rate", () => {
+    const harness = new TestRoom();
+    const client = harness.join("s1", "Ada");
+
+    // Alternating the two message channels must not double the allowance: the
+    // room shares one window, matching the simulation's own shared budget.
+    const attempts = DEFAULT_MATCH_SETTINGS.maxForgeCommandHz + 5;
+    for (let index = 0; index < attempts; index += 1) {
+      if (index % 2 === 0) {
+        harness.room.handleForgeSnapshot(client.asClient(), { revision: index, encodedPose: "" });
+      } else {
+        harness.room.handlePaintUpdate(client.asClient(), { revision: index, encodedPaint: "" });
+      }
+    }
+
+    const limited = client
+      .messagesOfType(SERVER_MESSAGE.commandRejected)
+      .filter((entry) => (entry as { reason: string }).reason === "rate_limited");
+    expect(limited).toHaveLength(5);
   });
 });
 

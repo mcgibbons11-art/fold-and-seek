@@ -386,6 +386,9 @@ export const PaintStrokeWireSchema = z.strictObject({
   radius: unitScalar,
   color: z.tuple([unitScalar, unitScalar, unitScalar]),
   opacity: unitScalar,
+  /** Material response painted with the colour; the renderer inverts smoothness. */
+  metallic: unitScalar,
+  smoothness: unitScalar,
   erase: z.boolean(),
   /** Sampled while the pointer was already down, so a replay draws the join. */
   continued: z.boolean(),
@@ -397,6 +400,17 @@ export const PaintLayerWireSchema = z.strictObject({
 });
 
 export const EncodedPaintLayerSchema = z.string().max(PAINT_WIRE_MAX_BASE64_LENGTH);
+
+/**
+ * A Mimic's latest body-paint layer, as the transports carry it. The parallel
+ * of ForgeSnapshotSchema, and coalesced the same way: one whole stroke log per
+ * send, never one send per brush stamp. The revision is the layer's own,
+ * because paint and pose are authored independently.
+ */
+export const PaintUpdateSchema = z.strictObject({
+  revision,
+  encodedPaint: EncodedPaintLayerSchema,
+});
 
 export type PaintLayerWirePayload = z.infer<typeof PaintLayerWireSchema>;
 
@@ -597,6 +611,19 @@ export const SimEventSchema = z.discriminatedUnion("type", [
     moved: z.boolean(),
     /** True when the paint layer changed rather than the pose. */
     painted: z.boolean(),
+  }),
+  z.strictObject({
+    ...eventBase,
+    type: z.literal("missed_finds_update"),
+    entries: z
+      .array(
+        z.strictObject({ displayName, publicPlayerId: id, points: count }),
+      )
+      .max(LIMITS.maxPlayersPerMatch),
+    /** When the next board lands, so a countdown can be truthful. */
+    nextUpdateAtMs: timestamp,
+    /** The reveal board, which carries exact rather than bucketed points. */
+    final: z.boolean(),
   }),
   z.strictObject({
     ...eventBase,
@@ -821,6 +848,9 @@ export const MatchSnapshotSchema = z.strictObject({
   wr: z.number().int(),
   /** Warrants the round started with, so a late joiner can render spent rounds. */
   wt: z.number().int(),
+  /** Next missed-finds board time, and how many have been published. */
+  mf: simTime,
+  mc: counter,
   is: simTime,
   ie: simTime,
   ix: simTime,

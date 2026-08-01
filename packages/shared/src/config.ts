@@ -20,6 +20,11 @@ export const DEFAULT_MATCH_SETTINGS = {
    * walks: the disguise has to read as furniture that moved when nobody looked.
    */
   hiderCreepSpeed: 0.6,
+  /**
+   * Cycle for the live missed-finds board during the hunt. The original shows
+   * a visible countdown to the next update on roughly this period.
+   */
+  missedFindsUpdateMs: 20_000,
   inspectorFocusDistance: 8.0,
   accusationDistance: 5.5,
   accusationHoldMs: 450,

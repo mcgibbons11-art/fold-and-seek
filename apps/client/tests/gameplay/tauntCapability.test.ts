@@ -11,6 +11,7 @@ import type {
   ForgeSnapshot,
   MatchSync,
   NetworkAdapter,
+  PaintUpdate,
   RosterEntry,
   Unsubscribe,
 } from "../../src/networking/NetworkAdapter";
@@ -52,6 +53,7 @@ class StubAdapter implements NetworkAdapter {
     this.sent.push(command);
   }
   sendForgeSnapshot(_snapshot: ForgeSnapshot): void {}
+  sendPaintUpdate(_update: PaintUpdate): void {}
 
   getSelfId(): string | null {
     return this.connection.selfId;

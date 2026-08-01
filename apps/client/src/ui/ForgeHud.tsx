@@ -8,6 +8,7 @@ import {
 import { PANEL_PROFILE_IDS, type PanelProfileId } from "../mimic/panels";
 import { SEGMENT_PROFILE_IDS, type SegmentProfileId } from "../mimic/segmentForm";
 import { swatchById } from "../mimic/visual/materialSwatches";
+import { PaintPanel } from "./paint/PaintPanel";
 import {
   FORGE_TOOL_MODES,
   FORGE_UI_ATTRIBUTE,
@@ -107,6 +108,7 @@ const TOOL_LABELS: Readonly<Record<ForgeToolMode, string>> = {
   shape: "2  Shape",
   panels: "3  Panels",
   material: "4  Material",
+  paint: "5  Paint",
 };
 
 interface SliderProps {
@@ -242,6 +244,13 @@ export function ForgeHud({ controller, onExit }: ForgeHudProps): ReactElement {
         </button>
       </div>
 
+      {/* The paint panel places itself at 16/16 and draws nothing unless the
+          paint tool is active. The wrapper is what puts that origin beside the
+          tool column instead of on top of it. */}
+      <div style={{ position: "absolute", left: 148, top: 58 }}>
+        <PaintPanel tool={controller.paint} />
+      </div>
+
       <div {...hudProps} style={{ ...panelStyle, top: 74, right: 16, width: 236, maxHeight: "70vh", overflowY: "auto" }}>
         <ContextPanel controller={controller} state={state} onCommit={commit} />
       </div>
@@ -364,6 +373,15 @@ function ContextPanel({ controller, state, onCommit }: ContextPanelProps): React
   }
   if (state.mode === "material") {
     return <MaterialPanel controller={controller} state={state} />;
+  }
+  if (state.mode === "paint") {
+    return (
+      <Section title="Body paint">
+        <div style={{ opacity: 0.65 }}>
+          Drag on the Mimic to paint it. The wheel, the brush and the dropper are on the left.
+        </div>
+      </Section>
+    );
   }
   return <ArrangementPanel controller={controller} state={state} />;
 }

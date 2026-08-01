@@ -96,6 +96,21 @@ export const WATCHED_THROTTLE_MS = 500;
  * rather than in a corner. Held time is summed per focus hold, so two
  * Inspectors watching at once accrue separately, and the total is capped.
  */
+/**
+ * Live missed-finds board (MECCHA "MISSED FINDS RATING", docs/MECCHA_RESEARCH.md).
+ *
+ * Points are published in buckets rather than exactly, and the cycle is
+ * jittered, because every component of the score is caused by the Inspector's
+ * own actions: they stare, and twenty seconds later somebody's number moves.
+ * Coarsening the number blunts that inference. It does not remove it, and the
+ * board is a deliberate design choice to publish a signal the Inspector partly
+ * authored, so the residual correlation is accepted rather than solved here.
+ */
+export const MISSED_FINDS_POINT_BUCKET = 25;
+export const MISSED_FINDS_JITTER_MS = 3_000;
+/** Floor on the jittered cycle, so a short setting cannot spin the scheduler. */
+export const MISSED_FINDS_MIN_INTERVAL_MS = 1_000;
+
 export const SCORE_MIMIC_PER_LINE_OF_SIGHT_SECOND = 2;
 export const SCORE_MIMIC_MAX_LINE_OF_SIGHT_POINTS = 200;
 

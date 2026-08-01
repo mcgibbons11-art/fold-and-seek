@@ -44,6 +44,13 @@ export interface PaintStroke {
   /** sRGB in 0..1, the space the colour wheel and the atlas both work in. */
   readonly color: readonly [number, number, number];
   readonly opacity: number;
+  /**
+   * Material response painted with the colour, both 0..1. Omitted strokes take
+   * the defaults, which are the dead-matt dielectric a plain paint dab should
+   * be. Smoothness is stored, not roughness: it is what the slider means.
+   */
+  readonly metallic?: number;
+  readonly smoothness?: number;
   readonly kind: "brush" | "eraser";
   /**
    * Sampled while the pointer was already down on this target. A continued
@@ -72,6 +79,14 @@ export interface PaintPixelSource {
 /** Porcelain, the swatch a Mimic wears before anything is sampled (§17.3). */
 const DEFAULT_BASE_COLOR: readonly [number, number, number] = [236, 226, 210];
 
+/** Porcelain's own response, until the binder reads the real material. */
+const DEFAULT_BASE_ROUGHNESS = 77;
+const DEFAULT_BASE_METALNESS = 0;
+
+/** A dab of paint with no material intent: matt, and not a metal. */
+const DEFAULT_STROKE_METALLIC = 0;
+const DEFAULT_STROKE_SMOOTHNESS = 0.35;
+
 /** Stamp spacing along an interpolated drag, as a fraction of the brush radius. */
 const STAMP_SPACING = 0.35;
 
@@ -91,6 +106,8 @@ function toWire(stroke: PaintStroke): PaintStrokeWire {
     radius: Math.max(stroke.radius, MIN_RADIUS_UV),
     color: [stroke.color[0], stroke.color[1], stroke.color[2]],
     opacity: stroke.opacity,
+    metallic: stroke.metallic ?? DEFAULT_STROKE_METALLIC,
+    smoothness: stroke.smoothness ?? DEFAULT_STROKE_SMOOTHNESS,
     erase: stroke.kind === "eraser",
     continued: stroke.continued === true,
   });
@@ -100,10 +117,20 @@ export class PaintLayer {
   readonly atlasSize: number;
 
   private readonly pixels: Uint8ClampedArray<ArrayBuffer>;
+  /**
+   * The second atlas: green is roughness and blue is metalness, the packing
+   * three reads for `roughnessMap.g` and `metalnessMap.b` (verified in
+   * MaterialNode.js and the roughnessmap/metalnessmap shader chunks in 0.185).
+   * One texture therefore feeds both slots. It is data, not colour, so it
+   * carries no colour space and must never be tagged sRGB.
+   */
+  private readonly materialPixels: Uint8ClampedArray<ArrayBuffer>;
   private readonly strokes: PaintStrokeWire[] = [];
   private readonly tiles: readonly PaintTile[];
   /** sRGB bytes each tile is cleared to, one per paint target. */
   private readonly baseColors: Uint8Array;
+  /** Roughness and metalness bytes each tile is cleared to, per paint target. */
+  private readonly baseMaterials: Uint8Array;
   /** Last stamp on each target, so a continued stamp knows what to join to. */
   private readonly lastU: Float64Array;
   private readonly lastV: Float64Array;
@@ -113,15 +140,23 @@ export class PaintLayer {
   private context: CanvasRenderingContext2D | null = null;
   private texture: THREE.CanvasTexture | null = null;
   private readonly targetTextures = new Map<number, THREE.Texture>();
+
+  private readonly materialCanvas: HTMLCanvasElement | null;
+  private materialContext: CanvasRenderingContext2D | null = null;
+  private materialTexture: THREE.CanvasTexture | null = null;
+  private readonly targetMaterialTextures = new Map<number, THREE.Texture>();
+
   private dirty = true;
 
   constructor(options: PaintLayerOptions = {}) {
     this.atlasSize = options.atlasSize ?? DEFAULT_ATLAS_SIZE;
     this.pixels = new Uint8ClampedArray(this.atlasSize * this.atlasSize * 4);
+    this.materialPixels = new Uint8ClampedArray(this.atlasSize * this.atlasSize * 4);
     this.tiles = Array.from({ length: PAINT_TARGET_COUNT }, (_, index) =>
       paintTileOf(index, this.atlasSize),
     );
     this.baseColors = new Uint8Array(PAINT_TARGET_COUNT * 3);
+    this.baseMaterials = new Uint8Array(PAINT_TARGET_COUNT * 2);
     this.lastU = new Float64Array(PAINT_TARGET_COUNT);
     this.lastV = new Float64Array(PAINT_TARGET_COUNT);
     this.hasLast = new Uint8Array(PAINT_TARGET_COUNT);
@@ -130,18 +165,25 @@ export class PaintLayer {
       this.baseColors[index * 3] = DEFAULT_BASE_COLOR[0];
       this.baseColors[index * 3 + 1] = DEFAULT_BASE_COLOR[1];
       this.baseColors[index * 3 + 2] = DEFAULT_BASE_COLOR[2];
+      this.baseMaterials[index * 2] = DEFAULT_BASE_ROUGHNESS;
+      this.baseMaterials[index * 2 + 1] = DEFAULT_BASE_METALNESS;
     }
 
-    this.canvas =
-      options.canvas !== undefined
-        ? options.canvas
-        : typeof document === "undefined"
-          ? null
-          : document.createElement("canvas");
+    const makeCanvas = (): HTMLCanvasElement | null => {
+      if (typeof document === "undefined") return null;
+      const canvas = document.createElement("canvas");
+      canvas.width = this.atlasSize;
+      canvas.height = this.atlasSize;
+      return canvas;
+    };
+    this.canvas = options.canvas !== undefined ? options.canvas : makeCanvas();
     if (this.canvas !== null) {
       this.canvas.width = this.atlasSize;
       this.canvas.height = this.atlasSize;
     }
+    // The material atlas always owns its canvas: it is never the one a caller
+    // hands in, because a caller only ever supplies the visible one.
+    this.materialCanvas = options.canvas === null ? null : makeCanvas();
 
     this.fillAllTiles();
   }
@@ -187,6 +229,36 @@ export class PaintLayer {
       this.baseColors[targetIndex * 3] = r;
       this.baseColors[targetIndex * 3 + 1] = g;
       this.baseColors[targetIndex * 3 + 2] = b;
+      changed = true;
+    }
+    if (changed) this.rebuild();
+  }
+
+  /**
+   * Response an unpainted texel of a target reports, both 0..1 and expressed as
+   * three reads them: roughness, not smoothness.
+   *
+   * This is the passthrough that keeps a swatch intact under an empty layer.
+   * Both maps MULTIPLY their material scalar, so the binder sets those scalars
+   * to one and the swatch's own values live here instead. An unpainted texel
+   * therefore reproduces the swatch exactly, and a painted one replaces it.
+   */
+  setBaseMaterials(
+    entries: readonly (readonly [number, number, number])[],
+  ): void {
+    let changed = false;
+    for (const [targetIndex, roughness, metalness] of entries) {
+      if (targetIndex < 0 || targetIndex >= PAINT_TARGET_COUNT) continue;
+      const r = Math.round(clamp01(roughness) * 255);
+      const m = Math.round(clamp01(metalness) * 255);
+      if (
+        this.baseMaterials[targetIndex * 2] === r &&
+        this.baseMaterials[targetIndex * 2 + 1] === m
+      ) {
+        continue;
+      }
+      this.baseMaterials[targetIndex * 2] = r;
+      this.baseMaterials[targetIndex * 2 + 1] = m;
       changed = true;
     }
     if (changed) this.rebuild();
@@ -260,22 +332,61 @@ export class PaintLayer {
   }
 
   /**
+   * The material-response atlas, for `roughnessMap` and `metalnessMap` both.
+   * Deliberately left in no colour space: three reads it as data, and tagging
+   * it sRGB would put an inverse transfer curve through a roughness value.
+   */
+  getMaterialTexture(): THREE.CanvasTexture | null {
+    if (this.materialTexture === null && this.materialCanvas !== null) {
+      const texture = new THREE.CanvasTexture(this.materialCanvas);
+      texture.name = "mimic_paint_material_atlas";
+      texture.colorSpace = THREE.NoColorSpace;
+      texture.generateMipmaps = false;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      this.materialTexture = texture;
+      this.flush();
+    }
+    return this.materialTexture;
+  }
+
+  /**
    * A view of one target's tile, ready to hang on that part's material. Clones
    * share the atlas texture's source, so all twenty-seven views are one upload.
    */
   getTargetTexture(targetIndex: number): THREE.Texture | null {
-    const atlas = this.getTexture();
+    return this.tileView(this.getTexture(), targetIndex, this.targetTextures, "tile");
+  }
+
+  /** The same view onto the material atlas; serves roughness and metalness. */
+  getTargetMaterialTexture(targetIndex: number): THREE.Texture | null {
+    return this.tileView(
+      this.getMaterialTexture(),
+      targetIndex,
+      this.targetMaterialTextures,
+      "material_tile",
+    );
+  }
+
+  private tileView(
+    atlas: THREE.Texture | null,
+    targetIndex: number,
+    cache: Map<number, THREE.Texture>,
+    label: string,
+  ): THREE.Texture | null {
     if (atlas === null || targetIndex < 0 || targetIndex >= PAINT_TARGET_COUNT) return null;
-    const existing = this.targetTextures.get(targetIndex);
+    const existing = cache.get(targetIndex);
     if (existing !== undefined) return existing;
 
     const transform = paintTileTransform(targetIndex);
     const view = atlas.clone();
-    view.name = `mimic_paint_tile_${targetIndex}`;
+    view.name = `mimic_paint_${label}_${targetIndex}`;
     view.offset.set(transform.offsetU, transform.offsetV);
     view.repeat.set(transform.repeatU, transform.repeatV);
     view.needsUpdate = true;
-    this.targetTextures.set(targetIndex, view);
+    cache.set(targetIndex, view);
     return view;
   }
 
@@ -284,12 +395,38 @@ export class PaintLayer {
     return { width: this.atlasSize, height: this.atlasSize, data: this.pixels };
   }
 
+  materialPixelSource(): PaintPixelSource {
+    return { width: this.atlasSize, height: this.atlasSize, data: this.materialPixels };
+  }
+
+  /** Roughness and metalness currently shown at a point, both 0..1. */
+  readTargetMaterialPixel(
+    targetIndex: number,
+    u: number,
+    v: number,
+  ): [number, number] | null {
+    const index = this.texelIndex(targetIndex, u, v);
+    if (index === null) return null;
+    return [(this.materialPixels[index + 1] ?? 0) / 255, (this.materialPixels[index + 2] ?? 0) / 255];
+  }
+
   /** sRGB 0..1 currently shown at a point on a target. */
   readTargetPixel(
     targetIndex: number,
     u: number,
     v: number,
   ): [number, number, number] | null {
+    const index = this.texelIndex(targetIndex, u, v);
+    if (index === null) return null;
+    return [
+      (this.pixels[index] ?? 0) / 255,
+      (this.pixels[index + 1] ?? 0) / 255,
+      (this.pixels[index + 2] ?? 0) / 255,
+    ];
+  }
+
+  /** Both atlases share one tile layout, so one lookup serves both. */
+  private texelIndex(targetIndex: number, u: number, v: number): number | null {
     const tile = this.tiles[targetIndex];
     if (tile === undefined) return null;
     const x = Math.min(
@@ -300,12 +437,7 @@ export class PaintLayer {
       tile.y + tile.height - 1,
       Math.max(tile.y, Math.floor(tile.y + (1 - clamp01(v)) * tile.height)),
     );
-    const index = (y * this.atlasSize + x) * 4;
-    return [
-      (this.pixels[index] ?? 0) / 255,
-      (this.pixels[index + 1] ?? 0) / 255,
-      (this.pixels[index + 2] ?? 0) / 255,
-    ];
+    return (y * this.atlasSize + x) * 4;
   }
 
   /**
@@ -313,24 +445,57 @@ export class PaintLayer {
    * no-op without a canvas.
    */
   flush(): void {
-    if (!this.dirty || this.canvas === null) return;
-    if (this.context === null) {
-      this.context = this.canvas.getContext("2d");
-      if (this.context === null) return;
+    if (!this.dirty) return;
+    if (this.canvas !== null) {
+      if (this.context === null) this.context = this.canvas.getContext("2d");
+      this.context?.putImageData(
+        new ImageData(this.pixels, this.atlasSize, this.atlasSize),
+        0,
+        0,
+      );
     }
-    this.context.putImageData(new ImageData(this.pixels, this.atlasSize, this.atlasSize), 0, 0);
+    if (this.materialCanvas !== null) {
+      if (this.materialContext === null) {
+        this.materialContext = this.materialCanvas.getContext("2d");
+      }
+      this.materialContext?.putImageData(
+        new ImageData(this.materialPixels, this.atlasSize, this.atlasSize),
+        0,
+        0,
+      );
+    }
+    if (this.canvas === null && this.materialCanvas === null) return;
+
     this.dirty = false;
     if (this.texture !== null) this.texture.needsUpdate = true;
+    if (this.materialTexture !== null) this.materialTexture.needsUpdate = true;
+    // The tile views are what the body actually wears, and the renderer decides
+    // whether to re-upload from each texture's own version. Marking only the
+    // atlas leaves every view holding the image it was first bound with, so the
+    // paint would never reach the screen.
+    for (const view of this.targetTextures.values()) {
+      view.needsUpdate = true;
+    }
+    for (const view of this.targetMaterialTextures.values()) {
+      view.needsUpdate = true;
+    }
   }
 
   dispose(): void {
     for (const view of this.targetTextures.values()) {
       view.dispose();
     }
+    for (const view of this.targetMaterialTextures.values()) {
+      view.dispose();
+    }
     this.targetTextures.clear();
+    this.targetMaterialTextures.clear();
     this.texture?.dispose();
+    this.materialTexture?.dispose();
     this.texture = null;
+    this.materialTexture = null;
     this.context = null;
+    this.materialContext = null;
   }
 
   /** Repaints every tile from its base colour and replays the surviving log. */
@@ -355,6 +520,10 @@ export class PaintLayer {
     const r = this.baseColors[targetIndex * 3] ?? 255;
     const g = this.baseColors[targetIndex * 3 + 1] ?? 255;
     const b = this.baseColors[targetIndex * 3 + 2] ?? 255;
+    // Red is left at full: three reads only green and blue here, and an aoMap
+    // bound to the same texture would take red as fully unoccluded.
+    const roughness = this.baseMaterials[targetIndex * 2] ?? 255;
+    const metalness = this.baseMaterials[targetIndex * 2 + 1] ?? 0;
     for (let y = tile.y; y < tile.y + tile.height; y++) {
       let index = (y * this.atlasSize + tile.x) * 4;
       for (let x = 0; x < tile.width; x++) {
@@ -362,6 +531,10 @@ export class PaintLayer {
         this.pixels[index + 1] = g;
         this.pixels[index + 2] = b;
         this.pixels[index + 3] = 255;
+        this.materialPixels[index] = 255;
+        this.materialPixels[index + 1] = roughness;
+        this.materialPixels[index + 2] = metalness;
+        this.materialPixels[index + 3] = 255;
         index += 4;
       }
     }
@@ -381,17 +554,24 @@ export class PaintLayer {
 
     const radiusX = Math.max(stroke.radius * tile.width, 0.5);
     const radiusY = Math.max(stroke.radius * tile.height, 0.5);
-    const source = stroke.erase
-      ? ([
-          this.baseColors[stroke.target * 3] ?? 255,
-          this.baseColors[stroke.target * 3 + 1] ?? 255,
-          this.baseColors[stroke.target * 3 + 2] ?? 255,
-        ] as const)
-      : ([
-          Math.round(clamp01(stroke.color[0]) * 255),
-          Math.round(clamp01(stroke.color[1]) * 255),
-          Math.round(clamp01(stroke.color[2]) * 255),
-        ] as const);
+    // Erasing is not a hole: it composites the part's own colour and its own
+    // response back, so the body returns to its material rather than to nothing.
+    const source: StampSource = stroke.erase
+      ? {
+          r: this.baseColors[stroke.target * 3] ?? 255,
+          g: this.baseColors[stroke.target * 3 + 1] ?? 255,
+          b: this.baseColors[stroke.target * 3 + 2] ?? 255,
+          roughness: this.baseMaterials[stroke.target * 2] ?? 255,
+          metalness: this.baseMaterials[stroke.target * 2 + 1] ?? 0,
+        }
+      : {
+          r: Math.round(clamp01(stroke.color[0]) * 255),
+          g: Math.round(clamp01(stroke.color[1]) * 255),
+          b: Math.round(clamp01(stroke.color[2]) * 255),
+          // three's map is roughness; the painter's slider is smoothness.
+          roughness: Math.round((1 - clamp01(stroke.smoothness)) * 255),
+          metalness: Math.round(clamp01(stroke.metallic) * 255),
+        };
 
     if (stroke.continued && this.hasLast[stroke.target] === 1) {
       const fromU = this.lastU[stroke.target] ?? stroke.u;
@@ -432,7 +612,7 @@ export class PaintLayer {
     v: number,
     radiusX: number,
     radiusY: number,
-    source: readonly [number, number, number],
+    source: StampSource,
     alpha: number,
   ): void {
     const wrappedU = tile.wrapU ? u - Math.floor(u) : clamp01(u);
@@ -464,13 +644,34 @@ export class PaintLayer {
         const coverage = Math.round(alpha * falloff);
         if (coverage <= 0) continue;
 
+        // Both atlases take the same coverage in the same pass, so colour and
+        // response can never drift apart at the soft rim of a stroke.
         const index = (rowStart + column) * 4;
-        this.pixels[index] = blend(source[0], this.pixels[index] ?? 0, coverage);
-        this.pixels[index + 1] = blend(source[1], this.pixels[index + 1] ?? 0, coverage);
-        this.pixels[index + 2] = blend(source[2], this.pixels[index + 2] ?? 0, coverage);
+        this.pixels[index] = blend(source.r, this.pixels[index] ?? 0, coverage);
+        this.pixels[index + 1] = blend(source.g, this.pixels[index + 1] ?? 0, coverage);
+        this.pixels[index + 2] = blend(source.b, this.pixels[index + 2] ?? 0, coverage);
+        this.materialPixels[index + 1] = blend(
+          source.roughness,
+          this.materialPixels[index + 1] ?? 0,
+          coverage,
+        );
+        this.materialPixels[index + 2] = blend(
+          source.metalness,
+          this.materialPixels[index + 2] ?? 0,
+          coverage,
+        );
       }
     }
   }
+}
+
+/** One stamp's colour and material response, in bytes ready to composite. */
+interface StampSource {
+  readonly r: number;
+  readonly g: number;
+  readonly b: number;
+  readonly roughness: number;
+  readonly metalness: number;
 }
 
 /** Integer source-over, so the same log produces the same bytes everywhere. */

@@ -37,6 +37,16 @@ export interface ForgeSnapshot {
   readonly revision: number;
 }
 
+/**
+ * The latest body-paint layer a Mimic has authored. Paint keeps a revision of
+ * its own because it is authored independently of the pose, so neither one
+ * has to carry the other unchanged to be published.
+ */
+export interface PaintUpdate {
+  readonly encodedPaint: string;
+  readonly revision: number;
+}
+
 export type ConnectionStatus =
   /** Constructed but never joined. */
   | "idle"
@@ -129,6 +139,11 @@ export interface NetworkAdapter {
    * periodic snapshot of authoring state, never one call per drag.
    */
   sendForgeSnapshot(snapshot: ForgeSnapshot): void;
+  /**
+   * Publishes the sender's latest body-paint layer. Coalesced exactly as the
+   * pose is: one whole stroke log per call, never one call per brush stamp.
+   */
+  sendPaintUpdate(update: PaintUpdate): void;
 
   getSelfId(): string | null;
   getConnection(): ConnectionState;

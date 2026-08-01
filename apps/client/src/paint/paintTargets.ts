@@ -117,18 +117,13 @@ export function paintTargetOfObject(object: THREE.Object3D): number | null {
 /**
  * Puts a hit's UV into the target's own 0..1 square.
  *
- * Shells already publish 0..1. Panel plates come out of `ExtrudeGeometry`, whose
- * UV generator writes the shape's own coordinates, so a unit plate arrives at
- * roughly -0.5..0.5 and is shifted here. The panel mapping is therefore
- * approximate at the bevelled rim, where the extruder emits side-wall UVs on a
- * different scale; the shells, which are what a player actually paints, are
- * exact.
+ * Both kinds of part publish that square directly: `writeSegmentShell` gives a
+ * shell the cylindrical unit square, and `createPanelGeometry` rewrites the
+ * extruder's own coordinates onto the plate's unit extent. Clamping is all that
+ * is left to do, and it only bites on a degenerate hit.
  */
-export function normalizeTargetUv(targetIndex: number, u: number, v: number): [number, number] {
-  if (targetIndex < PANEL_TARGET_OFFSET) {
-    return [clamp01(u), clamp01(v)];
-  }
-  return [clamp01(u + 0.5), clamp01(v + 0.5)];
+export function normalizeTargetUv(_targetIndex: number, u: number, v: number): [number, number] {
+  return [clamp01(u), clamp01(v)];
 }
 
 function clamp01(value: number): number {

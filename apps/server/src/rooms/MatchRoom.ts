@@ -13,6 +13,7 @@ import {
   ForgeSnapshotSchema,
   MatchCommandSchema,
   MatchPhase,
+  PaintUpdateSchema,
 } from "@foldseek/shared";
 import {
   KeyedRateWindow,
@@ -55,6 +56,7 @@ export const SERVER_MESSAGE = {
 } as const;
 
 export const FORGE_SNAPSHOT_MESSAGE = "forge_snapshot";
+export const PAINT_UPDATE_MESSAGE = "paint_update";
 export const SIMULATION_TICK_MS = Math.round(1_000 / DEFAULT_MATCH_SETTINGS.serverTickHz);
 
 export class PublicPlayerState extends Schema {
@@ -121,6 +123,9 @@ export class MatchRoom extends Room<MatchStateSchema> {
     }
     this.onMessage(FORGE_SNAPSHOT_MESSAGE, (client: Client, message: unknown) => {
       this.handleForgeSnapshot(client, message);
+    });
+    this.onMessage(PAINT_UPDATE_MESSAGE, (client: Client, message: unknown) => {
+      this.handlePaintUpdate(client, message);
     });
 
     this.setSimulationInterval(() => {
@@ -230,6 +235,44 @@ export class MatchRoom extends Room<MatchStateSchema> {
     }
 
     if (!result.accepted) this.reject(client, FORGE_SNAPSHOT_MESSAGE, result.reason, result.detail);
+    this.publish(result);
+  }
+
+  /**
+   * Body paint spends the same allowance the pose does, on purpose: the
+   * simulation charges both to one command budget, so a client that alternated
+   * the two against separate windows would buy itself twice the inbound rate.
+   */
+  handlePaintUpdate(client: Client, message: unknown): void {
+    if (!this.withinLimits(client, this.forgeWindow, PAINT_UPDATE_MESSAGE, message)) return;
+
+    const parsed = PaintUpdateSchema.safeParse(message);
+    if (!parsed.success) {
+      client.send(SERVER_MESSAGE.commandRejected, {
+        type: PAINT_UPDATE_MESSAGE,
+        reason: "invalid_payload",
+      });
+      return;
+    }
+
+    let result: CommandResult;
+    try {
+      result = this.sim.recordPaintUpdate(
+        client.sessionId,
+        parsed.data.encodedPaint,
+        parsed.data.revision,
+        Date.now(),
+      );
+    } catch (error) {
+      console.error("[match-room] simulation failed on paint update", error);
+      client.send(SERVER_MESSAGE.commandRejected, {
+        type: PAINT_UPDATE_MESSAGE,
+        reason: "internal_error",
+      });
+      return;
+    }
+
+    if (!result.accepted) this.reject(client, PAINT_UPDATE_MESSAGE, result.reason, result.detail);
     this.publish(result);
   }
 

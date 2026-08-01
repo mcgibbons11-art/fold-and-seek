@@ -20,6 +20,7 @@ import {
   type ForgeSnapshot,
   type MatchSync,
   type NetworkAdapter,
+  type PaintUpdate,
   type RosterEntry,
   type Unsubscribe,
 } from "./NetworkAdapter";
@@ -27,6 +28,7 @@ import {
   batchEvents,
   decodeChunks,
   decodeHostPublication,
+  decodePaintBook,
   decodePoseBook,
   encodeChunks,
   jsonByteLength,
@@ -41,12 +43,14 @@ import {
   RATE_WINDOW_MS,
   RateWindow,
   SEND_RATE_LIMIT,
+  PAINT_STATE_KEYS,
   POSE_STATE_KEYS,
   SIM_STATE_KEYS,
   SNAPSHOT_STATE_KEYS,
   SNAPSHOT_WRITES_PER_SECOND,
   STATE_WRITES_PER_SECOND,
   type HostPublication,
+  type PaintBook,
   type PoseBook,
 } from "./portalsProtocol";
 import { Signal } from "./signal";
@@ -154,10 +158,24 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private simSnapshotBlockedAt = 0;
   /** Re-sent verbatim when a new host asks: the pose this client last published. */
   private lastForgeSnapshot: ForgeSnapshot | null = null;
+  /** The same, for the paint layer, which is equally unrecoverable elsewhere. */
+  private lastPaintUpdate: PaintUpdate | null = null;
+  /** A layer a reforge asked for, waiting on the flush after the pose went out. */
+  private pendingPaintResend: PaintUpdate | null = null;
   /** Locked poses, kept out of the frequently rewritten publication. */
   private poseBook: PoseBook = {};
   private poseSeq = 0;
   private lastPoseSerialized = "";
+  /** Body paint, on its own range for the same reason the poses are. */
+  private paintBook: PaintBook = {};
+  private paintSeq = 0;
+  private lastPaintSerialized = "";
+  /**
+   * Ranges whose value is too large for the keys they own. Latched so that a
+   * fault which repeats on every publish is reported once rather than filling
+   * every client's rejection queue twice a second.
+   */
+  private readonly oversizedRanges = new Set<string>();
   private readonly stateWindow = new RateWindow(STATE_WRITES_PER_SECOND, RATE_WINDOW_MS);
   private snapshotSeq = 0;
   private snapshotDirty = false;
@@ -217,6 +235,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
     const snapshot = decodeHostPublication(session.state);
     this.poseBook = decodePoseBook(session.state) ?? {};
+    this.paintBook = decodePaintBook(session.state) ?? {};
     const simChunk = decodeChunks(session.state, SIM_STATE_KEYS);
     if (simChunk) {
       this.lastSimSeq = simChunk.seq;
@@ -238,7 +257,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.lastSnapshot = snapshot;
     if (this.lastSnapshot) {
       this.adoptSnapshotSeq(this.lastSnapshot);
-      this.setSync(this.withPoses(this.lastSnapshot), null);
+      this.setSync(this.withBodies(this.lastSnapshot), null);
     }
 
     this.resolveAuthority();
@@ -311,6 +330,22 @@ export class PortalsNetAdapter implements NetworkAdapter {
       t: "snap",
       to: this.authoritySeatId,
       snapshot,
+    });
+  }
+
+  sendPaintUpdate(update: PaintUpdate): void {
+    if (this.connection.status !== "connected" || this.selfSeatId === null) return;
+    this.lastPaintUpdate = update;
+    if (this.isAuthority()) {
+      this.applyPaintUpdate(this.selfSeatId, update);
+      return;
+    }
+    if (this.authoritySeatId === null) return;
+    this.rawSend({
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "paint",
+      to: this.authoritySeatId,
+      paint: update,
     });
   }
 
@@ -457,6 +492,20 @@ export class PortalsNetAdapter implements NetworkAdapter {
         if (fromSeat !== undefined) this.applyForgeSnapshot(fromSeat, envelope.snapshot);
         return;
 
+      case "paint":
+        if (!this.isAuthority() || envelope.to !== this.selfSeatId) return;
+        // Deliberately the same window the poses use: the simulation charges
+        // both to one command budget, so giving paint a window of its own would
+        // let a client alternate the two for twice the inbound rate.
+        if (!this.forgeWindow.tryConsume(fromId, this.clock())) {
+          console.warn(
+            `[portals] ${fromId} exceeded ${MAX_FORGE_SNAPSHOTS_PER_SECOND} forge updates/s`,
+          );
+          return;
+        }
+        if (fromSeat !== undefined) this.applyPaintUpdate(fromSeat, envelope.paint);
+        return;
+
       case "resync": {
         // A resync costs the host a message, so it spends the sender's own
         // command allowance rather than being free to repeat.
@@ -475,11 +524,13 @@ export class PortalsNetAdapter implements NetworkAdapter {
       }
 
       case "reforge":
-        // Only the authority may ask, and only a client with a pose to give
-        // answers. Re-sending costs one message and restores work that would
-        // otherwise be lost with the host that recorded it.
+        // Only the authority may ask, and only a client with work to give
+        // answers. Re-sending costs one message each and restores what would
+        // otherwise be lost with the host that recorded it. Paint made before
+        // the lock is as unrecoverable as the pose, so it goes back too.
         if (fromSeat !== this.authoritySeatId || this.isAuthority()) return;
         if (this.lastForgeSnapshot !== null) this.sendForgeSnapshot(this.lastForgeSnapshot);
+        this.pendingPaintResend = this.lastPaintUpdate;
         return;
 
       case "refused":
@@ -600,7 +651,16 @@ export class PortalsNetAdapter implements NetworkAdapter {
         this.poseBook = poses;
         // The publication this client already holds described these disguises
         // without their geometry; fill it in now that the geometry has landed.
-        if (this.lastSnapshot) this.setSync(this.withPoses(this.lastSnapshot), this.sync.privateState);
+        if (this.lastSnapshot) this.setSync(this.withBodies(this.lastSnapshot), this.sync.privateState);
+      }
+      return;
+    }
+
+    if ((PAINT_STATE_KEYS as readonly string[]).includes(key)) {
+      const paint = decodePaintBook(state);
+      if (paint) {
+        this.paintBook = paint;
+        if (this.lastSnapshot) this.setSync(this.withBodies(this.lastSnapshot), this.sync.privateState);
       }
       return;
     }
@@ -623,7 +683,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (this.lastSnapshot && snapshot.seq <= this.lastSnapshot.seq) return;
     this.lastSnapshot = snapshot;
     this.adoptSnapshotSeq(snapshot);
-    this.setSync(this.withPoses(snapshot), this.sync.privateState);
+    this.setSync(this.withBodies(snapshot), this.sync.privateState);
   };
 
   private readonly handleStatus = (status: "connected" | "disconnected"): void => {
@@ -740,7 +800,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         ...(this.options.spatial ? { spatial: this.options.spatial } : {}),
         // Locked poses were omitted from the snapshot because they are already
         // in the public state this client has been holding all along.
-        poses: this.withPoses(publication).disguises,
+        poses: this.withBodies(publication).disguises,
         seatedPlayerIds: seats,
       });
     } catch (error) {
@@ -774,6 +834,8 @@ export class PortalsNetAdapter implements NetworkAdapter {
       if (this.lastForgeSnapshot !== null && ownSeat !== null) {
         this.applyForgeSnapshot(ownSeat, this.lastForgeSnapshot);
       }
+      // Paced a flush behind the pose, for the reason drainPaintResend gives.
+      this.pendingPaintResend = this.lastPaintUpdate;
     }
     this.setStatus(this.connection.status, "authority_resumed");
     return true;
@@ -789,6 +851,9 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.refusedConnections.clear();
     this.commandWindow.clear();
     this.forgeWindow.clear();
+    // The next host publishes its own ranges, so it starts with a clean latch
+    // and reports a fault of its own rather than inheriting this one's silence.
+    this.oversizedRanges.clear();
     this.stopTickTimer();
   }
 
@@ -810,6 +875,34 @@ export class PortalsNetAdapter implements NetworkAdapter {
     );
     if (result === null || result.accepted) return;
     this.reportRejection(seatId, rejectionOf("forge_snapshot", result.reason, result.detail));
+  }
+
+  /** The same, for a body-paint layer. */
+  private applyPaintUpdate(seatId: string, update: PaintUpdate): void {
+    const result = this.applySim("paint update", (sim) =>
+      sim.recordPaintUpdate(seatId, update.encodedPaint, update.revision, this.clock()),
+    );
+    if (result === null || result.accepted) return;
+    this.reportRejection(seatId, rejectionOf("paint_update", result.reason, result.detail));
+  }
+
+  /**
+   * Reports events too large for a single 8 KB message. A dropped event leaves
+   * a client's view diverged from the simulation with nothing in the room to
+   * say so, which is the same silent fault an unpublishable key range is, so
+   * the loss reaches the player it was addressed to. A public event has no one
+   * addressee and is reported to the host that produced it.
+   */
+  private reportDroppedEvents(
+    events: readonly { readonly type: string }[],
+    seatId: string | null,
+  ): void {
+    for (const event of events) {
+      const rejection = rejectionOf("event_dropped", "event_too_large", event.type);
+      if (seatId === null || seatId === this.selfSeatId) this.rejectionSignal.emit(rejection);
+      else this.reportRejection(seatId, rejection);
+      console.error(`[portals] dropped ${event.type} event that cannot fit one 8 KB message`);
+    }
   }
 
   /** Routes a refusal to the player who issued the command, and no one else. */
@@ -882,7 +975,9 @@ export class PortalsNetAdapter implements NetworkAdapter {
   }
 
   private flush(): void {
-    if (!this.isAuthority() || this.selfSeatId === null) return;
+    if (this.selfSeatId === null) return;
+    this.drainPaintResend();
+    if (!this.isAuthority()) return;
 
     if (this.publicOutbox.length > 0) {
       const pending = coalesceDisguiseUpdates(
@@ -893,7 +988,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         t: "ev",
         events,
       }));
-      warnOversized(oversized);
+      this.reportDroppedEvents(oversized, null);
       const unsent = this.sendBatches(batches, (events) => ({
         v: PORTALS_PROTOCOL_VERSION,
         t: "ev",
@@ -924,19 +1019,46 @@ export class PortalsNetAdapter implements NetworkAdapter {
       });
 
       const { batches, oversized } = batchEvents(pending, build);
-      warnOversized(oversized);
+      // Queued for the next message rather than this one, whose refusal list
+      // was already fixed when `build` closed over it.
+      this.reportDroppedEvents(oversized, seatId);
       // An empty batch still carries the private state and any refusals, so a
       // player whose role did not change but whose view did still gets one.
       const unsent = this.sendBatches(batches.length > 0 ? batches : [[]], build);
       if (unsent.length > 0) {
         this.privateOutbox.set(seatId, unsent);
-        this.pendingRejections.set(seatId, rejections);
+        // Merged, not overwritten: a drop reported a moment ago has to survive
+        // the refusals that could not be sent.
+        this.pendingRejections.set(
+          seatId,
+          [...rejections, ...(this.pendingRejections.get(seatId) ?? [])].slice(
+            0,
+            MAX_REJECTIONS_PER_MESSAGE,
+          ),
+        );
         break;
       }
       this.pendingSync.delete(seatId);
     }
 
     this.maybeWriteSnapshot();
+  }
+
+  /**
+   * Answers the paint half of a reforge, a flush after the pose half.
+   *
+   * The two are both forge updates and the simulation charges them to one rate
+   * budget, so a client that answered with both in the same instant would have
+   * the second refused and lose exactly the work the resend exists to save. A
+   * flush is 100 ms and the budget allows one every 67 ms, so one apart is
+   * enough. This runs on every client, host or not: the new host has to put its
+   * own layer back too, and it is subject to the same limiter.
+   */
+  private drainPaintResend(): void {
+    const update = this.pendingPaintResend;
+    if (update === null) return;
+    this.pendingPaintResend = null;
+    this.sendPaintUpdate(update);
   }
 
   /**
@@ -970,7 +1092,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
 
     this.lastSimSeq += 1;
-    if (this.writeChunked(snapshot, this.lastSimSeq, SIM_STATE_KEYS, "simulation snapshot")) {
+    if (this.writeChunked(snapshot, this.lastSimSeq, SIM_STATE_KEYS, "simulation snapshot") === "written") {
       this.lastSimSnapshot = snapshot;
     }
   }
@@ -985,25 +1107,45 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (serialized === this.lastPoseSerialized) return;
 
     this.poseSeq += 1;
-    if (this.writeChunked(book, this.poseSeq, POSE_STATE_KEYS, "locked poses")) {
+    if (this.writeChunked(book, this.poseSeq, POSE_STATE_KEYS, "locked poses") === "written") {
       this.poseBook = book;
       this.lastPoseSerialized = serialized;
     }
   }
 
+  /** Writes the body-paint layers, and only when the set of them has changed. */
+  private publishPaint(disguises: PublicMatchState["disguises"]): void {
+    const book: PaintBook = {};
+    for (const disguise of disguises) {
+      const paint = disguise.encodedPaint;
+      if (paint !== null && paint.length > 0) book[disguise.publicObjectId] = paint;
+    }
+    const serialized = JSON.stringify(book);
+    if (serialized === this.lastPaintSerialized) return;
+
+    this.paintSeq += 1;
+    if (this.writeChunked(book, this.paintSeq, PAINT_STATE_KEYS, "body paint") === "written") {
+      this.paintBook = book;
+      this.lastPaintSerialized = serialized;
+    }
+  }
+
   /**
-   * A publication as its reader should see it, with pose bodies put back from
-   * the pose key range.
+   * A publication as its reader should see it, with the pose and paint bodies
+   * put back from the key ranges that carry them.
    */
-  private withPoses(publication: HostPublication): PublicMatchState {
+  private withBodies(publication: HostPublication): PublicMatchState {
     const state = publication.publicState;
     return {
       ...state,
-      disguises: state.disguises.map((entry) =>
-        entry.encodedPose.length > 0
-          ? entry
-          : { ...entry, encodedPose: this.poseBook[entry.publicObjectId] ?? "" },
-      ),
+      disguises: state.disguises.map((entry) => ({
+        ...entry,
+        encodedPose:
+          entry.encodedPose.length > 0
+            ? entry.encodedPose
+            : (this.poseBook[entry.publicObjectId] ?? ""),
+        encodedPaint: entry.encodedPaint ?? this.paintBook[entry.publicObjectId] ?? null,
+      })),
     };
   }
 
@@ -1016,29 +1158,57 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.writeChunked(null, this.lastSimSeq, SIM_STATE_KEYS, "simulation snapshot");
   }
 
-  /** Chunks a value across one key range, or warns and writes nothing. */
+  /**
+   * Chunks a value across one key range.
+   *
+   * The two ways this fails are not the same failure. "deferred" means the
+   * write budget for this second is spent and the caller will try again in a
+   * moment, which is routine. "too_large" means the value will never fit the
+   * keys it owns, so the range stops updating for the whole room while every
+   * client that produced part of it goes on rendering its own copy correctly.
+   * That one is reported to the players it affects rather than logged.
+   */
   private writeChunked(
     value: unknown,
     seq: number,
     keys: readonly string[],
     label: string,
-  ): boolean {
+  ): "written" | "deferred" | "too_large" {
     const chunks = encodeChunks(value, seq, keys.length);
     if (!chunks) {
-      console.warn(`[portals] ${label} exceeds the ${keys.length}-key budget, skipping publish`);
-      return false;
+      this.reportOversizedRange(label, keys.length);
+      return "too_large";
     }
+    this.oversizedRanges.delete(label);
     // Every key costs a write, and the relay counts them across all of them.
     for (let index = 0; index < chunks.length; index += 1) {
       if (!this.stateWindow.tryConsume(this.clock())) {
         console.warn(`[portals] state write budget reached, deferring ${label}`);
-        return false;
+        return "deferred";
       }
       const key = keys[index];
       const chunk = chunks[index];
       if (key !== undefined && chunk !== undefined) this.net.setState(key, chunk);
     }
-    return true;
+    return "written";
+  }
+
+  /**
+   * Tells the room that one key range has stopped publishing. Everyone is
+   * affected, because everyone reads that range, so everyone hears about it:
+   * this is exactly the fault whose signature is a client looking correct to
+   * itself and invisible to the rest of the room. Latched, since the condition
+   * persists across every subsequent publish attempt.
+   */
+  private reportOversizedRange(label: string, keyCount: number): void {
+    if (this.oversizedRanges.has(label)) return;
+    this.oversizedRanges.add(label);
+    const rejection = rejectionOf("state_publish", "range_too_large", label);
+    this.rejectionSignal.emit(rejection);
+    for (const seatId of this.seatOwners.keys()) {
+      if (seatId !== this.selfSeatId) this.reportRejection(seatId, rejection);
+    }
+    console.error(`[portals] ${label} exceeds the ${keyCount}-key budget and cannot publish`);
   }
 
   private adoptSnapshotSeq(snapshot: HostPublication): void {
@@ -1111,20 +1281,26 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
     const publicState = sim.getPublicState();
     this.publishPoses(publicState.disguises);
+    this.publishPaint(publicState.disguises);
 
     this.snapshotSeq += 1;
     const snapshot: HostPublication = {
       v: PORTALS_PROTOCOL_VERSION,
       seq: this.snapshotSeq,
       authorityId: this.selfSeatId,
-      // Pose bodies are stripped here and carried on their own key range; the
-      // publication keeps only what changes from one publish to the next.
+      // Pose and paint bodies are stripped here and carried on their own key
+      // ranges; the publication keeps only what changes from one publish to the
+      // next, which is what holds a full room inside four keys at 2 Hz.
       publicState: {
         ...publicState,
-        disguises: publicState.disguises.map((entry) => ({ ...entry, encodedPose: "" })),
+        disguises: publicState.disguises.map((entry) => ({
+          ...entry,
+          encodedPose: "",
+          encodedPaint: null,
+        })),
       },
     };
-    if (!this.writeChunked(snapshot, this.snapshotSeq, SNAPSHOT_STATE_KEYS, "public state")) {
+    if (this.writeChunked(snapshot, this.snapshotSeq, SNAPSHOT_STATE_KEYS, "public state") !== "written") {
       return;
     }
     this.lastSnapshot = snapshot;
@@ -1335,10 +1511,4 @@ function settingsPatchOf(settings: MatchSettings): Required<MatchSettingsPatch> 
     wrongAccusationCooldownMs: settings.wrongAccusationCooldownMs,
     reconnectGraceMs: settings.reconnectGraceMs,
   };
-}
-
-function warnOversized(events: readonly { type: string }[]): void {
-  for (const event of events) {
-    console.warn(`[portals] dropped ${event.type} event that cannot fit one 8 KB message`);
-  }
 }

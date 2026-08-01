@@ -28,6 +28,8 @@ const count = z.number().int().min(0).max(LIMITS.maxCount);
 const id = z.string().min(1).max(LIMITS.idLength);
 const displayName = z.string().min(1).max(LIMITS.displayNameLength);
 const encodedPose = z.string().max(LIMITS.encodedPoseLength);
+/** Null on a disguise nobody painted, which is the common case. */
+const encodedPaint = z.string().max(LIMITS.encodedPaintLength).nullable();
 const settingValue = z.number().min(0).max(LIMITS.maxTimestamp);
 
 const settingsShape: Record<keyof MatchSettings, z.ZodNumber> = {
@@ -53,6 +55,7 @@ const settingsShape: Record<keyof MatchSettings, z.ZodNumber> = {
   wrongAccusationCooldownMs: settingValue,
   directLookMinMs: settingValue,
   directLookBreakMs: settingValue,
+  missedFindsUpdateMs: settingValue,
   reconnectGraceMs: settingValue,
   serverTickHz: settingValue,
   movementInputHz: settingValue,
@@ -90,6 +93,8 @@ export const PublicPlayerViewSchema = z.strictObject({
 export const PublicDisguiseViewSchema = z.strictObject({
   publicObjectId: id,
   encodedPose,
+  // Body paint is public: it is part of what the object looks like.
+  encodedPaint,
   defaultArrangementId: StarterArrangementIdSchema.nullable(),
   revealed: z.boolean(),
 });
@@ -111,6 +116,7 @@ export const PublicMatchStateSchema = z.strictObject({
 export const OwnDisguiseViewSchema = z.strictObject({
   publicObjectId: id,
   encodedPose,
+  encodedPaint,
   source: DisguiseSourceSchema,
   defaultArrangementId: StarterArrangementIdSchema.nullable(),
 });

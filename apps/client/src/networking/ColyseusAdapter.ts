@@ -11,6 +11,7 @@ import {
   type ForgeSnapshot,
   type MatchSync,
   type NetworkAdapter,
+  type PaintUpdate,
   type RosterEntry,
   type Unsubscribe,
 } from "./NetworkAdapter";
@@ -36,6 +37,9 @@ const SERVER_MESSAGE = {
 
 /** Mirrors FORGE_SNAPSHOT_MESSAGE in apps/server/src/rooms/MatchRoom.ts. */
 const FORGE_SNAPSHOT_MESSAGE = "forge_snapshot";
+
+/** Mirrors PAINT_UPDATE_MESSAGE in apps/server/src/rooms/MatchRoom.ts. */
+const PAINT_UPDATE_MESSAGE = "paint_update";
 
 const MAX_EVENTS_PER_MESSAGE = 256;
 const SimEventListSchema = z.array(SimEventSchema).max(MAX_EVENTS_PER_MESSAGE);
@@ -162,6 +166,10 @@ export class ColyseusAdapter implements NetworkAdapter {
 
   sendForgeSnapshot(snapshot: ForgeSnapshot): void {
     this.room?.send(FORGE_SNAPSHOT_MESSAGE, snapshot);
+  }
+
+  sendPaintUpdate(update: PaintUpdate): void {
+    this.room?.send(PAINT_UPDATE_MESSAGE, update);
   }
 
   getSelfId(): string | null {

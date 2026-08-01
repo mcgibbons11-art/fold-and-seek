@@ -8,8 +8,10 @@ import { buildArchitecture, PROP_BUILDERS, type PropContext } from "./props";
 import { PropBatcher, type PropLayer } from "./props/batch";
 import { GeometryCache } from "./props/geometry";
 import { ShopMaterials } from "./props/materials";
+import type { NavData } from "../../inspector/navData";
+import { NAV_DATA } from "./nav";
 import { buildMapObjects, buildObjectRegistry, CURIOSITY_SHOP_MAP_ID, type MapObjectEntry } from "./registry";
-import { NAV_DATA, ZONES, type MapZone, type NavData } from "./zones";
+import { ZONES, type MapZone } from "./zones";
 
 /**
  * The Curiosity Shop, the first map (§10.2), built as a procedural blockout to

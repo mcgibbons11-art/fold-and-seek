@@ -8,9 +8,23 @@ export {
 } from "./PaintBrushController";
 export { Eyedropper, type EyedropperOptions, type EyedropperSample } from "./Eyedropper";
 export { PaintMaterialBinder } from "./PaintMaterialBinder";
-export { PaintStore, RECENT_COLOR_COUNT, type PaintPanelState } from "./paintStore";
+export {
+  PaintStore,
+  RECENT_COLOR_COUNT,
+  SAVED_COLOR_COUNT,
+  type PaintPanelState,
+} from "./paintStore";
 export { createPaintTool, type PaintTool, type PaintToolDeps } from "./createPaintTool";
-export { hsvToRgb, rgbToCss, rgbToHex, rgbToHsv, sameColorByte, type Hsv, type Rgb } from "./color";
+export {
+  hexToRgb,
+  hsvToRgb,
+  rgbToCss,
+  rgbToHex,
+  rgbToHsv,
+  sameColorByte,
+  type Hsv,
+  type Rgb,
+} from "./color";
 export {
   normalizeTargetUv,
   paintTargetOfObject,

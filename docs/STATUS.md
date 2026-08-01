@@ -2,7 +2,11 @@
 
 ## Current phase
 
-Phase 0 — repository and boot (in progress, started 2026-08-01 15:50).
+Phase 3 — playable local round (started 2026-08-01 20:00). Phases 0-2 and 4 core are
+committed and green. The map (Curiosity Shop, six zones, nav mesh), paint system
+(brush/eyedropper/material channels), sim (paint + missed-finds board), and transports
+are built and tested but not yet wired into a playable round in `App.tsx` — that wiring
+is this phase.
 
 ## Done
 
@@ -180,6 +184,38 @@ Filled the API gaps the round-orchestration builder reported:
 Deferred at the lead's direction: per-category vote tallies, client firing-range echo,
 batch boundaries, and server-time echo, all transport concerns.
 
+### Body paint and the missed-finds board (sim)
+
+**Paint** rides beside the pose, never inside it. `DisguiseRecord.encodedPaint` is
+validated by `decodePaintLayerWire` from shared, carries its own monotonic revision, and
+is exposed publicly because paint is what the object looks like. `recordPaintUpdate`
+accepts during Forge and the live-hider phases, refuses when caught, ghosted or out of
+phase, and **shares one command budget with pose updates**, so alternating the two cannot
+buy double the rate. `disguise_updated` gained `painted` alongside `moved`. Lock captures
+whatever the Forge produced; snapshots carry paint and pose-omitted snapshots rehydrate it
+from public state, throwing if a painted layer cannot be supplied.
+`LIMITS.encodedPaintLength` is **derived** from `PAINT_WIRE_MAX_BASE64_LENGTH` rather than
+written out, so builder-paint's ceiling changes flow through automatically — that already
+paid off once when strokes gained metallic and smoothness mid-integration.
+
+**The missed-finds board** (docs/MECCHA_RESEARCH.md) publishes
+`missed_finds_update { entries: [{ displayName, publicPlayerId, points }], nextUpdateAtMs,
+final }` on a jittered ~20 s cycle during the hunt, plus one exact board at the reveal.
+Deception points are the settled part of §6.2: watched seconds, direct-look escapes,
+observed taunts and close passes, excluding survival which is not yet earned. Watched time
+from an open focus hold is projected into the figure without banking it, so a hider under a
+steady stare sees their number climb.
+
+Anonymity: entries name players, never disguises, and naming hiders leaks nothing because
+"not an Inspector and not a spectator" already implied "hider". Mid-round figures are
+floored into buckets of 25 and the cycle is jittered by up to 3 s from the seeded RNG.
+**The residual risk is real and accepted, not solved:** every component of the score is
+caused by the Inspector's own actions, so a patient Inspector who stares at one object and
+watches which name moves can still correlate. Bucketing blunts the inference — two stares
+of four and ten seconds publish the identical figure — and the jitter breaks a metronome
+cadence, but neither removes attribution. Closing it properly would mean withholding the
+mid-round board from Inspectors, which is a design call, not a sim fix.
+
 Deferred, with reasons:
 
 - Real range and line-of-sight validation stays permissive behind `SpatialValidator`
@@ -189,10 +225,9 @@ Deferred, with reasons:
 - Anchors are validated structurally; that they reference legal map surfaces (§7.16)
   needs the map.
 
-## Verification state
+## Verification state (2026-08-01 19:55, full working tree)
 
-- pnpm install: pending
-- typecheck: pending
-- build: pending
-- `packages/shared` + `packages/game-sim` (critique round 1 + host migration snapshot):
-  typecheck clean, 43 + 138 tests passing.
+- typecheck: clean across all 5 workspace projects.
+- tests: all passing — apps/client 367 tests in 31 files, plus shared, game-sim
+  (including new paint.test.ts and missedFinds.test.ts), and server suites.
+- build: `vite build` green, 156 modules, 1.34 MB bundle (383 KB gzip).

@@ -353,10 +353,33 @@ export function createPanelGeometry(profileId: PanelProfileId, thickness: number
     curveSegments: 5,
     steps: 1,
   });
+  // ExtrudeGeometry's own UV generator writes the shape's coordinates, so a
+  // unit plate would arrive at roughly -0.5..0.5 and the bevelled rim on a
+  // scale of its own. Body painting maps a part's 0..1 square onto its tile of
+  // the paint atlas, so the plate publishes that square exactly.
+  writePlateUvs(geometry);
   // Hinge edge at the origin, plate growing along +y and centred in z.
   geometry.translate(0, 0.5, -(thickness / 2 - bevel));
   geometry.computeVertexNormals();
   return geometry;
+}
+
+/** Maps the plate's own xy extent, bevel included, onto the unit UV square. */
+function writePlateUvs(geometry: THREE.BufferGeometry): void {
+  const position = geometry.getAttribute("position");
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox;
+  if (box === null) {
+    return;
+  }
+  const spanX = Math.max(box.max.x - box.min.x, 1e-6);
+  const spanY = Math.max(box.max.y - box.min.y, 1e-6);
+  const uvs = new Float32Array(position.count * 2);
+  for (let i = 0; i < position.count; i++) {
+    uvs[i * 2] = (position.getX(i) - box.min.x) / spanX;
+    uvs[i * 2 + 1] = (position.getY(i) - box.min.y) / spanY;
+  }
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
 }
 
 /** Rounded puck used for the pose handles and the eye shutter. */

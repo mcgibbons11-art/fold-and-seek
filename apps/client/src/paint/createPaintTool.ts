@@ -45,7 +45,11 @@ export interface PaintTool {
   setHsv(hsv: Hsv): void;
   setBrushSize(radius: number): void;
   setOpacity(opacity: number): void;
+  setMetallic(metallic: number): void;
+  setSmoothness(smoothness: number): void;
   setEraser(enabled: boolean): void;
+  /** Pins or unpins the current colour on the quick-swap row. */
+  toggleSavedColor(): void;
   setShadow(enabled: boolean): void;
   /** The MECCHA F key: the next click copies a colour instead of painting. */
   armEyedropper(armed: boolean): void;
@@ -156,6 +160,20 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
     setOpacity(opacity: number): void {
       brush.setOpacity(opacity);
       store.patch({ opacity: Math.min(1, Math.max(0, opacity)) });
+    },
+
+    setMetallic(metallic: number): void {
+      brush.setMetallic(metallic);
+      store.patch({ metallic: brush.getMetallic() });
+    },
+
+    setSmoothness(smoothness: number): void {
+      brush.setSmoothness(smoothness);
+      store.patch({ smoothness: brush.getSmoothness() });
+    },
+
+    toggleSavedColor(): void {
+      store.toggleSavedColor(store.getState().color);
     },
 
     setEraser(enabled: boolean): void {

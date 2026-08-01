@@ -72,6 +72,8 @@ export interface SnapshotPlayer {
   readonly o: string | null;
   /** Last valid Forge pose as [encodedPose, revision]. */
   readonly vp: readonly [string, number] | null;
+  /** Paint recorded before the disguise manifested. */
+  readonly vt: readonly [string, number] | null;
   readonly ct: number | null;
   readonly st: SnapshotStats;
   /** When this player last taunted, for the cooldown. */
@@ -90,6 +92,9 @@ export interface SnapshotDisguise {
   readonly on: string;
   readonly e: string;
   readonly rv: number;
+  /** Paint layer and its own revision, parallel to the pose. */
+  readonly pt: string | null;
+  readonly pv: number;
   readonly s: DisguiseSource;
   readonly a: StarterArrangementId | null;
   readonly al: boolean;
@@ -120,6 +125,9 @@ export interface MatchSnapshot {
   readonly wr: number;
   /** Warrants the round started with. */
   readonly wt: number;
+  /** Next missed-finds board time, and how many have been published. */
+  readonly mf: number;
+  readonly mc: number;
   readonly is: number;
   readonly ie: number;
   readonly ix: number;
@@ -160,6 +168,8 @@ export interface SnapshotOptions {
 export interface PoseSource {
   readonly publicObjectId: string;
   readonly encodedPose: string;
+  /** Paint is public too, so an omitted snapshot rebuilds it from here. */
+  readonly encodedPaint?: string | null;
 }
 
 /** Dependencies a restored simulation needs that state alone cannot carry. */

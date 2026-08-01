@@ -4,6 +4,7 @@ import {
   ForgeSnapshotSchema,
   LIMITS,
   MatchCommandSchema,
+  PaintUpdateSchema,
   PrivateSimEventSchema,
   SimEventSchema,
 } from "@foldseek/shared";
@@ -29,8 +30,6 @@ export const SEND_RATE_LIMIT = 20;
 export const RATE_WINDOW_MS = 1_000;
 /** Snapshot writes are held well under the relay's ~10 writes/s. */
 export const SNAPSHOT_WRITES_PER_SECOND = 2;
-/** Largest chunk count any one key range may use. */
-export const MAX_SNAPSHOT_CHUNKS = 12;
 /** Shared-state writes the relay accepts per second across every key. */
 export const STATE_WRITES_PER_SECOND = 10;
 /**
@@ -63,8 +62,7 @@ export const SIM_STATE_KEYS = ["sim", "sim1", "sim2", "sim3"] as const;
  * locked poses actually changes.
  *
  * Twelve keys because the largest room fills eight of them today and a pose
- * that grows a few panels would otherwise have nowhere to go. The relay allows
- * 64 keys per session and this whole protocol uses twenty.
+ * that grows a few panels would otherwise have nowhere to go.
  */
 export const POSE_STATE_KEYS = [
   "pose",
@@ -80,6 +78,62 @@ export const POSE_STATE_KEYS = [
   "pose10",
   "pose11",
 ] as const;
+
+/**
+ * Body-paint layers, keyed by public object id, on the same terms as the poses:
+ * public appearance, too large for the publication, and written only when the
+ * set of layers changes.
+ *
+ * Twenty keys because a paint layer is much larger than a pose, and about to
+ * grow again. The range is sized for the wire's own ceiling rather than for
+ * what a layer costs today, so that raising the stroke format does not quietly
+ * take a room past the keys it has: a full room of maximum layers must fit, or
+ * nothing in the range publishes at all.
+ *
+ * At MAX_PAINT_STROKES stamps and PAINT_STROKE_BYTES per stamp, the worst case
+ * the settings allow is roughly 135 KB of JSON, which needs seventeen 8 KB
+ * values. Twenty leaves headroom for the key-name overhead and one more
+ * per-stroke channel after that. Derive the numbers from the constants rather
+ * than trusting this paragraph: the measurement is printed by the "body paint
+ * range" test in portalsProtocol.test.ts, which fails if the ceiling outgrows
+ * the range.
+ *
+ * The relay allows 64 keys per session; this whole protocol uses forty.
+ */
+export const PAINT_STATE_KEYS = [
+  "paint",
+  "paint1",
+  "paint2",
+  "paint3",
+  "paint4",
+  "paint5",
+  "paint6",
+  "paint7",
+  "paint8",
+  "paint9",
+  "paint10",
+  "paint11",
+  "paint12",
+  "paint13",
+  "paint14",
+  "paint15",
+  "paint16",
+  "paint17",
+  "paint18",
+  "paint19",
+] as const;
+
+/**
+ * Largest chunk count any one key range may use. Derived from the ranges rather
+ * than written down, so widening one cannot leave the chunk header's own bounds
+ * rejecting the chunks it is about to produce.
+ */
+export const MAX_SNAPSHOT_CHUNKS = Math.max(
+  SNAPSHOT_STATE_KEYS.length,
+  SIM_STATE_KEYS.length,
+  POSE_STATE_KEYS.length,
+  PAINT_STATE_KEYS.length,
+);
 
 export const MAX_EVENTS_PER_MESSAGE = 64;
 /** Refusals carried in one per-recipient message before the rest are dropped. */
@@ -141,6 +195,18 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     to: connectionId,
     snapshot: ForgeSnapshotSchema,
   }),
+  /**
+   * A Mimic's latest body-paint layer, coalesced by the sender exactly as the
+   * pose above is. It travels apart from the pose because the two are authored
+   * independently and change at different rates, so sending either one would
+   * otherwise have to carry the other unchanged.
+   */
+  z.strictObject({
+    v: version,
+    t: z.literal("paint"),
+    to: connectionId,
+    paint: PaintUpdateSchema,
+  }),
   /** A client asking the host for a fresh sync after a join or a reconnect. */
   z.strictObject({ v: version, t: z.literal("resync") }),
   /**
@@ -184,6 +250,14 @@ export const PoseBookSchema = z.record(
 
 export type PoseBook = z.infer<typeof PoseBookSchema>;
 
+/** Body-paint layers as published: object id to encoded layer. */
+export const PaintBookSchema = z.record(
+  z.string().min(1).max(LIMITS.idLength),
+  z.string().max(LIMITS.encodedPaintLength),
+);
+
+export type PaintBook = z.infer<typeof PaintBookSchema>;
+
 export const HostPublicationSchema = z.strictObject({
   v: version,
   /** Monotonic publish counter, used to reassemble a consistent chunk set. */
@@ -225,8 +299,10 @@ export function parseEnvelope(value: unknown): NetEnvelope | null {
 
 /**
  * Splits a value across as few state keys as fit the 8 KB per-value limit.
- * Returns null when even four chunks cannot hold it, so the caller can warn and
- * skip the write rather than have the relay reject it.
+ * Returns null when the whole key range cannot hold it, rather than have the
+ * relay reject the write. A caller that gets null must report it: a range that
+ * never publishes still looks correct on the client that produced it, so
+ * skipping quietly is how a player's work disappears without anyone noticing.
  */
 export function encodeChunks(
   value: unknown,
@@ -305,6 +381,14 @@ export function decodePoseBook(state: Record<string, unknown>): PoseBook | null 
   return result.success ? result.data : null;
 }
 
+/** The published paint layers, validated. */
+export function decodePaintBook(state: Record<string, unknown>): PaintBook | null {
+  const chunked = decodeChunks(state, PAINT_STATE_KEYS);
+  if (!chunked) return null;
+  const result = PaintBookSchema.safeParse(chunked.value);
+  return result.success ? result.data : null;
+}
+
 /** The public publication, validated. */
 export function decodeHostPublication(state: Record<string, unknown>): HostPublication | null {
   const chunked = decodeChunks(state, SNAPSHOT_STATE_KEYS);
@@ -377,8 +461,8 @@ export class KeyedRateWindow {
 
 /**
  * Packs events into the fewest 8 KB batches. An event that cannot fit alone is
- * reported separately so the caller can warn and drop it instead of throwing
- * inside a network callback.
+ * returned as `oversized` instead of throwing inside a network callback, and
+ * the caller is required to report it rather than drop it quietly.
  */
 export function batchEvents<E extends SimEvent | PrivateSimEvent>(
   events: readonly E[],

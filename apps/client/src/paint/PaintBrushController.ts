@@ -44,6 +44,8 @@ export class PaintBrushController {
   private color: [number, number, number] = [0.85, 0.27, 0.2];
   private radius = DEFAULT_BRUSH_RADIUS;
   private opacity = 1;
+  private metallic = 0;
+  private smoothness = 0.35;
   private eraser = false;
 
   private active = false;
@@ -79,6 +81,22 @@ export class PaintBrushController {
 
   setOpacity(opacity: number): void {
     this.opacity = Math.min(1, Math.max(0, opacity));
+  }
+
+  setMetallic(metallic: number): void {
+    this.metallic = Math.min(1, Math.max(0, metallic));
+  }
+
+  getMetallic(): number {
+    return this.metallic;
+  }
+
+  setSmoothness(smoothness: number): void {
+    this.smoothness = Math.min(1, Math.max(0, smoothness));
+  }
+
+  getSmoothness(): number {
+    return this.smoothness;
   }
 
   setEraser(enabled: boolean): void {
@@ -216,6 +234,8 @@ export class PaintBrushController {
       radius: this.radius,
       color: [...this.color],
       opacity: this.opacity,
+      metallic: this.metallic,
+      smoothness: this.smoothness,
       kind: this.eraser ? "eraser" : "brush",
       continued,
     };

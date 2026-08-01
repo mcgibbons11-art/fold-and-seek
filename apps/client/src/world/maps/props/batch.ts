@@ -55,6 +55,7 @@ export interface BatchStats {
 interface MergeQueue {
   readonly layer: PropLayer;
   readonly material: THREE.Material;
+  readonly structure: boolean;
   readonly geometries: THREE.BufferGeometry[];
 }
 
@@ -62,6 +63,8 @@ interface Bucket {
   readonly layer: PropLayer;
   readonly geometry: THREE.BufferGeometry;
   readonly material: THREE.Material;
+  /** Shell geometry, which a disguise mounts against rather than hides among. */
+  readonly structure: boolean;
   readonly matrices: THREE.Matrix4[];
 }
 
@@ -87,10 +90,13 @@ export class PropBatcher {
 
   private layer: PropLayer = "standard";
   private hero = false;
+  private structure = false;
   private heroGroup: THREE.Group | null = null;
   private partCount = 0;
   private heroMeshCount = 0;
   private triangles = 0;
+  /** Build order is deterministic, so this is a stable mesh id (§24.6). */
+  private meshCount = 0;
 
   constructor(
     root: THREE.Group,
@@ -117,6 +123,7 @@ export class PropBatcher {
     hero: boolean,
     scale = 1,
     layer: PropLayer = "standard",
+    structure = false,
   ): void {
     this.euler.set(0, rotationY, 0);
     this.quaternion.setFromEuler(this.euler);
@@ -127,6 +134,7 @@ export class PropBatcher {
     );
     this.layer = layer;
     this.hero = hero;
+    this.structure = structure;
     if (hero) {
       const group = new THREE.Group();
       group.name = name;
@@ -163,7 +171,7 @@ export class PropBatcher {
       mesh.castShadow = options.shadow ?? true;
       mesh.receiveShadow = options.receive ?? true;
       mesh.userData["swatchId"] = material.userData["swatchId"];
-      heroGroup.add(mesh);
+      this.publish(mesh, heroGroup);
       this.heroMeshCount += 1;
       return;
     }
@@ -172,13 +180,14 @@ export class PropBatcher {
     // than with its own, so a brass collar shared with fifty other lamps is
     // still one draw call.
     const layer: PropLayer = this.hero ? "standard" : this.layer;
-    const key = `${layer}|${geometry.uuid}|${material.uuid}`;
+    const key = `${layer}|${String(this.structure)}|${geometry.uuid}|${material.uuid}`;
     const bucket = this.buckets.get(key);
     if (bucket === undefined) {
       this.buckets.set(key, {
         layer,
         geometry,
         material,
+        structure: this.structure,
         matrices: [this.local.clone()],
       });
       return;
@@ -188,8 +197,26 @@ export class PropBatcher {
 
   end(): void {
     this.hero = false;
+    this.structure = false;
     this.heroGroup = null;
     this.layer = "standard";
+  }
+
+  /**
+   * Names a mesh and parents it. The name is `parentGroup#index` with a
+   * build-order index, matching the test room, so a saved disguise anchored to
+   * a surface still resolves that surface on the next load (§24.6).
+   *
+   * `surfaceKind` marks the shell. A disguise mounting on a wall has to tell a
+   * wall from a table leg, and only the map knows which is which.
+   */
+  private publish(mesh: THREE.Mesh, parent: THREE.Object3D, structure = this.structure): void {
+    mesh.name = `${parent.name.length > 0 ? parent.name : "shop"}#${String(this.meshCount)}`;
+    this.meshCount += 1;
+    if (structure) {
+      mesh.userData["surfaceKind"] = "structure";
+    }
+    parent.add(mesh);
   }
 
   /**
@@ -212,8 +239,13 @@ export class PropBatcher {
       // material collapse into a single static mesh, which is where most of
       // the map's draw-call budget is won.
       if (bucket.matrices.length <= MERGE_THRESHOLD) {
-        const key = `${bucket.layer}|${bucket.material.uuid}`;
-        const queue = merges.get(key) ?? { layer: bucket.layer, material: bucket.material, geometries: [] };
+        const key = `${bucket.layer}|${String(bucket.structure)}|${bucket.material.uuid}`;
+        const queue = merges.get(key) ?? {
+          layer: bucket.layer,
+          material: bucket.material,
+          structure: bucket.structure,
+          geometries: [],
+        };
         for (const matrix of bucket.matrices) {
           // Merging needs one indexing scheme across the whole queue, and the
           // library mixes indexed lathes with non-indexed extrusions.
@@ -237,7 +269,7 @@ export class PropBatcher {
       instanced.userData["swatchId"] = bucket.material.userData["swatchId"];
       instanced.computeBoundingSphere();
       this.bag.add(instanced);
-      parent.add(instanced);
+      this.publish(instanced, parent, bucket.structure);
       instancedMeshes += 1;
     }
 
@@ -268,11 +300,10 @@ export class PropBatcher {
       this.bag.add(merged);
 
       const mesh = new THREE.Mesh(merged, queue.material);
-      mesh.name = `merged:${queue.layer}:${queue.material.name}`;
       mesh.castShadow = false;
       mesh.receiveShadow = true;
       mesh.userData["swatchId"] = queue.material.userData["swatchId"];
-      this.layers[queue.layer].add(mesh);
+      this.publish(mesh, this.layers[queue.layer], queue.structure);
       count += 1;
     }
     return count;
