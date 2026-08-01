@@ -1,0 +1,204 @@
+import * as THREE from "three/webgpu";
+
+import { Eyedropper } from "./Eyedropper";
+import { PaintBrushController, DEFAULT_BRUSH_RADIUS } from "./PaintBrushController";
+import { PaintLayer, type PaintStroke } from "./PaintLayer";
+import { PaintMaterialBinder } from "./PaintMaterialBinder";
+import { PaintStore, type PaintPanelState } from "./paintStore";
+import type { Hsv, Rgb } from "./color";
+
+/**
+ * The whole body-painting tool behind one factory, so the Forge can adopt it as
+ * a fifth tool mode with a handful of calls and no knowledge of atlases,
+ * material clones or wire encoding.
+ *
+ * Painting survives leaving paint mode: `deactivate` only stops taking the
+ * pointer. The atlas stays on the body until the tool is disposed, which is what
+ * the player expects from paint.
+ */
+
+export interface PaintToolDeps {
+  readonly canvas: HTMLCanvasElement;
+  readonly camera: THREE.Camera;
+  readonly raycaster: THREE.Raycaster;
+  /** The local player's paintable meshes: MimicVisual.segmentMeshes + panelMeshes. */
+  readonly getMimicMeshes: () => readonly THREE.Object3D[];
+  /** Everything the eyedropper may sample. Defaults to the Mimic alone. */
+  readonly getPickTargets?: () => readonly THREE.Object3D[];
+  readonly onStroke?: (stroke: PaintStroke) => void;
+  readonly onClear?: () => void;
+  /** Wired to MimicVisual.setCastShadow for the panel's shadow toggle. */
+  readonly setCastShadow?: (enabled: boolean) => void;
+  /** False for a pointer event the HUD owns. */
+  readonly ownsPointerEvent?: (event: PointerEvent) => boolean;
+  readonly atlasSize?: number;
+}
+
+export interface PaintTool {
+  readonly layer: PaintLayer;
+  readonly store: PaintStore;
+  activate(): void;
+  deactivate(): void;
+  /** Per frame: rebinds materials the Mimic swapped and uploads new pixels. */
+  update(): void;
+  setColor(color: Rgb): void;
+  setHsv(hsv: Hsv): void;
+  setBrushSize(radius: number): void;
+  setOpacity(opacity: number): void;
+  setEraser(enabled: boolean): void;
+  setShadow(enabled: boolean): void;
+  /** The MECCHA F key: the next click copies a colour instead of painting. */
+  armEyedropper(armed: boolean): void;
+  /** Samples immediately at a screen point, for a key press with no click. */
+  sampleAt(clientX: number, clientY: number): boolean;
+  clearAll(): void;
+  getState(): PaintPanelState;
+  dispose(): void;
+}
+
+export function createPaintTool(deps: PaintToolDeps): PaintTool {
+  const layer = new PaintLayer(
+    deps.atlasSize === undefined ? {} : { atlasSize: deps.atlasSize },
+  );
+  const store = new PaintStore(DEFAULT_BRUSH_RADIUS);
+  const binder = new PaintMaterialBinder(layer, deps.getMimicMeshes);
+  const pointerNdc = new THREE.Vector2();
+
+  const eyedropper = new Eyedropper({
+    raycaster: deps.raycaster,
+    camera: deps.camera,
+    // Every tile view shares the atlas canvas, so one image comparison catches
+    // a sample taken off the painter's own body, where a cached read-back would
+    // be a frame out of date the moment the brush moved.
+    getPixelSource: (texture) => {
+      const atlas = layer.getTexture();
+      return atlas !== null && texture.image === atlas.image ? layer.pixelSource() : null;
+    },
+  });
+
+  const pickTargets = deps.getPickTargets ?? deps.getMimicMeshes;
+
+  const takeSample = (pointer: THREE.Vector2): boolean => {
+    const sample = eyedropper.sample(pointer, pickTargets());
+    if (sample === null) {
+      store.patch({ eyedropperArmed: false, status: "Nothing under the cursor to sample." });
+      return false;
+    }
+    store.setColor(sample.color);
+    store.patch({ eyedropperArmed: false, status: "Colour copied. Drag to paint with it." });
+    return true;
+  };
+
+  const brush = new PaintBrushController({
+    canvas: deps.canvas,
+    camera: deps.camera,
+    raycaster: deps.raycaster,
+    getMimicMeshes: deps.getMimicMeshes,
+    layer,
+    ...(deps.ownsPointerEvent === undefined ? {} : { ownsPointerEvent: deps.ownsPointerEvent }),
+    interceptPointerDown: (pointer) => {
+      if (!store.getState().eyedropperArmed) return false;
+      takeSample(pointer);
+      return true;
+    },
+    onStroke: (stroke) => {
+      if (stroke.continued !== true) {
+        store.rememberColor([stroke.color[0], stroke.color[1], stroke.color[2]]);
+      }
+      store.patch({ strokeCount: layer.strokeCount });
+      deps.onStroke?.(stroke);
+    },
+  });
+
+  brush.setColor(store.getState().color);
+  brush.setBrushSize(store.getState().brushSize);
+
+  return {
+    layer,
+    store,
+
+    activate(): void {
+      binder.sync();
+      brush.activate();
+      store.patch({
+        active: true,
+        status: "Drag on your body to paint. F samples a colour from the room.",
+      });
+    },
+
+    deactivate(): void {
+      brush.deactivate();
+      store.patch({ active: false, eyedropperArmed: false });
+    },
+
+    update(): void {
+      binder.sync();
+      layer.flush();
+    },
+
+    setColor(color: Rgb): void {
+      store.setColor(color);
+      brush.setColor(store.getState().color);
+      brush.setEraser(false);
+    },
+
+    setHsv(hsv: Hsv): void {
+      store.setHsv(hsv);
+      brush.setColor(store.getState().color);
+      brush.setEraser(false);
+    },
+
+    setBrushSize(radius: number): void {
+      brush.setBrushSize(radius);
+      store.patch({ brushSize: brush.getBrushSize() });
+    },
+
+    setOpacity(opacity: number): void {
+      brush.setOpacity(opacity);
+      store.patch({ opacity: Math.min(1, Math.max(0, opacity)) });
+    },
+
+    setEraser(enabled: boolean): void {
+      brush.setEraser(enabled);
+      store.patch({ eraser: enabled, eyedropperArmed: false });
+    },
+
+    setShadow(enabled: boolean): void {
+      deps.setCastShadow?.(enabled);
+      store.patch({ shadow: enabled });
+    },
+
+    armEyedropper(armed: boolean): void {
+      store.patch({
+        eyedropperArmed: armed,
+        status: armed ? "Click any surface to copy its colour." : "Eyedropper off.",
+      });
+    },
+
+    sampleAt(clientX: number, clientY: number): boolean {
+      const rect = deps.canvas.getBoundingClientRect();
+      pointerNdc.set(
+        rect.width === 0 ? 0 : ((clientX - rect.left) / rect.width) * 2 - 1,
+        rect.height === 0 ? 0 : -(((clientY - rect.top) / rect.height) * 2 - 1),
+      );
+      return takeSample(pointerNdc);
+    },
+
+    clearAll(): void {
+      layer.clear();
+      store.patch({ strokeCount: 0, status: "Paint cleared." });
+      deps.onClear?.();
+    },
+
+    getState(): PaintPanelState {
+      return store.getState();
+    },
+
+    dispose(): void {
+      brush.dispose();
+      eyedropper.dispose();
+      binder.dispose();
+      layer.dispose();
+    },
+  };
+}

@@ -1,0 +1,1344 @@
+import {
+  MatchSimulation,
+  type MatchCommand,
+  type PublicMatchState,
+  type MatchSettingsPatch,
+  type PrivateMatchState,
+  type PrivateSimEvent,
+  type SimEvent,
+  type SimOutput,
+  type SpatialValidator,
+} from "@foldseek/game-sim";
+import { MatchPhase, MatchSnapshotSchema, type MatchSettings } from "@foldseek/shared";
+import {
+  EMPTY_SYNC,
+  idleConnection,
+  type CommandRejection,
+  type ConnectionDetail,
+  type ConnectionState,
+  type ConnectionStatus,
+  type ForgeSnapshot,
+  type MatchSync,
+  type NetworkAdapter,
+  type RosterEntry,
+  type Unsubscribe,
+} from "./NetworkAdapter";
+import {
+  batchEvents,
+  decodeChunks,
+  decodeHostPublication,
+  decodePoseBook,
+  encodeChunks,
+  jsonByteLength,
+  parseEnvelope,
+  type NetEnvelope,
+  KeyedRateWindow,
+  MAX_COMMANDS_PER_SECOND,
+  MAX_FORGE_SNAPSHOTS_PER_SECOND,
+  MAX_PAYLOAD_BYTES,
+  MAX_REJECTIONS_PER_MESSAGE,
+  PORTALS_PROTOCOL_VERSION,
+  RATE_WINDOW_MS,
+  RateWindow,
+  SEND_RATE_LIMIT,
+  POSE_STATE_KEYS,
+  SIM_STATE_KEYS,
+  SNAPSHOT_STATE_KEYS,
+  SNAPSHOT_WRITES_PER_SECOND,
+  STATE_WRITES_PER_SECOND,
+  type HostPublication,
+  type PoseBook,
+} from "./portalsProtocol";
+import { Signal } from "./signal";
+import type {
+  PortalsNet,
+  PortalsNetPlayer,
+  PortalsNetSession,
+  PortalsSdk,
+} from "../types/portals";
+
+/**
+ * Portals.net transport. The relay is a plain message bus with no server-side
+ * authority, so one client runs the authoritative MatchSimulation and every
+ * other client sends it commands and applies the events it publishes
+ * (docs/PORTALS_CONSTRAINTS.md).
+ *
+ * Authority election is the lowest seat id among the session players. Because
+ * every client sees the same player set, all clients agree without negotiating.
+ * The holder keeps authority while it remains in the session: a joining client
+ * never takes it, so a late join cannot interrupt a round. When the holder
+ * leaves, the remaining clients re-elect from the same rule and the winner
+ * rebuilds from the last published snapshot.
+ *
+ * IDENTITY. Portals reports a per-connection `id` that changes every time a
+ * player reconnects, and a `playerId` that is stable for signed-in players. The
+ * simulation is keyed on the stable one, called the seat id here, so a player
+ * who drops and returns inside the reconnect grace lands back in their own slot
+ * with their role and disguise intact (§27.9). A guest has no stable id, so
+ * their connection id is their seat and they behave as before. One consequence
+ * is deliberate: two tabs signed into the same account are one seat, and the
+ * second is refused rather than seated twice (§31.3, no duplicate session
+ * control).
+ */
+
+export const PORTALS_TICK_HZ = 10;
+/** Outbound coalescing window, matching the 100-150 ms sampling guidance. */
+export const FLUSH_INTERVAL_MS = 100;
+const SNAPSHOT_INTERVAL_MS = Math.round(1_000 / SNAPSHOT_WRITES_PER_SECOND);
+
+export interface PortalsAdapterOptions {
+  readonly settings?: MatchSettingsPatch;
+  readonly seed?: number;
+  readonly tickHz?: number;
+  /**
+   * Range and line-of-sight checks for whichever client ends up host. The
+   * simulation defaults to a permissive validator, so leaving this out means
+   * accusations and direct-look escapes are not gated on geometry.
+   */
+  readonly spatial?: SpatialValidator;
+  /**
+   * Clock for the authoritative simulation. Defaults to Date.now() so the
+   * timeline in a published snapshot still means something to the next host.
+   */
+  readonly now?: () => number;
+}
+
+/** Reads the SDK the Portals host injects, or null outside Portals. */
+export function detectPortals(): PortalsSdk | null {
+  if (typeof window === "undefined") return null;
+  const candidate: unknown = (window as { Portals?: unknown }).Portals;
+  return isPortalsSdk(candidate) ? candidate : null;
+}
+
+function isPortalsSdk(value: unknown): value is PortalsSdk {
+  if (typeof value !== "object" || value === null) return false;
+  const sdk = value as Partial<PortalsSdk>;
+  return typeof sdk.ready === "function" && typeof sdk.net === "object" && sdk.net !== null;
+}
+
+export class PortalsNetAdapter implements NetworkAdapter {
+  readonly mode = "portals" as const;
+
+  private readonly portals: PortalsSdk;
+  private readonly net: PortalsNet;
+  private readonly options: PortalsAdapterOptions;
+  private readonly tickHz: number;
+  private readonly clock: () => number;
+
+  private readonly eventSignal = new Signal<SimEvent>();
+  private readonly privateSignal = new Signal<PrivateSimEvent>();
+  private readonly rosterSignal = new Signal<readonly RosterEntry[]>();
+  private readonly statusSignal = new Signal<ConnectionState>();
+  private readonly rejectionSignal = new Signal<CommandRejection>();
+  private readonly syncSignal = new Signal<MatchSync>();
+
+  private players: PortalsNetPlayer[] = [];
+  /** Relay connection id: changes on every reconnect, used only for addressing. */
+  private selfConnectionId: string | null = null;
+  /** Stable identity the simulation knows this client by. */
+  private selfSeatId: string | null = null;
+  private authoritySeatId: string | null = null;
+  private sim: MatchSimulation | null = null;
+
+  /** Live connection id to seat id, rebuilt from the relay's player list. */
+  private readonly connectionSeats = new Map<string, string>();
+  /** Host only: which connection currently holds each seated player's slot. */
+  private readonly seatOwners = new Map<string, string>();
+
+  private connection: ConnectionState = idleConnection("portals");
+  private sync: MatchSync = EMPTY_SYNC;
+  private lastSnapshot: HostPublication | null = null;
+  /** Newest authoritative snapshot seen, whether published here or read. */
+  private lastSimSnapshot: unknown = null;
+  private lastSimSeq = 0;
+  private simSnapshotBlockedAt = 0;
+  /** Re-sent verbatim when a new host asks: the pose this client last published. */
+  private lastForgeSnapshot: ForgeSnapshot | null = null;
+  /** Locked poses, kept out of the frequently rewritten publication. */
+  private poseBook: PoseBook = {};
+  private poseSeq = 0;
+  private lastPoseSerialized = "";
+  private readonly stateWindow = new RateWindow(STATE_WRITES_PER_SECOND, RATE_WINDOW_MS);
+  private snapshotSeq = 0;
+  private snapshotDirty = false;
+  private lastSnapshotAt = 0;
+
+  private readonly publicOutbox: SimEvent[] = [];
+  private readonly privateOutbox = new Map<string, PrivateSimEvent[]>();
+  private readonly pendingSync = new Set<string>();
+  private readonly pendingRejections = new Map<string, CommandRejection[]>();
+  /** Connections the simulation would not seat, and why, kept for their resync. */
+  private readonly refusedConnections = new Map<string, string>();
+  private readonly sendWindow = new RateWindow(SEND_RATE_LIMIT, RATE_WINDOW_MS);
+  private readonly commandWindow = new KeyedRateWindow(MAX_COMMANDS_PER_SECOND, RATE_WINDOW_MS);
+  private readonly forgeWindow = new KeyedRateWindow(
+    MAX_FORGE_SNAPSHOTS_PER_SECOND,
+    RATE_WINDOW_MS,
+  );
+
+  private flushTimer: ReturnType<typeof setInterval> | null = null;
+  private tickTimer: ReturnType<typeof setInterval> | null = null;
+  private listenersAttached = false;
+  private disposed = false;
+
+  constructor(portals: PortalsSdk, options: PortalsAdapterOptions = {}) {
+    this.portals = portals;
+    this.net = portals.net;
+    this.options = options;
+    this.tickHz = options.tickHz ?? PORTALS_TICK_HZ;
+    this.clock = options.now ?? (() => Date.now());
+  }
+
+  async connect(): Promise<void> {
+    if (this.disposed) throw new Error("PortalsNetAdapter was disposed");
+    await this.portals.ready();
+  }
+
+  async join(room: string, displayName: string): Promise<ConnectionState> {
+    if (this.disposed) throw new Error("PortalsNetAdapter was disposed");
+    this.setStatus("connecting", null);
+
+    let session: PortalsNetSession;
+    try {
+      session = await this.net.join(room.length > 0 ? { channel: room } : undefined);
+    } catch (error) {
+      this.setStatus("error", "join_failed");
+      throw error;
+    }
+
+    this.selfConnectionId = session.self.id;
+    this.selfSeatId = seatIdOf(session.self);
+    this.players = mergeSelf(session.players, session.self);
+    if (session.self.displayName === null) {
+      // Portals owns display names; the requested one is only a fallback.
+      this.players = this.players.map((player) =>
+        player.id === session.self.id ? { ...player, displayName } : player,
+      );
+    }
+    const snapshot = decodeHostPublication(session.state);
+    this.poseBook = decodePoseBook(session.state) ?? {};
+    const simChunk = decodeChunks(session.state, SIM_STATE_KEYS);
+    if (simChunk) {
+      this.lastSimSeq = simChunk.seq;
+      this.lastSimSnapshot = simChunk.value;
+    }
+    if (snapshot && this.isRoomFull(snapshot)) {
+      // The host would refuse the seat anyway; failing here means the player
+      // gets a reason instead of sitting in a room that never seats them.
+      this.selfConnectionId = null;
+      this.selfSeatId = null;
+      this.players = [];
+      this.setStatus("error", "room_full");
+      await this.net.leave();
+      throw new Error("room_full");
+    }
+
+    this.attachListeners();
+    this.indexSeats();
+    this.lastSnapshot = snapshot;
+    if (this.lastSnapshot) {
+      this.adoptSnapshotSeq(this.lastSnapshot);
+      this.setSync(this.withPoses(this.lastSnapshot), null);
+    }
+
+    this.resolveAuthority();
+    this.startTimers();
+    this.setStatus("connected");
+    this.emitRoster();
+    if (!this.isAuthority()) this.requestResync();
+    return this.connection;
+  }
+
+  async disconnect(): Promise<void> {
+    this.stopTimers();
+    this.detachListeners();
+    this.releaseAuthority();
+    this.players = [];
+    this.connectionSeats.clear();
+    this.selfConnectionId = null;
+    this.selfSeatId = null;
+    this.authoritySeatId = null;
+    this.sync = EMPTY_SYNC;
+    this.syncSignal.emit(this.sync);
+    this.setStatus("closed", null);
+    await this.net.leave();
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.stopTimers();
+    this.detachListeners();
+    this.releaseAuthority();
+    this.eventSignal.clear();
+    this.privateSignal.clear();
+    this.rejectionSignal.clear();
+    this.rosterSignal.clear();
+    this.statusSignal.clear();
+    this.syncSignal.clear();
+  }
+
+  sendCommand(command: MatchCommand): void {
+    if (this.connection.status !== "connected" || this.selfSeatId === null) {
+      console.warn("[portals] command while not connected, ignoring", command.type);
+      return;
+    }
+    if (this.isAuthority()) {
+      this.applyCommandFrom(this.selfSeatId, command);
+      return;
+    }
+    if (this.authoritySeatId === null) {
+      console.warn("[portals] no authority elected, dropping command", command.type);
+      return;
+    }
+    this.rawSend({
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "cmd",
+      to: this.authoritySeatId,
+      cmd: command,
+    });
+  }
+
+  sendForgeSnapshot(snapshot: ForgeSnapshot): void {
+    if (this.connection.status !== "connected" || this.selfSeatId === null) return;
+    this.lastForgeSnapshot = snapshot;
+    if (this.isAuthority()) {
+      this.applyForgeSnapshot(this.selfSeatId, snapshot);
+      return;
+    }
+    if (this.authoritySeatId === null) return;
+    this.rawSend({
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "snap",
+      to: this.authoritySeatId,
+      snapshot,
+    });
+  }
+
+  getSelfId(): string | null {
+    return this.selfSeatId;
+  }
+
+  getConnection(): ConnectionState {
+    return this.connection;
+  }
+
+  getRoster(): readonly RosterEntry[] {
+    // Two tabs of one signed-in player share a seat, so the roster is keyed by
+    // seat and shows them once.
+    const bySeat = new Map<string, RosterEntry>();
+    for (const player of this.players) {
+      const seat = seatIdOf(player);
+      if (bySeat.has(seat)) continue;
+      bySeat.set(seat, {
+        id: seat,
+        displayName: nameOf(player),
+        isSelf: seat === this.selfSeatId,
+        isAuthority: seat === this.authoritySeatId,
+      });
+    }
+    return [...bySeat.values()];
+  }
+
+  getSync(): MatchSync {
+    return this.sync;
+  }
+
+  /**
+   * Whether the published roster already holds every seat the settings allow.
+   * A rejoining player arrives on a new connection id and so needs a new seat,
+   * which is why there is no exemption for someone who was here before.
+   */
+  private isRoomFull(snapshot: HostPublication): boolean {
+    return snapshot.publicState.players.length >= snapshot.publicState.settings.maxPlayers;
+  }
+
+  /** True while this client owns the authoritative simulation. */
+  isAuthority(): boolean {
+    return this.selfSeatId !== null && this.selfSeatId === this.authoritySeatId;
+  }
+
+  onEvent(listener: (event: SimEvent) => void): Unsubscribe {
+    return this.eventSignal.subscribe(listener);
+  }
+
+  onPrivateEvent(listener: (event: PrivateSimEvent) => void): Unsubscribe {
+    return this.privateSignal.subscribe(listener);
+  }
+
+  onRejection(listener: (rejection: CommandRejection) => void): Unsubscribe {
+    return this.rejectionSignal.subscribe(listener);
+  }
+
+  onRoster(listener: (roster: readonly RosterEntry[]) => void): Unsubscribe {
+    return this.rosterSignal.subscribe(listener);
+  }
+
+  onStatus(listener: (state: ConnectionState) => void): Unsubscribe {
+    return this.statusSignal.subscribe(listener);
+  }
+
+  onSync(listener: (sync: MatchSync) => void): Unsubscribe {
+    return this.syncSignal.subscribe(listener);
+  }
+
+  // ------------------------------------------------------------- relay events
+
+  private readonly handleMessage = (data: unknown, fromId: string): void => {
+    // Size first: an oversized payload is refused before it is parsed, so a
+    // peer cannot make the host do work by sending something enormous (§36.5).
+    const bytes = jsonByteLength(data);
+    if (bytes > MAX_PAYLOAD_BYTES) {
+      console.warn(`[portals] dropped ${bytes} byte message from ${fromId}`);
+      return;
+    }
+
+    const envelope = parseEnvelope(data);
+    if (!envelope) {
+      console.warn("[portals] dropped malformed message from", fromId);
+      return;
+    }
+
+    // Everything below is decided on the sender's seat. The relay reports a
+    // connection, and a connection with no seat has nothing to say to the room.
+    let fromSeat = this.connectionSeats.get(fromId);
+
+    // A client can hear from a new host before it has been told the old one
+    // left, in which case its own view of who is authoritative is stale and it
+    // would reject the very messages that carry the round forward. The relay's
+    // live roster settles it, so reconcile before judging the sender.
+    if (AUTHORITY_ONLY.has(envelope.t) && fromSeat !== this.authoritySeatId) {
+      this.reconcileRoster();
+      fromSeat = this.connectionSeats.get(fromId);
+    }
+    if (fromSeat === undefined && envelope.t !== "refused") return;
+
+    switch (envelope.t) {
+      case "cmd":
+        // Only the elected authority acts on commands, and only on ones
+        // addressed to it, so a stale host cannot fork the simulation.
+        if (!this.isAuthority() || envelope.to !== this.selfSeatId) return;
+        if (!this.commandWindow.tryConsume(fromId, this.clock())) {
+          console.warn(
+            `[portals] ${fromId} exceeded ${MAX_COMMANDS_PER_SECOND} commands/s, dropped ${envelope.cmd.type}`,
+          );
+          return;
+        }
+        if (fromSeat !== undefined) this.applyCommandFrom(fromSeat, envelope.cmd);
+        return;
+
+      case "ev":
+        if (fromSeat !== this.authoritySeatId) {
+          console.warn("[portals] ignored events from non-authority", fromId);
+          return;
+        }
+        for (const event of envelope.events) this.eventSignal.emit(event);
+        return;
+
+      case "pev":
+        if (fromSeat !== this.authoritySeatId || envelope.to !== this.selfSeatId) return;
+        if (envelope.privateState !== null) {
+          this.setSync(this.sync.publicState, envelope.privateState);
+        }
+        for (const event of envelope.events) this.privateSignal.emit(event);
+        for (const rejection of envelope.rejections) this.rejectionSignal.emit(rejection);
+        return;
+
+      case "snap":
+        if (!this.isAuthority() || envelope.to !== this.selfSeatId) return;
+        if (!this.forgeWindow.tryConsume(fromId, this.clock())) {
+          console.warn(
+            `[portals] ${fromId} exceeded ${MAX_FORGE_SNAPSHOTS_PER_SECOND} forge snapshots/s`,
+          );
+          return;
+        }
+        // A creep is a pose update: it produces events for the room and can be
+        // refused for moving too fast or leaving the play volume, so both the
+        // output and the refusal have to be routed like any other command.
+        if (fromSeat !== undefined) this.applyForgeSnapshot(fromSeat, envelope.snapshot);
+        return;
+
+      case "resync": {
+        // A resync costs the host a message, so it spends the sender's own
+        // command allowance rather than being free to repeat.
+        if (!this.isAuthority()) return;
+        if (!this.commandWindow.tryConsume(fromId, this.clock())) return;
+        // A joiner asks for its state as soon as it is listening, which is the
+        // first moment a refusal can reliably reach it: the playerjoin the host
+        // saw may well have arrived before the joiner attached its handlers.
+        const refusal = this.refusedConnections.get(fromId);
+        if (refusal !== undefined) {
+          this.refuseConnection(fromId, refusal);
+          return;
+        }
+        if (fromSeat !== undefined) this.pendingSync.add(fromSeat);
+        return;
+      }
+
+      case "reforge":
+        // Only the authority may ask, and only a client with a pose to give
+        // answers. Re-sending costs one message and restores work that would
+        // otherwise be lost with the host that recorded it.
+        if (fromSeat !== this.authoritySeatId || this.isAuthority()) return;
+        if (this.lastForgeSnapshot !== null) this.sendForgeSnapshot(this.lastForgeSnapshot);
+        return;
+
+      case "refused":
+        // Addressed by connection, so that only the tab that arrived second is
+        // turned away when two share a seat.
+        if (envelope.to !== this.selfConnectionId) return;
+        this.stopTimers();
+        this.setStatus("error", refusalDetail(envelope.reason));
+        return;
+    }
+  };
+
+  private readonly handlePlayerJoin = (
+    player: PortalsNetPlayer,
+    players: PortalsNetPlayer[],
+  ): void => {
+    this.players = players;
+    this.indexSeats();
+    if (this.sim && this.isAuthority()) {
+      this.seatArrival(player);
+      // A joiner reads the state keys during join(), so publish as early as the
+      // write cadence allows; the state event carries the rest moments later.
+      this.maybeWriteSnapshot();
+    }
+    this.resolveAuthority();
+    this.emitRoster();
+  };
+
+  /**
+   * Decides what an arriving connection is: a returning player inside their
+   * reconnect grace, a second tab of someone already playing, or a new seat.
+   */
+  private seatArrival(player: PortalsNetPlayer): void {
+    const sim = this.sim;
+    if (!sim) return;
+    const seat = seatIdOf(player);
+
+    const holder = this.seatOwners.get(seat);
+    if (holder !== undefined && holder !== player.id && this.connectionSeats.has(holder)) {
+      // Someone is already playing this seat from another live connection.
+      this.refuseConnection(player.id, "duplicate_session", true);
+      return;
+    }
+
+    this.seatOwners.set(seat, player.id);
+    this.refusedConnections.delete(player.id);
+
+    if (sim.getPrivateStateFor(seat) !== null) {
+      // The slot survived the drop, so the player resumes their role and their
+      // disguise rather than entering as a spectator (§27.9).
+      this.applySim("markReconnected", (live) => live.markReconnected(seat, this.clock()));
+      this.pendingSync.add(seat);
+      return;
+    }
+
+    const seated = this.applySim("addPlayer", (live) =>
+      live.addPlayer(seat, { displayName: nameOf(player) }),
+    );
+    if (seated && !seated.accepted) {
+      this.seatOwners.delete(seat);
+      this.refuseConnection(player.id, seated.reason ?? "rejected", true);
+      return;
+    }
+    this.pendingSync.add(seat);
+  }
+
+  private readonly handlePlayerLeave = (
+    player: PortalsNetPlayer,
+    players: PortalsNetPlayer[],
+  ): void => {
+    const seat = this.connectionSeats.get(player.id) ?? seatIdOf(player);
+    this.players = players;
+    this.indexSeats();
+    this.refusedConnections.delete(player.id);
+    this.commandWindow.forget(player.id);
+    this.forgeWindow.forget(player.id);
+
+    if (this.sim && this.isAuthority() && this.seatOwners.get(seat) === player.id) {
+      this.seatOwners.delete(seat);
+      this.pendingSync.delete(seat);
+      this.privateOutbox.delete(seat);
+      this.pendingRejections.delete(seat);
+      // Hold the slot rather than dropping it. The simulation runs the grace
+      // window and evicts the seat itself once it expires, and a return inside
+      // that window is reattached by seatArrival.
+      this.applySim("markDisconnected", (sim) => sim.markDisconnected(seat, this.clock()));
+    }
+    this.resolveAuthority();
+    this.emitRoster();
+  };
+
+  /**
+   * Re-reads the roster from the relay and settles who is authoritative. Used
+   * when a message arrives that does not fit this client's view of the room.
+   */
+  private reconcileRoster(): void {
+    this.players = this.net.players();
+    this.indexSeats();
+    this.resolveAuthority();
+    this.emitRoster();
+  }
+
+  /** Rebuilds the connection to seat index from the relay's current roster. */
+  private indexSeats(): void {
+    this.connectionSeats.clear();
+    for (const player of this.players) {
+      this.connectionSeats.set(player.id, seatIdOf(player));
+    }
+  }
+
+  private readonly handleState = (key: string): void => {
+    if (this.isAuthority()) return;
+    const state = this.net.getState();
+
+    if ((POSE_STATE_KEYS as readonly string[]).includes(key)) {
+      const poses = decodePoseBook(state);
+      if (poses) {
+        this.poseBook = poses;
+        // The publication this client already holds described these disguises
+        // without their geometry; fill it in now that the geometry has landed.
+        if (this.lastSnapshot) this.setSync(this.withPoses(this.lastSnapshot), this.sync.privateState);
+      }
+      return;
+    }
+
+    if ((SIM_STATE_KEYS as readonly string[]).includes(key)) {
+      // Held unparsed until this client actually has to take over. Reading it
+      // eagerly would mean every client decoding the room's secrets on every
+      // publish for no reason.
+      const chunked = decodeChunks(state, SIM_STATE_KEYS);
+      if (chunked && chunked.seq >= this.lastSimSeq) {
+        this.lastSimSeq = chunked.seq;
+        this.lastSimSnapshot = chunked.value;
+      }
+      return;
+    }
+
+    if (!(SNAPSHOT_STATE_KEYS as readonly string[]).includes(key)) return;
+    const snapshot = decodeHostPublication(state);
+    if (!snapshot) return;
+    if (this.lastSnapshot && snapshot.seq <= this.lastSnapshot.seq) return;
+    this.lastSnapshot = snapshot;
+    this.adoptSnapshotSeq(snapshot);
+    this.setSync(this.withPoses(snapshot), this.sync.privateState);
+  };
+
+  private readonly handleStatus = (status: "connected" | "disconnected"): void => {
+    if (status === "connected") {
+      this.setStatus("connected", null);
+      return;
+    }
+    // Portals does not reconnect on its own; the UI offers a rejoin that calls
+    // join() again, which re-reads the state keys and requests a private sync.
+    this.stopTimers();
+    this.releaseAuthority();
+    this.authoritySeatId = null;
+    this.setStatus("disconnected", null);
+  };
+
+  // ------------------------------------------------------------------ authority
+
+  private resolveAuthority(): void {
+    const seats = [...new Set(this.players.map(seatIdOf))];
+    const held = this.authoritySeatId !== null && seats.includes(this.authoritySeatId);
+    const published = this.lastSnapshot?.authorityId;
+    const next = held
+      ? this.authoritySeatId
+      : published !== undefined && seats.includes(published)
+        ? published
+        : ([...seats].sort()[0] ?? null);
+
+    if (next === this.authoritySeatId) return;
+    this.authoritySeatId = next;
+
+    if (next !== null && next === this.selfSeatId) {
+      this.assumeAuthority();
+    } else {
+      this.releaseAuthority();
+      this.setStatus(this.connection.status);
+    }
+  }
+
+  /**
+   * Rebuilds an authoritative simulation on this client, resuming the round in
+   * progress when the departed host left a snapshot this client can restore.
+   *
+   * The snapshot came from a peer, so it is untrusted no matter who wrote it:
+   * it is validated against the simulation's own schema before any of it is
+   * believed, and restore() validates again. If anything about it does not
+   * hold, the room falls back to a lobby reset rather than running on state
+   * nobody can vouch for.
+   */
+  private assumeAuthority(): void {
+    if (this.sim || this.selfSeatId === null) return;
+
+    const snapshot = this.lastSnapshot;
+    // The publish counter is what every client uses to tell a newer snapshot
+    // from an older one, so it has to keep climbing across a change of host.
+    if (snapshot) this.adoptSnapshotSeq(snapshot);
+
+    if (this.resumeFromSnapshot(snapshot)) return;
+
+    const interrupted = snapshot !== null && snapshot.publicState.phase !== MatchPhase.Lobby;
+    const settings = snapshot
+      ? settingsPatchOf(snapshot.publicState.settings)
+      : (this.options.settings ?? {});
+
+    this.sim = new MatchSimulation(settings, this.options.seed ?? 1, this.options.spatial);
+    this.seatOwners.clear();
+    // One entry per seat, in a fixed order, so every client that could have
+    // taken over would have built the same roster.
+    const arrivals = new Map<string, PortalsNetPlayer>();
+    for (const player of [...this.players].sort((a, b) => a.id.localeCompare(b.id))) {
+      const seat = seatIdOf(player);
+      if (!arrivals.has(seat)) arrivals.set(seat, player);
+    }
+    for (const [seat, player] of [...arrivals].sort(([left], [right]) => left.localeCompare(right))) {
+      const seated = this.applySim("addPlayer", (sim) =>
+        sim.addPlayer(seat, {
+          displayName: nameOf(player),
+          isHost: seat === this.selfSeatId,
+        }),
+      );
+      if (seated && !seated.accepted) {
+        this.refuseConnection(player.id, seated.reason ?? "rejected", true);
+        continue;
+      }
+      this.seatOwners.set(seat, player.id);
+      this.pendingSync.add(seat);
+    }
+
+    this.startTimers();
+    this.publishSnapshot();
+    this.setStatus(
+      this.connection.status,
+      interrupted ? "authority_migrated_match_reset" : "authority_assumed",
+    );
+  }
+
+  /**
+   * Restores the round the departed host was running. Returns false when there
+   * is nothing to restore or the snapshot cannot be trusted, leaving the caller
+   * to fall back to a fresh lobby.
+   */
+  private resumeFromSnapshot(publication: HostPublication | null): boolean {
+    if (this.lastSimSnapshot === null || publication === null) return false;
+
+    const parsed = MatchSnapshotSchema.safeParse(this.lastSimSnapshot);
+    if (!parsed.success) {
+      console.warn("[portals] published simulation snapshot is not valid state, starting fresh");
+      return false;
+    }
+
+    const seats = [...new Set(this.players.map(seatIdOf))];
+    let restored: MatchSimulation;
+    try {
+      restored = MatchSimulation.restore(parsed.data, {
+        ...(this.options.spatial ? { spatial: this.options.spatial } : {}),
+        // Locked poses were omitted from the snapshot because they are already
+        // in the public state this client has been holding all along.
+        poses: this.withPoses(publication).disguises,
+        seatedPlayerIds: seats,
+      });
+    } catch (error) {
+      console.warn("[portals] could not restore the published round, starting fresh", error);
+      return false;
+    }
+
+    this.sim = restored;
+    this.seatOwners.clear();
+    for (const player of this.players) {
+      const seat = seatIdOf(player);
+      if (!this.seatOwners.has(seat)) this.seatOwners.set(seat, player.id);
+      this.pendingSync.add(seat);
+    }
+
+    this.startTimers();
+    // Departures the previous host never saw leave the simulation as queued
+    // events; the first tick drains them onto the wire.
+    this.tick();
+    this.publishSnapshot();
+
+    const phase = restored.getPhase();
+    if (phase === MatchPhase.Forge || phase === MatchPhase.Locking) {
+      // Working poses were never public, so ask for them rather than lose them.
+      this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "reforge" });
+      // The request reaches everyone except its sender, and the new host is a
+      // player too: its own working pose has to be put back by hand. It goes
+      // through the same path as any other creep, so the events it produces
+      // reach the room and a refusal reaches this client's own UI.
+      const ownSeat = this.selfSeatId;
+      if (this.lastForgeSnapshot !== null && ownSeat !== null) {
+        this.applyForgeSnapshot(ownSeat, this.lastForgeSnapshot);
+      }
+    }
+    this.setStatus(this.connection.status, "authority_resumed");
+    return true;
+  }
+
+  private releaseAuthority(): void {
+    this.sim = null;
+    this.publicOutbox.length = 0;
+    this.privateOutbox.clear();
+    this.pendingSync.clear();
+    this.pendingRejections.clear();
+    this.seatOwners.clear();
+    this.refusedConnections.clear();
+    this.commandWindow.clear();
+    this.forgeWindow.clear();
+    this.stopTickTimer();
+  }
+
+  private applyCommandFrom(seatId: string, command: MatchCommand): void {
+    const result = this.applySim(`command ${command.type}`, (sim) =>
+      sim.handleCommand(seatId, command),
+    );
+    if (result === null || result.accepted) return;
+    this.reportRejection(seatId, rejectionOf(command.type, result.reason, result.detail));
+  }
+
+  /**
+   * Feeds one Forge snapshot to the simulation, publishing what it produced and
+   * returning any refusal to whoever sent it.
+   */
+  private applyForgeSnapshot(seatId: string, snapshot: ForgeSnapshot): void {
+    const result = this.applySim("forge snapshot", (sim) =>
+      sim.recordForgeSnapshot(seatId, snapshot.encodedPose, snapshot.revision, this.clock()),
+    );
+    if (result === null || result.accepted) return;
+    this.reportRejection(seatId, rejectionOf("forge_snapshot", result.reason, result.detail));
+  }
+
+  /** Routes a refusal to the player who issued the command, and no one else. */
+  private reportRejection(seatId: string, rejection: CommandRejection): void {
+    if (seatId === this.selfSeatId) {
+      this.rejectionSignal.emit(rejection);
+      return;
+    }
+    const queue = this.pendingRejections.get(seatId) ?? [];
+    if (queue.length >= MAX_REJECTIONS_PER_MESSAGE) return;
+    queue.push(rejection);
+    this.pendingRejections.set(seatId, queue);
+  }
+
+  /**
+   * Runs one simulation call and publishes what it produced. Every entry point
+   * the relay or a timer can reach goes through here: the simulation throws on
+   * a few malformed inputs, and a throw inside a relay callback would take the
+   * host's message pump down with it. The room keeps running on its last good
+   * state instead, and the failure is reported rather than swallowed.
+   */
+  private applySim<T extends SimOutput>(
+    label: string,
+    call: (sim: MatchSimulation) => T,
+  ): T | null {
+    const sim = this.sim;
+    if (!sim) return null;
+
+    let output: T;
+    try {
+      output = call(sim);
+    } catch (error) {
+      console.error(`[portals] simulation failed on ${label}`, error);
+      return null;
+    }
+    this.publishOutput(output);
+    return output;
+  }
+
+  // --------------------------------------------------------------- publishing
+
+  /**
+   * Queues host-produced output for the wire and applies the host's own share
+   * locally: the relay never echoes a message back to its sender, so the host
+   * would otherwise never see its own simulation's output.
+   *
+   * The routing is the one the simulation prescribes. `public` is broadcast
+   * verbatim and `private` is delivered only to the player it is keyed under,
+   * so no redaction happens at this layer and none can be forgotten.
+   */
+  private publishOutput(output: SimOutput): void {
+    if (this.selfSeatId === null) return;
+    if (output.public.length === 0 && output.private.size === 0) return;
+
+    this.publicOutbox.push(...output.public);
+    for (const [seatId, events] of output.private) {
+      if (seatId === this.selfSeatId || events.length === 0) continue;
+      const queue = this.privateOutbox.get(seatId) ?? [];
+      queue.push(...events);
+      this.privateOutbox.set(seatId, queue);
+      // A private event always changes the recipient's own view, so pair it
+      // with a refreshed private state in the same message.
+      this.pendingSync.add(seatId);
+    }
+
+    this.snapshotDirty = true;
+    for (const event of output.public) this.eventSignal.emit(event);
+    for (const event of output.private.get(this.selfSeatId) ?? []) this.privateSignal.emit(event);
+    this.refreshAuthorityState();
+  }
+
+  private flush(): void {
+    if (!this.isAuthority() || this.selfSeatId === null) return;
+
+    if (this.publicOutbox.length > 0) {
+      const pending = coalesceDisguiseUpdates(
+        this.publicOutbox.splice(0, this.publicOutbox.length),
+      );
+      const { batches, oversized } = batchEvents(pending, (events) => ({
+        v: PORTALS_PROTOCOL_VERSION,
+        t: "ev",
+        events,
+      }));
+      warnOversized(oversized);
+      const unsent = this.sendBatches(batches, (events) => ({
+        v: PORTALS_PROTOCOL_VERSION,
+        t: "ev",
+        events,
+      }));
+      if (unsent.length > 0) this.publicOutbox.unshift(...unsent);
+    }
+
+    for (const seatId of this.privateRecipients()) {
+      const pending = this.privateOutbox.get(seatId) ?? [];
+      this.privateOutbox.delete(seatId);
+      const rejections = this.pendingRejections.get(seatId) ?? [];
+      this.pendingRejections.delete(seatId);
+      const privateState = this.pendingSync.has(seatId)
+        ? (this.sim?.getPrivateStateFor(seatId) ?? null)
+        : null;
+      if (pending.length === 0 && privateState === null && rejections.length === 0) {
+        this.pendingSync.delete(seatId);
+        continue;
+      }
+      const build = (events: PrivateSimEvent[]): unknown => ({
+        v: PORTALS_PROTOCOL_VERSION,
+        t: "pev",
+        to: seatId,
+        events,
+        privateState,
+        rejections,
+      });
+
+      const { batches, oversized } = batchEvents(pending, build);
+      warnOversized(oversized);
+      // An empty batch still carries the private state and any refusals, so a
+      // player whose role did not change but whose view did still gets one.
+      const unsent = this.sendBatches(batches.length > 0 ? batches : [[]], build);
+      if (unsent.length > 0) {
+        this.privateOutbox.set(seatId, unsent);
+        this.pendingRejections.set(seatId, rejections);
+        break;
+      }
+      this.pendingSync.delete(seatId);
+    }
+
+    this.maybeWriteSnapshot();
+  }
+
+  /**
+   * Publishes the authoritative snapshot a successor would restore from.
+   *
+   * Poses are omitted: locked ones are already in the public state, and that
+   * keeps a full room to about 5 KB rather than 98 KB. The simulation refuses
+   * to omit while a Mimic has a working pose that exists nowhere else, which is
+   * normal for part of the Forge; the previous snapshot stays in place and the
+   * successor recovers those poses by asking for them.
+   */
+  private publishSimSnapshot(sim: MatchSimulation): void {
+    if (sim.getPhase() === MatchPhase.Lobby) {
+      // Nothing worth resuming, and no reason to leave the room's secrets in
+      // shared state between rounds.
+      this.clearSimSnapshot();
+      return;
+    }
+
+    let snapshot: unknown;
+    try {
+      snapshot = sim.snapshot({ poses: "omit" });
+    } catch (error) {
+      // Expected while a working pose is outstanding. Reported at most once a
+      // second so a whole Forge phase does not fill the console.
+      if (this.clock() - this.simSnapshotBlockedAt >= RATE_WINDOW_MS) {
+        this.simSnapshotBlockedAt = this.clock();
+        console.warn("[portals] holding the previous authoritative snapshot", error);
+      }
+      return;
+    }
+
+    this.lastSimSeq += 1;
+    if (this.writeChunked(snapshot, this.lastSimSeq, SIM_STATE_KEYS, "simulation snapshot")) {
+      this.lastSimSnapshot = snapshot;
+    }
+  }
+
+  /** Writes the locked poses, and only when the set of them has changed. */
+  private publishPoses(disguises: PublicMatchState["disguises"]): void {
+    const book: PoseBook = {};
+    for (const disguise of disguises) {
+      if (disguise.encodedPose.length > 0) book[disguise.publicObjectId] = disguise.encodedPose;
+    }
+    const serialized = JSON.stringify(book);
+    if (serialized === this.lastPoseSerialized) return;
+
+    this.poseSeq += 1;
+    if (this.writeChunked(book, this.poseSeq, POSE_STATE_KEYS, "locked poses")) {
+      this.poseBook = book;
+      this.lastPoseSerialized = serialized;
+    }
+  }
+
+  /**
+   * A publication as its reader should see it, with pose bodies put back from
+   * the pose key range.
+   */
+  private withPoses(publication: HostPublication): PublicMatchState {
+    const state = publication.publicState;
+    return {
+      ...state,
+      disguises: state.disguises.map((entry) =>
+        entry.encodedPose.length > 0
+          ? entry
+          : { ...entry, encodedPose: this.poseBook[entry.publicObjectId] ?? "" },
+      ),
+    };
+  }
+
+  private clearSimSnapshot(): void {
+    if (this.lastSimSnapshot === null) return;
+    this.lastSimSnapshot = null;
+    this.lastSimSeq += 1;
+    // A one-chunk empty marker supersedes whatever was there, since the relay
+    // has no delete.
+    this.writeChunked(null, this.lastSimSeq, SIM_STATE_KEYS, "simulation snapshot");
+  }
+
+  /** Chunks a value across one key range, or warns and writes nothing. */
+  private writeChunked(
+    value: unknown,
+    seq: number,
+    keys: readonly string[],
+    label: string,
+  ): boolean {
+    const chunks = encodeChunks(value, seq, keys.length);
+    if (!chunks) {
+      console.warn(`[portals] ${label} exceeds the ${keys.length}-key budget, skipping publish`);
+      return false;
+    }
+    // Every key costs a write, and the relay counts them across all of them.
+    for (let index = 0; index < chunks.length; index += 1) {
+      if (!this.stateWindow.tryConsume(this.clock())) {
+        console.warn(`[portals] state write budget reached, deferring ${label}`);
+        return false;
+      }
+      const key = keys[index];
+      const chunk = chunks[index];
+      if (key !== undefined && chunk !== undefined) this.net.setState(key, chunk);
+    }
+    return true;
+  }
+
+  private adoptSnapshotSeq(snapshot: HostPublication): void {
+    this.snapshotSeq = Math.max(this.snapshotSeq, snapshot.seq);
+  }
+
+  /** Publishes at most SNAPSHOT_WRITES_PER_SECOND times, and only when stale. */
+  private maybeWriteSnapshot(): void {
+    if (!this.snapshotDirty) return;
+    if (this.clock() - this.lastSnapshotAt < SNAPSHOT_INTERVAL_MS) return;
+    this.publishSnapshot();
+  }
+
+  /** Sends batches in order, returning the events it could not fit in the budget. */
+  private sendBatches<E extends SimEvent | PrivateSimEvent>(
+    batches: E[][],
+    build: (events: E[]) => unknown,
+  ): E[] {
+    for (let index = 0; index < batches.length; index += 1) {
+      const batch = batches[index] as E[];
+      if (this.rawSend(build(batch))) continue;
+      return batches.slice(index).flat();
+    }
+    return [];
+  }
+
+  /** Every seat with queued private events, refusals, or a stale private view. */
+  private privateRecipients(): string[] {
+    const recipients = new Set([
+      ...this.privateOutbox.keys(),
+      ...this.pendingRejections.keys(),
+      ...this.pendingSync,
+    ]);
+    recipients.delete(this.selfSeatId ?? "");
+    return [...recipients];
+  }
+
+  /**
+   * Turns one connection away. Addressed by connection rather than seat so that
+   * a second tab is refused without disturbing the tab already playing.
+   */
+  private refuseConnection(connectionId: string, reason: string, remember = false): void {
+    if (remember) this.refusedConnections.set(connectionId, reason);
+    console.warn(`[portals] refused connection ${connectionId}: ${reason}`);
+    this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "refused", to: connectionId, reason });
+  }
+
+  private requestResync(): void {
+    this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "resync" });
+  }
+
+  /** The single exit to the relay. Enforces the 8 KB and ~20/s ceilings. */
+  private rawSend(payload: unknown): boolean {
+    const bytes = jsonByteLength(payload);
+    if (bytes > MAX_PAYLOAD_BYTES) {
+      console.warn(`[portals] dropped ${bytes} byte message over the ${MAX_PAYLOAD_BYTES} byte limit`);
+      return false;
+    }
+    if (!this.sendWindow.tryConsume(this.clock())) {
+      console.warn("[portals] send rate limit reached, deferring");
+      return false;
+    }
+    this.net.send(payload);
+    return true;
+  }
+
+  private publishSnapshot(): void {
+    const sim = this.sim;
+    if (!sim || this.selfSeatId === null) return;
+
+    const publicState = sim.getPublicState();
+    this.publishPoses(publicState.disguises);
+
+    this.snapshotSeq += 1;
+    const snapshot: HostPublication = {
+      v: PORTALS_PROTOCOL_VERSION,
+      seq: this.snapshotSeq,
+      authorityId: this.selfSeatId,
+      // Pose bodies are stripped here and carried on their own key range; the
+      // publication keeps only what changes from one publish to the next.
+      publicState: {
+        ...publicState,
+        disguises: publicState.disguises.map((entry) => ({ ...entry, encodedPose: "" })),
+      },
+    };
+    if (!this.writeChunked(snapshot, this.snapshotSeq, SNAPSHOT_STATE_KEYS, "public state")) {
+      return;
+    }
+    this.lastSnapshot = snapshot;
+    this.lastSnapshotAt = this.clock();
+    this.snapshotDirty = false;
+    // Locally the host has the real thing, so its own view keeps the geometry.
+    this.setSync(publicState, this.sync.privateState);
+    this.publishSimSnapshot(sim);
+  }
+
+  // ------------------------------------------------------------------ delivery
+
+  /**
+   * The host reads its own simulation directly rather than waiting for the
+   * snapshot it is about to publish, so its view never lags the 2 Hz cadence
+   * that remote clients live with.
+   */
+  private refreshAuthorityState(): void {
+    const sim = this.sim;
+    if (!sim || !this.isAuthority() || this.selfSeatId === null) return;
+    this.setSync(sim.getPublicState(), sim.getPrivateStateFor(this.selfSeatId));
+  }
+
+  private setSync(
+    publicState: MatchSync["publicState"],
+    privateState: PrivateMatchState | null,
+  ): void {
+    this.sync = { publicState, privateState };
+    this.syncSignal.emit(this.sync);
+  }
+
+  private emitRoster(): void {
+    this.rosterSignal.emit(this.getRoster());
+  }
+
+  /** Omitting `detail` carries the current reason forward across a status change. */
+  private setStatus(status: ConnectionStatus, detail: ConnectionDetail = this.connection.detail): void {
+    this.connection = {
+      mode: "portals",
+      status,
+      selfId: this.selfSeatId,
+      authorityId: this.authoritySeatId,
+      canRejoin: status === "disconnected" || status === "error",
+      detail,
+    };
+    this.statusSignal.emit(this.connection);
+  }
+
+  // -------------------------------------------------------------------- timers
+
+  private attachListeners(): void {
+    if (this.listenersAttached) return;
+    this.listenersAttached = true;
+    this.net.on("message", this.handleMessage);
+    this.net.on("playerjoin", this.handlePlayerJoin);
+    this.net.on("playerleave", this.handlePlayerLeave);
+    this.net.on("state", this.handleState);
+    this.net.on("status", this.handleStatus);
+  }
+
+  private detachListeners(): void {
+    if (!this.listenersAttached) return;
+    this.listenersAttached = false;
+    this.net.off("message", this.handleMessage);
+    this.net.off("playerjoin", this.handlePlayerJoin);
+    this.net.off("playerleave", this.handlePlayerLeave);
+    this.net.off("state", this.handleState);
+    this.net.off("status", this.handleStatus);
+  }
+
+  private startTimers(): void {
+    if (this.flushTimer === null) {
+      this.flushTimer = setInterval(() => {
+        this.flush();
+      }, FLUSH_INTERVAL_MS);
+    }
+    if (this.tickTimer === null && this.isAuthority()) {
+      this.tickTimer = setInterval(() => {
+        this.tick();
+      }, Math.round(1_000 / this.tickHz));
+    }
+  }
+
+  private stopTickTimer(): void {
+    if (this.tickTimer === null) return;
+    clearInterval(this.tickTimer);
+    this.tickTimer = null;
+  }
+
+  private stopTimers(): void {
+    this.stopTickTimer();
+    if (this.flushTimer === null) return;
+    clearInterval(this.flushTimer);
+    this.flushTimer = null;
+  }
+
+  /** One authoritative step. The interval calls this; tests drive it directly. */
+  tick(): void {
+    const sim = this.sim;
+    if (!sim || !this.isAuthority()) return;
+    this.applySim("tick", () => sim.tick(this.clock()));
+    this.flush();
+  }
+}
+
+/**
+ * The identity the simulation keys on. Signed-in players get an id that is
+ * stable across reconnections; a guest has none, so their connection stands in
+ * and they behave exactly as they did before, including two guest tabs being
+ * two players.
+ */
+/** Envelopes only the elected host may send, and which a stale view would drop. */
+const AUTHORITY_ONLY: ReadonlySet<NetEnvelope["t"]> = new Set(["ev", "pev", "reforge"]);
+
+function rejectionOf(type: string, reason?: string, detail?: string): CommandRejection {
+  const body = reason ?? "rejected";
+  return detail === undefined ? { type, reason: body } : { type, reason: body, detail };
+}
+
+/**
+ * Collapses a batch's `disguise_updated` events to one per object.
+ *
+ * A creeping hider produces one of these per simulation tick, so a full roster
+ * can generate well over a hundred a second. Only the newest revision of an
+ * object describes where it is now, and the older ones would be overwritten the
+ * moment they arrived, so sending them costs budget and buys nothing. The
+ * `moved` flag is carried forward from any event that set it: a renderer that
+ * only learned about the final reshape would otherwise miss that the root
+ * travelled on the way there.
+ *
+ * Everything else keeps its order and its place; the surviving event for an
+ * object sits where that object's newest update was.
+ */
+export function coalesceDisguiseUpdates(events: readonly SimEvent[]): SimEvent[] {
+  const newest = new Map<string, number>();
+  for (const event of events) {
+    if (event.type !== "disguise_updated") continue;
+    const previous = newest.get(event.publicObjectId);
+    if (previous === undefined || event.revision >= previous) {
+      newest.set(event.publicObjectId, event.revision);
+    }
+  }
+  if (newest.size === 0) return [...events];
+
+  const movedObjects = new Set<string>();
+  for (const event of events) {
+    if (event.type === "disguise_updated" && event.moved) movedObjects.add(event.publicObjectId);
+  }
+
+  const kept: SimEvent[] = [];
+  const emitted = new Set<string>();
+  // Walked backwards so "newest" means the last one in the batch when two share
+  // a revision, then reversed to put the batch back in order.
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index] as SimEvent;
+    if (event.type !== "disguise_updated") {
+      kept.push(event);
+      continue;
+    }
+    if (emitted.has(event.publicObjectId)) continue;
+    if (event.revision !== newest.get(event.publicObjectId)) continue;
+    emitted.add(event.publicObjectId);
+    kept.push(
+      movedObjects.has(event.publicObjectId) && !event.moved ? { ...event, moved: true } : event,
+    );
+  }
+  return kept.reverse();
+}
+
+function seatIdOf(player: PortalsNetPlayer): string {
+  return player.playerId ?? player.id;
+}
+
+function refusalDetail(reason: string): ConnectionDetail {
+  if (reason === "room_full") return "room_full";
+  if (reason === "duplicate_session") return "duplicate_session";
+  return "join_failed";
+}
+
+function mergeSelf(players: PortalsNetPlayer[], self: PortalsNetPlayer): PortalsNetPlayer[] {
+  return players.some((player) => player.id === self.id) ? [...players] : [...players, self];
+}
+
+function nameOf(player: PortalsNetPlayer): string {
+  return player.displayName ?? `Visitor ${player.id.slice(0, 4)}`;
+}
+
+/**
+ * A snapshot carries the full settings block; MatchSimulation only accepts the
+ * host-settable subset, so the rest is dropped rather than forced back in. The
+ * return type is the complete subset, so a key added to SETTABLE_SETTING_KEYS
+ * upstream fails the build here instead of being silently lost on migration.
+ */
+function settingsPatchOf(settings: MatchSettings): Required<MatchSettingsPatch> {
+  return {
+    maxPlayers: settings.maxPlayers,
+    mapIntroMs: settings.mapIntroMs,
+    roleRevealMs: settings.roleRevealMs,
+    baselineScanMs: settings.baselineScanMs,
+    forgeMs: settings.forgeMs,
+    lockGraceMs: settings.lockGraceMs,
+    inspectionIntroMs: settings.inspectionIntroMs,
+    inspectionMs: settings.inspectionMs,
+    revealMs: settings.revealMs,
+    resultsMs: settings.resultsMs,
+    rematchVoteMs: settings.rematchVoteMs,
+    warrantsBonus: settings.warrantsBonus,
+    wrongAccusationCooldownMs: settings.wrongAccusationCooldownMs,
+    reconnectGraceMs: settings.reconnectGraceMs,
+  };
+}
+
+function warnOversized(events: readonly { type: string }[]): void {
+  for (const event of events) {
+    console.warn(`[portals] dropped ${event.type} event that cannot fit one 8 KB message`);
+  }
+}

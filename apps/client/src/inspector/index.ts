@@ -1,0 +1,258 @@
+import { Group, type Object3D, type PerspectiveCamera } from "three";
+import type { MatchCommand } from "@foldseek/game-sim";
+import type { MatchSettings } from "@foldseek/shared";
+
+import { ShootingDriver, type ShotOutcome, type WeaponState } from "./ShootingDriver";
+import { CameraSamplePublisher, type CameraSample } from "./cameraSamples";
+import { FocusSystem, InspectableSet, type FocusMetadata } from "./FocusSystem";
+import { InspectorCamera, type InspectorCameraOptions } from "./InspectorCamera";
+import { createMoveInput, InspectorController } from "./InspectorController";
+import { InspectorInput } from "./InspectorInput";
+import type { NavData, SpawnPose } from "./navData";
+
+export {
+  blocksCapsule,
+  containsXZ,
+  fitsUnder,
+  surfaceAt,
+  BRISK_WALK_MULTIPLIER,
+  INSPECTOR_EYE_HEIGHT_M,
+  INSPECTOR_HEIGHT_M,
+  INSPECTOR_RADIUS_M,
+  INSPECTOR_STEP_HEIGHT_M,
+  WORLD_SCALE,
+  type AABB,
+  type ClimbKind,
+  type ClimbLink,
+  type MutableVec3,
+  type NavData,
+  type SpawnPoints,
+  type SpawnPose,
+  type Vec3Like,
+  type WalkableSurface,
+} from "./navData";
+export {
+  FocusSystem,
+  InspectableSet,
+  type AccusationPolicy,
+  type FocusMetadata,
+  type FocusPhase,
+  type InspectableProxy,
+  type PickProxy,
+} from "./FocusSystem";
+export {
+  InspectorController,
+  type ClimbState,
+  type InspectorMoveInput,
+  type MoveResolution,
+} from "./InspectorController";
+export { InspectorCamera, type TargetFrame } from "./InspectorCamera";
+export { InspectorInput } from "./InspectorInput";
+export {
+  ShootingDriver,
+  type AimTarget,
+  type ShotOutcome,
+  type WeaponPhase,
+  type WeaponState,
+} from "./ShootingDriver";
+export { CameraSamplePublisher, type CameraSample } from "./cameraSamples";
+export {
+  SpatialValidatorImpl,
+  type SpatialRejectionReason,
+  type SpatialValidatorDeps,
+} from "./SpatialValidatorImpl";
+
+/**
+ * Everything the Inspector needs from the rest of the client. GameHost supplies
+ * it once, during the integration pass, and this module reaches for nothing
+ * else: no store, no renderer, no adapter.
+ */
+export interface InspectorSystemDeps {
+  readonly scene: Object3D;
+  readonly camera: PerspectiveCamera;
+  readonly navData: NavData;
+  readonly inspectables: InspectableSet;
+  readonly sendCommand: (command: MatchCommand) => void;
+  readonly onFocusChange: (focus: FocusMetadata | null) => void;
+  readonly settings: MatchSettings;
+  /**
+   * Pointer-lock target. Omitted in tests and in any headless run, where the
+   * caller drives `update` with its own sampled input instead.
+   */
+  readonly domElement?: HTMLElement | null;
+  readonly onCameraSample?: (sample: CameraSample) => void;
+  /** One call per round fired, for the muzzle flash and the impact effect. */
+  readonly onShot?: (outcome: ShotOutcome, targetObjectId: string | null) => void;
+  /** Gun state for the HUD: aiming, ammo, reticle target, cooldown phase. */
+  readonly onWeaponState?: (state: WeaponState) => void;
+  readonly onPointerLockChange?: (locked: boolean) => void;
+  readonly cameraOptions?: InspectorCameraOptions;
+}
+
+export interface InspectorSystem {
+  /** Follows the Inspector, for a body mesh or an accent light to parent to. */
+  readonly root: Group;
+  readonly controller: InspectorController;
+  readonly cameraRig: InspectorCamera;
+  readonly focusSystem: FocusSystem;
+  readonly weapon: ShootingDriver;
+  /** Null when no DOM element was supplied. */
+  readonly input: InspectorInput | null;
+  /** False freezes movement and the trigger, for the reveal of §5.14. */
+  enabled: boolean;
+  update(dtMs: number, nowMs: number): void;
+  spawnAt(pose: SpawnPose): void;
+  setInspectables(inspectables: InspectableSet): void;
+  /** Warrants remaining, which is the gun's magazine. */
+  setAmmo(warrantsRemaining: number): void;
+  /** Outcome of this client's own shot, from `accusation_resolved`. */
+  handleAccusationResolved(correct: boolean): void;
+  /** A refusal from the adapter's `onRejection`, of any command type. */
+  handleRejection(rejection: { readonly type: string; readonly reason: string }): void;
+  requestPointerLock(): void;
+  dispose(): void;
+}
+
+/**
+ * Gaze commands report where the Inspector is looking, not every flicker of the
+ * reticle across a crowded shelf, so target changes are coalesced to this rate.
+ */
+export const FOCUS_COMMAND_MIN_INTERVAL_MS = 250;
+
+export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSystem {
+  const root = new Group();
+  root.name = "inspector-root";
+  deps.scene.add(root);
+
+  const controller = new InspectorController(deps.navData, deps.settings);
+  const cameraRig = new InspectorCamera(deps.camera, deps.navData, deps.cameraOptions ?? {});
+  const focusSystem = new FocusSystem(deps.inspectables, {
+    focusDistance: deps.settings.inspectorFocusDistance,
+    accusationDistance: deps.settings.accusationDistance,
+    blockers: deps.navData.blockers,
+    onChange: deps.onFocusChange,
+  });
+  const weapon = new ShootingDriver({
+    settings: deps.settings,
+    sendCommand: deps.sendCommand,
+    onShot: deps.onShot,
+    onStateChange: deps.onWeaponState,
+  });
+  const onCameraSample = deps.onCameraSample;
+  const samples = new CameraSamplePublisher(
+    onCameraSample === undefined ? 0 : deps.settings.cameraSampleHz,
+    onCameraSample ?? noopSample,
+  );
+
+  const input =
+    deps.domElement != null
+      ? new InspectorInput(deps.domElement, { onLockChange: deps.onPointerLockChange })
+      : null;
+  input?.attach();
+
+  const moveInput = createMoveInput();
+  let inspectables = deps.inspectables;
+  let sentFocusId: string | null = null;
+  let lastFocusCommandAtMs = Number.NEGATIVE_INFINITY;
+
+  const system: InspectorSystem = {
+    root,
+    controller,
+    cameraRig,
+    focusSystem,
+    weapon,
+    input,
+    enabled: true,
+
+    update(dtMs: number, nowMs: number): void {
+      const dtSeconds = dtMs / 1000;
+
+      if (this.enabled && input !== null) {
+        input.sample(moveInput);
+      } else {
+        moveInput.forward = 0;
+        moveInput.strafe = 0;
+        moveInput.lookYawDelta = 0;
+        moveInput.lookPitchDelta = 0;
+        moveInput.brisk = false;
+      }
+      const aiming = this.enabled && (input?.aimHeld ?? false);
+      const firePressed = (input?.takeFirePressed() ?? false) && this.enabled;
+
+      controller.update(dtSeconds, moveInput);
+      root.position.set(controller.position.x, controller.position.y, controller.position.z);
+      root.rotation.y = controller.yaw;
+
+      cameraRig.update(dtSeconds, controller, aiming);
+      focusSystem.update(dtMs, cameraRig.origin, cameraRig.forward, cameraRig.eye, aiming);
+
+      const focus = focusSystem.current;
+      const target = focus === null ? null : inspectables.get(focus.objectId);
+      cameraRig.updateTargetFrame(target?.bounds ?? null);
+
+      weapon.update(dtMs, focus, firePressed, aiming);
+
+      // Losing the target is reported at once: a stale "still looking at it" is
+      // the direction that would misinform the gaze scoring of §6.3, whereas a
+      // late "now looking at something else" only delays a gain.
+      const focusId = focus === null ? null : focus.objectId;
+      const dueAt = focusId === null ? lastFocusCommandAtMs : lastFocusCommandAtMs + FOCUS_COMMAND_MIN_INTERVAL_MS;
+      if (focusId !== sentFocusId && nowMs >= dueAt) {
+        sentFocusId = focusId;
+        lastFocusCommandAtMs = nowMs;
+        deps.sendCommand({ type: "focus", targetObjectId: focusId });
+      }
+
+      samples.update(
+        dtMs,
+        nowMs,
+        cameraRig.eye.x,
+        cameraRig.eye.y,
+        cameraRig.eye.z,
+        controller.yaw,
+        controller.pitch,
+      );
+    },
+
+    spawnAt(pose: SpawnPose): void {
+      controller.teleportTo(pose);
+      weapon.cancel();
+      samples.reset();
+      sentFocusId = null;
+      lastFocusCommandAtMs = Number.NEGATIVE_INFINITY;
+    },
+
+    setInspectables(next: InspectableSet): void {
+      inspectables = next;
+      focusSystem.setInspectables(next);
+    },
+
+    setAmmo(warrantsRemaining: number): void {
+      weapon.setAmmo(warrantsRemaining);
+    },
+
+    handleAccusationResolved(correct: boolean): void {
+      weapon.handleResolved(correct);
+    },
+
+    handleRejection(rejection: { readonly type: string; readonly reason: string }): void {
+      if (rejection.type !== "accuse") return;
+      weapon.handleRejection(rejection.reason);
+    },
+
+    requestPointerLock(): void {
+      input?.requestLock();
+    },
+
+    dispose(): void {
+      input?.dispose();
+      root.removeFromParent();
+    },
+  };
+
+  return system;
+}
+
+function noopSample(): void {
+  // Never called: with no telemetry consumer the publisher runs at 0 Hz.
+}

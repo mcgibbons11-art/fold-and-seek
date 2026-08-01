@@ -2,14 +2,20 @@
   "name": "fold-and-seek",
   "private": true,
   "version": "0.1.0",
+  "type": "module",
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "dev:client": "pnpm --filter @foldseek/client dev",
     "dev:server": "pnpm --filter @foldseek/server dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "lint": "pnpm -r lint",
+    "lint": "eslint .",
     "test": "pnpm -r test",
     "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.8.0",
+    "typescript-eslint": "^8.65.0"
   }
 }

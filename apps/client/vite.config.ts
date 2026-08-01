@@ -7,6 +7,12 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   base: "./",
   plugins: [react()],
+  resolve: {
+    // Exactly one three.js build may exist at runtime. The renderer uses
+    // "three/webgpu" (a superset of core); aliasing bare "three" onto it keeps
+    // math classes (Vector3, Quaternion) identity-compatible across modules.
+    alias: [{ find: /^three$/, replacement: "three/webgpu" }],
+  },
   build: {
     target: "es2022",
     chunkSizeWarningLimit: 4096,
