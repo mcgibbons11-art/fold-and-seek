@@ -45,6 +45,5 @@ export {
   type RegionAssignment,
 } from "./layout";
 export { MissedFindsHud, type MissedFindsHudProps } from "./MissedFindsHud";
-export { SpectatorHud, type SpectatorHudProps, type SpectatorTarget } from "./SpectatorHud";
 export { RevealHud, type RevealHudProps } from "./RevealHud";
 export { ResultsHud, type ResultsHudProps } from "./ResultsHud";

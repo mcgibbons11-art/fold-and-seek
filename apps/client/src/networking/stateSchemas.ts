@@ -35,7 +35,6 @@ const settingValue = z.number().min(0).max(LIMITS.maxTimestamp);
 const settingsShape: Record<keyof MatchSettings, z.ZodNumber> = {
   minPlayers: settingValue,
   maxPlayers: settingValue,
-  idealMaxPlayers: settingValue,
   mapIntroMs: settingValue,
   roleRevealMs: settingValue,
   baselineScanMs: settingValue,
@@ -51,14 +50,12 @@ const settingsShape: Record<keyof MatchSettings, z.ZodNumber> = {
   hiderCreepSpeed: settingValue,
   inspectorFocusDistance: settingValue,
   accusationDistance: settingValue,
-  accusationHoldMs: settingValue,
   wrongAccusationCooldownMs: settingValue,
   directLookMinMs: settingValue,
   directLookBreakMs: settingValue,
   missedFindsUpdateMs: settingValue,
   reconnectGraceMs: settingValue,
   serverTickHz: settingValue,
-  movementInputHz: settingValue,
   cameraSampleHz: settingValue,
   maxForgeCommandHz: settingValue,
 };

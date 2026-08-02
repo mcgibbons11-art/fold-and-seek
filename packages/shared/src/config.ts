@@ -56,7 +56,6 @@ const ACCUSATION_BODY_HEIGHTS = 3;
 export const DEFAULT_MATCH_SETTINGS = {
   minPlayers: 2,
   maxPlayers: 12,
-  idealMaxPlayers: 8,
   mapIntroMs: 5_000,
   roleRevealMs: 4_000,
   baselineScanMs: 12_000,
@@ -82,13 +81,11 @@ export const DEFAULT_MATCH_SETTINGS = {
   missedFindsUpdateMs: 20_000,
   inspectorFocusDistance: PLAYER_HEIGHT_M * FOCUS_BODY_HEIGHTS,
   accusationDistance: PLAYER_HEIGHT_M * ACCUSATION_BODY_HEIGHTS,
-  accusationHoldMs: 450,
   wrongAccusationCooldownMs: 1_500,
   directLookMinMs: 650,
   directLookBreakMs: 1_000,
   reconnectGraceMs: 30_000,
   serverTickHz: 20,
-  movementInputHz: 20,
   cameraSampleHz: 10,
   maxForgeCommandHz: 15,
 } as const;

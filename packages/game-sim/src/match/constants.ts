@@ -27,9 +27,10 @@ export function finalCountdownMs(settings: MatchSettings): number {
 export const MIN_LOCK_GRACE_MS = 1_000;
 
 /**
- * Interaction cooldown after a correct accusation. It is deliberately not the
- * settings value `accusationHoldMs`, which is how long the Inspector holds the
- * accuse control before it fires.
+ * Interaction cooldown after a correct accusation. Deliberately its own
+ * constant: the bible's hold-to-confirm accuse control (and its
+ * `accusationHoldMs` setting) was replaced by the gun per design override 1,
+ * so no settings value governs this beat.
  */
 export const CORRECT_ACCUSATION_COOLDOWN_MS = 450;
 
