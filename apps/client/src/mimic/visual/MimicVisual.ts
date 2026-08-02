@@ -213,6 +213,18 @@ function shapeKeyOf(profileId: string, roundness: number, tipScale: number, twis
   return `${profileId}|${roundness.toFixed(3)}|${tipScale.toFixed(3)}|${twistDeg.toFixed(2)}`;
 }
 
+/**
+ * Marks the root of a Mimic body wherever one is standing in a scene, so a
+ * consumer walking the scene can tell a creature from the room around it.
+ *
+ * The Forge is the caller that needs it: a saved anchor names the surface it is
+ * sealed to, and a surface has to be somewhere the map will still have next
+ * round. The theatre parks prewarmed bodies in the scene before the Forge opens,
+ * and their parts carry names of their own, so without a marker the Forge would
+ * offer `mimic_torso_upper` as a shelf to seal a hand to.
+ */
+export const MIMIC_BODY_TAG = "mimicBody";
+
 export class MimicVisual {
   readonly root: THREE.Group;
   /** Shell meshes in `SEGMENT_BONES` order, for picking and material assignment. */
@@ -244,6 +256,7 @@ export class MimicVisual {
   constructor(pool?: MimicMaterialPool) {
     this.root = new THREE.Group();
     this.root.name = "mimic";
+    this.root.userData[MIMIC_BODY_TAG] = true;
 
     this.pool = pool ?? this.bag.add(new MimicMaterialPool());
     const graphite = this.pool.graphite;

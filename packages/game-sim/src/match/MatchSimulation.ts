@@ -28,6 +28,7 @@ import {
   MISSED_FINDS_JITTER_MS,
   MISSED_FINDS_MIN_INTERVAL_MS,
   MISSED_FINDS_POINT_BUCKET,
+  MIN_FORGE_DWELL_MS,
   MIN_LOCK_GRACE_MS,
   PUBLIC_ID_LENGTH,
   RESULT_VOTE_CATEGORIES,
@@ -478,6 +479,7 @@ export class MatchSimulation {
   private inspectionEndsAtMs = 0;
   private inspectionEndedAtMs = 0;
   private lockGraceFloorAt = 0;
+  private forgeDwellFloorAt = 0;
 
   private readonly disguises = new Map<string, DisguiseRecord>();
   private readonly resolvedObjects = new Map<string, "mimic" | "innocent">();
@@ -1171,6 +1173,7 @@ export class MatchSimulation {
       ie: this.inspectionEndsAtMs,
       ix: this.inspectionEndedAtMs,
       lg: this.lockGraceFloorAt,
+      fd: this.forgeDwellFloorAt,
       ac: this.accusationCounter,
       op: [...this.objectIdPool],
       pl: [...this.players.values()].map((player) => ({
@@ -1300,6 +1303,7 @@ export class MatchSimulation {
     sim.inspectionEndsAtMs = snapshot.ie;
     sim.inspectionEndedAtMs = snapshot.ix;
     sim.lockGraceFloorAt = snapshot.lg;
+    sim.forgeDwellFloorAt = snapshot.fd;
     sim.accusationCounter = snapshot.ac;
     sim.objectIdPool = [...snapshot.op];
     sim.results = snapshot.rs === null ? null : sim.copyResults(snapshot.rs);
@@ -1689,7 +1693,12 @@ export class MatchSimulation {
           this.enterPhase(MatchPhase.Reveal);
           return true;
         }
-        if (!expired && !this.allMimicsLocked()) return false;
+        // Every Mimic locked ends the phase, but never before the dwell floor.
+        // Bots lock the instant they are dealt a disguise, so without the floor
+        // a solo Inspector's Forge was over before they had walked the room.
+        if (!expired && (!this.allMimicsLocked() || this.nowMs < this.forgeDwellFloorAt)) {
+          return false;
+        }
         this.enterPhase(MatchPhase.Locking);
         return true;
 
@@ -1779,6 +1788,7 @@ export class MatchSimulation {
         this.emit({ type: "baseline_started", endsAt: this.phaseEndsAt });
         return;
       case MatchPhase.Forge:
+        this.forgeDwellFloorAt = this.nowMs + Math.min(this.settings.forgeMs, MIN_FORGE_DWELL_MS);
         this.emit({ type: "forge_started", endsAt: this.phaseEndsAt });
         return;
       case MatchPhase.Locking:
@@ -2073,6 +2083,7 @@ export class MatchSimulation {
     this.inspectionEndsAtMs = 0;
     this.inspectionEndedAtMs = 0;
     this.lockGraceFloorAt = 0;
+    this.forgeDwellFloorAt = 0;
     this.results = null;
     for (const player of this.players.values()) {
       player.disguise = null;

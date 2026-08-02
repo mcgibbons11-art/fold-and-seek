@@ -61,7 +61,7 @@ import {
   type SegmentProfileId,
 } from "../mimic/segmentForm";
 import { createPuckGeometry } from "../mimic/visual/mimicGeometry";
-import { MimicVisual } from "../mimic/visual/MimicVisual";
+import { MIMIC_BODY_TAG, MimicVisual } from "../mimic/visual/MimicVisual";
 import {
   MIMIC_LEGAL_SWATCHES,
   swatchById,
@@ -512,6 +512,20 @@ export class ForgeController {
   private readonly handles: readonly Handle[];
   private readonly handleMeshes: readonly THREE.Mesh[];
   private readonly roomObjects: readonly THREE.Object3D[];
+  /**
+   * The subset of the room an anchor may be sealed to: everything except the
+   * other creatures standing in it.
+   *
+   * A `DisguiseTheatre` builds its bodies before the hunt and parks them in the
+   * scene, so by the time the Forge captures its room they are children of it
+   * like any prop, with named meshes of their own. An anchor stores a surface by
+   * name and resolves it again next time the disguise is loaded, so an anchor
+   * that named `mimic_torso_upper` would seal a hand to whichever body happened
+   * to be holding that name — or, having been parked twenty metres under the
+   * boards, to nothing at all. The eyedropper still reads the full room, because
+   * copying a colour off a peer's disguise is a fair thing to do (§MECCHA).
+   */
+  private readonly anchorObjects: readonly THREE.Object3D[];
   private readonly workspace: ForgeWorkspace;
   /** Null when the map published no walkable geometry to run the body over. */
   private readonly locomotion: HiderLocomotion | null;
@@ -599,6 +613,10 @@ export class ForgeController {
   private lastPointerX = 0;
   private lastPointerY = 0;
   private poseEditBefore: PoseSnapshot | null = null;
+  /** Metres per second the hunt allows the body, or null while the Forge is open. */
+  private creepSpeed: number | null = null;
+  /** Metres of root travel a pointer drag may still spend this frame. */
+  private dragBudgetM = 0;
   /** Where the body stood when the current walk began, for one undo per walk. */
   private walkBefore: PoseSnapshot | null = null;
   /** The seals that walk broke, so undoing it puts them back. */
@@ -649,6 +667,9 @@ export class ForgeController {
     this.scene = options.scene;
     this.canvas = options.canvas;
     this.roomObjects = [...options.scene.children];
+    this.anchorObjects = this.roomObjects.filter(
+      (object) => object.userData[MIMIC_BODY_TAG] !== true,
+    );
     this.workspace = options.workspace ?? TEST_ROOM_WORKSPACE;
     this.locomotion =
       options.navData === undefined ? null : new HiderLocomotion(options.navData);
@@ -767,6 +788,7 @@ export class ForgeController {
   // --- Frame ---------------------------------------------------------------
 
   update(dtMs = 0): void {
+    this.refreshCreepBudget(dtMs);
     this.stepLocomotion(dtMs);
     this.stepBodyLanguage(dtMs / 1_000);
     this.stepCameraFollow(dtMs / 1_000);
@@ -785,6 +807,57 @@ export class ForgeController {
    */
   setCreepLimit(metresPerSecond: number | null): void {
     this.locomotion?.setCreepLimit(metresPerSecond);
+    if (this.creepSpeed === metresPerSecond) return;
+    this.creepSpeed = metresPerSecond;
+    this.dragBudgetM = 0;
+  }
+
+  /**
+   * Hands the pointer the metres it may move the body by this frame.
+   *
+   * The walk keys are capped by `CharacterController`, which clamps its velocity
+   * to the creep speed every frame; a drag has no velocity to clamp, so it is
+   * given the same allowance frame by frame instead. Nothing is banked while the
+   * pointer is idle, which makes this stricter than the authority — it measures
+   * from the last pose it accepted, so a body that sat still is owed every
+   * second of it — and a rule that is never looser cannot produce the refusal
+   * this exists to prevent. A frame that overspent, which is what a snap onto a
+   * surface does, carries its debt forward instead of being forgiven.
+   */
+  private refreshCreepBudget(dtMs: number): void {
+    if (this.creepSpeed === null) {
+      this.dragBudgetM = 0;
+      return;
+    }
+    this.dragBudgetM = Math.min(this.dragBudgetM, 0) + (this.creepSpeed * dtMs) / 1_000;
+  }
+
+  /**
+   * Holds a root drag inside the frame's creep budget, in place. Only the pelvis
+   * handle is limited: it is the one whose target the solver writes straight
+   * into the root (`applyPelvisTarget`), and reshaping a limb during the hunt
+   * moves nothing the authority measures.
+   */
+  private limitRootDrag(from: CoreVector3, to: THREE.Vector3): void {
+    if (this.creepSpeed === null) return;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    const budget = Math.max(0, this.dragBudgetM);
+    if (distance <= budget) return;
+    const scale = budget / distance;
+    to.set(from.x + dx * scale, from.y + dy * scale, from.z + dz * scale);
+  }
+
+  /** Charges the budget with the ground the solved root actually covered. */
+  private spendCreepBudget(fromX: number, fromY: number, fromZ: number): void {
+    if (this.creepSpeed === null) return;
+    const root = this.pose.rootPosition;
+    const dx = root.x - fromX;
+    const dy = root.y - fromY;
+    const dz = root.z - fromZ;
+    this.dragBudgetM -= Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
 
   /**
@@ -1870,7 +1943,7 @@ export class ForgeController {
       // Only the map's own structure counts as a wall. A side table is closer
       // than the plaster and would otherwise win every search.
       const hit = this.raycaster
-        .intersectObjects([...this.roomObjects], true)
+        .intersectObjects([...this.anchorObjects], true)
         .find((candidate) => candidate.object.userData["surfaceKind"] === "structure");
       const normal = hit?.normal;
       if (hit === undefined || normal === undefined || hit.distance >= bestDistance) {
@@ -1915,7 +1988,7 @@ export class ForgeController {
         this.raycaster.set(this.scratchVector, this.scratchForward);
         this.raycaster.near = 0;
         this.raycaster.far = PERCH_SAMPLE_LIFT_M + 2;
-        for (const hit of this.raycaster.intersectObjects([...this.roomObjects], true)) {
+        for (const hit of this.raycaster.intersectObjects([...this.anchorObjects], true)) {
           const normal = hit.normal;
           if (normal === undefined || hit.object.name.length === 0) continue;
           const worldNormal = normal
@@ -2031,10 +2104,15 @@ export class ForgeController {
     return dropped;
   }
 
+  /** Names an anchor may be sealed to, which is what the index resolved. */
+  get anchorSurfaceIds(): readonly string[] {
+    return [...this.anchorLookup.keys()];
+  }
+
   /** Indexes the map's named surfaces once, so an anchor can find its object. */
   private indexAnchorSurfaces(): void {
     this.anchorLookup.clear();
-    for (const root of this.roomObjects) {
+    for (const root of this.anchorObjects) {
       root.traverse((object) => {
         if (object instanceof THREE.Mesh && object.name.length > 0) {
           this.anchorLookup.set(object.name, object);
@@ -2207,7 +2285,7 @@ export class ForgeController {
       // Every hit along the ray is considered, not just the first: a lamp stem
       // in front of the wall should not hide the wall from a mount looking for
       // it, it should just not be the thing that gets anchored to.
-      for (const hit of this.raycaster.intersectObjects([...this.roomObjects], true)) {
+      for (const hit of this.raycaster.intersectObjects([...this.anchorObjects], true)) {
         const normal = hit.normal;
         if (normal === undefined || hit.object.name.length === 0) {
           continue;
@@ -2993,14 +3071,25 @@ export class ForgeController {
     if (target === undefined) {
       return;
     }
-    target.set(
+    this.scratchVector.set(
       clamp(this.scratchVector.x, this.workspace.minX, this.workspace.maxX),
       clamp(this.scratchVector.y, this.workspace.minY, this.workspace.maxY),
       clamp(this.scratchVector.z, this.workspace.minZ, this.workspace.maxZ),
     );
+    if (handle.def.target === "pelvis") {
+      this.limitRootDrag(target, this.scratchVector);
+    }
+    target.set(this.scratchVector.x, this.scratchVector.y, this.scratchVector.z);
 
+    const rootX = this.pose.rootPosition.x;
+    const rootY = this.pose.rootPosition.y;
+    const rootZ = this.pose.rootPosition.z;
     this.updateSnapCandidate(handle, target);
     this.solveAndRefresh();
+    // Charged after the solve rather than before it, because an anchor pass can
+    // walk the root further than the pointer asked for. Every drag pays, not
+    // only the pelvis: whatever moved the root spent the same budget.
+    this.spendCreepBudget(rootX, rootY, rootZ);
     this.audio.playThrottled("servo_move", SERVO_INTERVAL_MS, 0.1);
   }
 

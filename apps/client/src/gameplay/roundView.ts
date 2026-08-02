@@ -36,7 +36,9 @@ export type ActionBlockReason =
   /** The authority is running a build that does not know this command. */
   | "unsupported"
   | "duplicate_vote"
-  | "target_unknown";
+  | "target_unknown"
+  /** Every seat the settings allow is taken. */
+  | "room_full";
 
 /** Whether a verb may be issued now, and what is stopping it when it may not. */
 export interface ActionGate {
@@ -128,6 +130,19 @@ export interface RosterPlayerView {
   readonly lifeState: PlayerLifeState;
   /** Mimic identity stays "unknown" until the reveal (§27.10). */
   readonly rolePublicState: "unknown" | "inspector" | "spectator" | "mimic";
+  /** A seat the machine plays, filling out a room short of people. */
+  readonly isBot: boolean;
+}
+
+/** The lobby's bot controls, and what the room currently holds. */
+export interface BotSeatsView {
+  /** True on a transport that can hold bot seats at all. */
+  readonly supported: boolean;
+  /** True when this client may add or remove one right now, which is the host. */
+  readonly canManage: boolean;
+  readonly count: number;
+  /** Seats the settings allow in total, people and bots together. */
+  readonly maxSeats: number;
 }
 
 export interface AccusationFeedEntry {
@@ -292,6 +307,7 @@ export interface RoundViewState {
   readonly timer: PhaseTimerView;
   readonly self: SelfView;
   readonly roster: readonly RosterPlayerView[];
+  readonly botSeats: BotSeatsView;
   readonly warrantsRemaining: number | null;
   /** Warrants the round started with, so the HUD can draw the spent ones. */
   readonly warrantsTotal: number | null;

@@ -38,6 +38,7 @@ const GUN: InspectorGunView = {
   targetDistanceM: null,
   targetInRange: false,
   triggerProgress: 0,
+  dryFires: 0,
   cooldownRemainingMs: 0,
 };
 
@@ -246,6 +247,68 @@ describe("hunt HUD region ownership", () => {
     );
     const claimed = claimedRegions();
     expect(new Set(claimed).size).toBe(claimed.length);
+  });
+
+  it("draws all eight of a hider's chips, and shrinks them at 720p to do it", () => {
+    // The measured defect: at 1280x720 the roomy rail overran its region by
+    // 54 px, which cut the taunt chip off the top and the board off the bottom.
+    // The arithmetic is checked in `hudLayout.test.ts`; what is checked here is
+    // that the component acts on it and that no chip is dropped to make it fit.
+    const restore = { width: window.innerWidth, height: window.innerHeight };
+    for (const viewport of VIEWPORTS) {
+      Object.defineProperty(window, "innerWidth", { value: viewport.width, configurable: true });
+      Object.defineProperty(window, "innerHeight", { value: viewport.height, configurable: true });
+      render(
+        <HuntHud
+          state={huntState({ role: "mimic", tauntAllowed: false })}
+          gun={GUN}
+          forge={stubForge("pose")}
+          pointerLocked={false}
+          boardOpen={false}
+          onToggleBoard={() => undefined}
+          onTaunt={() => undefined}
+        />,
+      );
+      // A window that changes size mid-round has to reach the rail too, so the
+      // viewport is announced rather than only read once at mount.
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      const rail = container.querySelector("[data-rail-size]");
+      expect(rail, viewport.name).not.toBeNull();
+      expect(rail?.children).toHaveLength(8);
+      expect(rail?.getAttribute("data-rail-size"), viewport.name).toBe(
+        viewport.height === 720 ? "compact" : "roomy",
+      );
+    }
+    Object.defineProperty(window, "innerWidth", { value: restore.width, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: restore.height, configurable: true });
+  });
+
+  it("gives the left column exactly one scroll container", () => {
+    // A hider's column stacks the status card, the board and the whole of the
+    // Forge's tool panels, and at 720p that is taller than the region. One
+    // scrollbar is the region's; a second one nested inside it splits the column
+    // into two things the player has to scroll separately to read.
+    render(
+      <HuntHud
+        state={huntState({ role: "mimic" })}
+        gun={GUN}
+        forge={stubForge("pose")}
+        pointerLocked={false}
+        boardOpen
+        onToggleBoard={() => undefined}
+        onTaunt={() => undefined}
+      />,
+    );
+    const column = container.querySelector('[data-hud-region="leftColumn"]');
+    expect(column).not.toBeNull();
+    const scrollers = [column, ...(column?.querySelectorAll("*") ?? [])].filter((element) => {
+      const style = (element as HTMLElement | null)?.style;
+      return style !== undefined && ["auto", "scroll"].includes(style.overflowY);
+    });
+    expect(scrollers).toHaveLength(1);
+    expect(scrollers[0]).toBe(column);
   });
 
   it("renders nothing outside a region", () => {

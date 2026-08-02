@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from "react";
 
 import {
   AMMO_COOLDOWN_PROMPT,
@@ -44,6 +44,12 @@ export interface InspectorGunView {
   readonly triggerProgress: number;
   readonly cooldownRemainingMs: number;
   readonly roundsChambered?: number;
+  /**
+   * Count of rounds that never became an accusation. It only ever goes up, and
+   * the reticle kicks whenever it does: a trigger pull the authority never
+   * hears about has nothing else on screen to say it happened.
+   */
+  readonly dryFires: number;
 }
 
 type ReticleState = "normal" | "on_target" | "out_of_range" | "cooldown";
@@ -52,6 +58,10 @@ type ReticleState = "normal" | "on_target" | "out_of_range" | "cooldown";
 const HIT_CALLOUT_MS = 1_600;
 /** The recolour on firing, kept brief and dim: §5.13 forbids strobing. */
 const FLASH_MS = 220;
+/** How long the reticle stays kicked open after a round that hit nothing. */
+const DRY_FIRE_KICK_MS = 200;
+/** How far the reticle ticks are thrown outward by that kick, in pixels. */
+const DRY_FIRE_KICK_SPREAD = 9;
 
 const RETICLE_COLORS: Readonly<Record<ReticleState, string>> = {
   normal: "rgba(232, 221, 205, 0.55)",
@@ -143,13 +153,17 @@ function Reticle({
   reticle,
   triggerProgress,
   flash,
+  kicked,
 }: {
   readonly reticle: ReticleState;
   readonly triggerProgress: number;
   readonly flash: "hit" | "miss" | null;
+  /** A round that hit nothing: the ticks are thrown open and tinted for a beat. */
+  readonly kicked: boolean;
 }): ReactElement {
-  const color = flash === null ? RETICLE_COLORS[reticle] : flash === "hit" ? BRASS : ALARM;
-  const spread = reticle === "on_target" ? 9 : 15;
+  const color =
+    flash === null ? (kicked ? ALARM : RETICLE_COLORS[reticle]) : flash === "hit" ? BRASS : ALARM;
+  const spread = (reticle === "on_target" ? 9 : 15) + (kicked ? DRY_FIRE_KICK_SPREAD : 0);
   const progress = Math.min(1, Math.max(0, triggerProgress));
 
   const tick = (rotation: number): CSSProperties => ({
@@ -248,6 +262,33 @@ function useShotResult(
   return { flash, showCallout };
 }
 
+/**
+ * True for a beat after the dry-fire count goes up.
+ *
+ * A local miss reaches the authority as nothing at all — no command is sent, no
+ * warrant is spent and no event comes back — so unlike `useShotResult` there is
+ * no accusation to key on. The weapon's own counter is the whole signal, which
+ * is why it counts rather than flags: two misses in a row must read as two.
+ */
+function useDryFireKick(dryFires: number): boolean {
+  const [kicked, setKicked] = useState(false);
+  const seen = useRef(dryFires);
+
+  useEffect(() => {
+    if (dryFires === seen.current) return undefined;
+    seen.current = dryFires;
+    setKicked(true);
+    const clear = setTimeout(() => {
+      setKicked(false);
+    }, DRY_FIRE_KICK_MS);
+    return () => {
+      clearTimeout(clear);
+    };
+  }, [dryFires]);
+
+  return kicked;
+}
+
 export interface InspectorSightProps {
   readonly state: RoundViewState;
   readonly gun: InspectorGunView;
@@ -263,6 +304,7 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
   const reticle = reticleStateOf(gun, outOfAmmo);
   const latest = state.accusations[0] ?? null;
   const { flash, showCallout } = useShotResult(latest?.id ?? null, latest?.correct ?? false);
+  const kicked = useDryFireKick(gun.dryFires);
 
   const prompt = outOfAmmo
     ? AMMO_EMPTY_PROMPT
@@ -276,7 +318,12 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
-      <Reticle reticle={reticle} triggerProgress={gun.triggerProgress} flash={flash} />
+      <Reticle
+        reticle={reticle}
+        triggerProgress={gun.triggerProgress}
+        flash={flash}
+        kicked={kicked}
+      />
 
       {gun.targetObjectId === null || gun.targetDistanceM === null ? null : (
         <div

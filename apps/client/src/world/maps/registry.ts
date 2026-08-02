@@ -74,7 +74,9 @@ function lodGroupFor(placement: PropPlacement): LodGroup {
   if (placement.hero) {
     return "hero";
   }
-  return placement.inspectable ? "standard" : "background";
+  // Matches `CuriosityShop.layerFor`: an obstacle is drawn on every tier, so it
+  // is reported as standard rather than as dressing.
+  return placement.inspectable || placement.obstacle === true ? "standard" : "background";
 }
 
 export function buildMapObjects(placements: readonly PropPlacement[] = SHOP_PLACEMENTS): readonly MapObjectEntry[] {

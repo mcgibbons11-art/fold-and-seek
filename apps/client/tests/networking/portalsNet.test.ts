@@ -1,6 +1,7 @@
 import type { MatchSettingsPatch, PrivateSimEvent, SimEvent } from "@foldseek/game-sim";
 import {
   createReferenceDisguiseWire,
+  decodeDisguiseWire,
   encodeDisguiseWire,
   encodePaintLayer,
   MatchPhase,
@@ -9,8 +10,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CommandRejection, ConnectionState } from "../../src/networking/NetworkAdapter";
 import {
+  BOT_SEAT_MARKER,
+  botSeatId,
+  isBotSeat,
+  type BotBrain,
+  type BotSeatOptions,
+} from "../../src/networking/botSeats";
+import {
   coalesceDisguiseUpdates,
   derivedSeatId,
+  DERIVED_SEAT_SEPARATOR,
   FLUSH_INTERVAL_MS,
   PortalsNetAdapter,
 } from "../../src/networking/PortalsNetAdapter";
@@ -87,10 +96,16 @@ class Session {
   readonly relay = new FakePortalsRelay();
   readonly peers: Peer[] = [];
   private readonly settings: MatchSettingsPatch;
+  private readonly botOptions: BotSeatOptions;
   private clock = 1_700_000_000_000;
 
-  constructor(settings: MatchSettingsPatch = {}) {
+  /**
+   * `botOptions` go to every peer, exactly as `createPortalsRound` gives them
+   * to every client: whoever ends up host has to be able to drive the bots.
+   */
+  constructor(settings: MatchSettingsPatch = {}, botOptions: BotSeatOptions = {}) {
     this.settings = { ...FAST_SETTINGS, ...settings };
+    this.botOptions = botOptions;
   }
 
   now(): number {
@@ -111,6 +126,7 @@ class Session {
       // The retry runs immediately and without a timer, so a fake-timer test
       // never has to advance one to finish joining.
       joinRetryDelayMs: 0,
+      ...this.botOptions,
     });
     const events: SimEvent[] = [];
     const privateEvents: PrivateSimEvent[] = [];
@@ -203,7 +219,13 @@ class Session {
     return locked;
   }
 
-  runTo(target: MatchPhase, hostId: string, maxSteps = 60): void {
+  /**
+   * `maxSteps` allows a whole Forge at its authored length. The phase used to
+   * end the moment every Mimic had locked, so a room that locked at once was
+   * through it in a step or two; `MIN_FORGE_DWELL_MS` now holds it open, and a
+   * 5 s Forge really does cost 50 of these.
+   */
+  runTo(target: MatchPhase, hostId: string, maxSteps = 120): void {
     for (let index = 0; index < maxSteps; index += 1) {
       if (this.peer(hostId).adapter.getSync().publicState?.phase === target) return;
       this.advance();
@@ -1524,6 +1546,365 @@ describe("PortalsNetAdapter body paint", () => {
       expect(disguise.encodedPaint).toBe(PAINT_LAYER);
       expect(disguise.encodedPose).toBe(VALID_POSE);
     }
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+});
+
+// ------------------------------------------------------------------ bot seats
+
+/** How far a test bot shifts its disguise per publication. Well under the cap. */
+const BOT_CREEP_STEP_M = 0.005;
+/** The revision `BotSeats` locks a bot's first pose at. A creep counts up from it. */
+const BOT_LOCK_REVISION = 1;
+
+const CREEP_PHASES: ReadonlySet<MatchPhase> = new Set([
+  MatchPhase.InspectionIntro,
+  MatchPhase.Inspection,
+  MatchPhase.FinalCountdown,
+]);
+
+/**
+ * A brain that does one thing: nudges a hider's disguise along X while the hunt
+ * runs. It is deliberately not the shop's own brain, which needs a map and a
+ * validator; it is the smallest thing that shows the host is calling a brain on
+ * simulation time and feeding what it returns back into the round.
+ */
+function creepingBrain(): BotBrain {
+  const revisions = new Map<string, number>();
+  return {
+    act(turn) {
+      const { privateState, publicState } = turn;
+      if (privateState.role !== "mimic" || privateState.ownDisguise === null) return [];
+      if (!CREEP_PHASES.has(publicState.phase)) return [];
+      const revision = (revisions.get(turn.playerId) ?? BOT_LOCK_REVISION) + 1;
+      revisions.set(turn.playerId, revision);
+      return [
+        {
+          kind: "forge_snapshot",
+          encodedPose: poseAt((revision - BOT_LOCK_REVISION) * BOT_CREEP_STEP_M, revision),
+          revision,
+        },
+      ];
+    },
+  };
+}
+
+/** Bot seats that lock a real pose at the origin and then creep away from it. */
+function playingBots(): BotSeatOptions {
+  return { botPose: () => poseAt(0, BOT_LOCK_REVISION), botBrain: creepingBrain() };
+}
+
+/** Where the room believes a given disguise is standing, along the creep axis. */
+function disguiseX(peer: Peer, publicObjectId: string): number | null {
+  const disguise = peer.adapter
+    .getSync()
+    .publicState?.disguises.find((entry) => entry.publicObjectId === publicObjectId);
+  if (disguise === undefined || disguise.encodedPose.length === 0) return null;
+  const decoded = decodeDisguiseWire(disguise.encodedPose);
+  return decoded.ok ? decoded.pose.root.position[0] : null;
+}
+
+/** Everything one peer hears off the relay, for reading the host's traffic. */
+function recordMessages(peer: Peer): unknown[] {
+  const received: unknown[] = [];
+  const net = (
+    peer.adapter as unknown as {
+      net: { on(event: "message", handler: (data: unknown, from: string) => void): void };
+    }
+  ).net;
+  net.on("message", (data) => received.push(data));
+  return received;
+}
+
+describe("PortalsNetAdapter bot seats", () => {
+  it("cannot give a bot a seat any connection could hold", () => {
+    // Every real seat is an account id, a connection id, or the two joined by
+    // one separator; Portals produces the separator in neither half. A bot seat
+    // carries two of them, so it is outside the whole space of real seats.
+    const seat = botSeatId(1);
+    expect(isBotSeat(seat)).toBe(true);
+    expect(seat.length).toBeLessThanOrEqual(64);
+    expect(BOT_SEAT_MARKER.split(DERIVED_SEAT_SEPARATOR).length - 1).toBe(2);
+
+    for (const account of ["bot", "player-1", "", "a".repeat(64)]) {
+      expect(isBotSeat(account)).toBe(false);
+      for (const connection of ["conn-1", "bot", "1", "b".repeat(48)]) {
+        expect(isBotSeat(derivedSeatId(account, connection))).toBe(false);
+      }
+    }
+  });
+
+  it("seats bots only for the host, and every client renders them", async () => {
+    vi.useFakeTimers();
+    const session = new Session();
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    await session.addPeer("c", "Cora");
+    session.advance(4);
+
+    const host = session.peer("a");
+    const guest = session.peer("b");
+    expect(host.adapter.isAuthority()).toBe(true);
+    expect(host.adapter.bots.canManageBots()).toBe(true);
+    // The simulation lives on one client, so only that client may seat anyone.
+    expect(guest.adapter.bots.canManageBots()).toBe(false);
+    expect(guest.adapter.bots.addBot()).toBeNull();
+
+    const first = host.adapter.bots.addBot();
+    const second = host.adapter.bots.addBot();
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    expect(host.adapter.bots.botSeatIds()).toEqual([first, second]);
+    session.advance(8);
+
+    for (const peer of session.peers) {
+      const players = peer.adapter.getSync().publicState?.players ?? [];
+      expect(players).toHaveLength(5);
+      expect(players.filter((player) => isBotSeat(player.seatId)).map((p) => p.seatId).sort())
+        .toEqual([first, second].sort());
+      expect(
+        players.filter((player) => !isBotSeat(player.seatId)).map((player) => player.displayName).sort(),
+      ).toEqual(["Ada", "Bex", "Cora"]);
+      // A bot is nobody's host and is connected like any seated player.
+      for (const player of players.filter((entry) => isBotSeat(entry.seatId))) {
+        expect(player.isHost).toBe(false);
+        expect(player.connected).toBe(true);
+      }
+    }
+
+    host.adapter.bots.removeBot(second as string);
+    session.advance(8);
+    for (const peer of session.peers) {
+      expect(peer.adapter.getSync().publicState?.players).toHaveLength(4);
+    }
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("lets one person and two bots start a round the room could not otherwise field", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS, playingBots());
+    await session.addPeer("a", "Ada");
+    session.advance(2);
+
+    const host = session.peer("a");
+    // Alone, the room is one short of the two the settings need (§5.5).
+    host.adapter.sendCommand({ type: "player_ready", ready: true });
+    session.advance(2);
+    host.adapter.sendCommand({ type: "start_match" });
+    session.advance(4);
+    expect(host.adapter.getSync().publicState?.phase).toBe(MatchPhase.Lobby);
+    expect(host.rejections.map((entry) => entry.reason)).toContain("not_enough_players");
+
+    host.adapter.bots.addBot();
+    host.adapter.bots.addBot();
+    session.startMatch("a", MatchPhase.Forge);
+    session.runTo(MatchPhase.Inspection, "a", 200);
+
+    // The bots readied up and locked poses of their own, so the hunt has
+    // something in it to look for.
+    const disguises = host.adapter.getSync().publicState?.disguises ?? [];
+    expect(disguises.length).toBeGreaterThan(0);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("keeps driving the bots after the host that seated them leaves", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS, playingBots());
+    await session.addPeer("c", "Cora");
+    await session.addPeer("a", "Ada");
+    session.advance(4);
+
+    const first = session.peer("c");
+    expect(first.adapter.isAuthority()).toBe(true);
+    first.adapter.bots.addBot();
+    first.adapter.bots.addBot();
+
+    session.startMatch("c", MatchPhase.Forge);
+    session.lockDisguises();
+    session.runTo(MatchPhase.Inspection, "c", 200);
+    session.advance(6);
+
+    // The non-host is holding the bots' bodies, geometry and all, and picks one
+    // out by the only thing that tells a bot's disguise from a person's here:
+    // the people locked at the origin and never moved, and a bot creeps.
+    const survivor = session.peer("a");
+    const creeping = (survivor.adapter.getSync().publicState?.disguises ?? []).filter(
+      (entry) => (disguiseX(survivor, entry.publicObjectId) ?? 0) > 0,
+    );
+    // Four seats deal one Inspector, so at least one of the two bots is a
+    // Mimic however the shuffle falls; how many is the deal's business.
+    expect(creeping.length).toBeGreaterThan(0);
+    const watched = creeping[0]?.publicObjectId as string;
+    const beforeMigration = disguiseX(survivor, watched);
+    expect(beforeMigration).toBeGreaterThan(0);
+
+    session.relay.dropPeer("c");
+    session.advance(6);
+
+    expect(survivor.adapter.isAuthority()).toBe(true);
+    expect(survivor.adapter.getConnection().detail).toBe("authority_resumed");
+    // The seats came back with the round rather than being dropped as players
+    // nobody was connected on.
+    expect(survivor.adapter.bots.botSeatIds()).toHaveLength(2);
+    const players = survivor.adapter.getSync().publicState?.players ?? [];
+    expect(players.filter((player) => isBotSeat(player.seatId))).toHaveLength(2);
+
+    const afterMigration = disguiseX(survivor, watched);
+    session.advance(10);
+    const later = disguiseX(survivor, watched);
+    // Driving resumed: the disguise is still travelling under the new host.
+    expect(later ?? 0).toBeGreaterThan(afterMigration ?? 0);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("puts the bots back when a change of host cannot resume the round", async () => {
+    vi.useFakeTimers();
+    // A lobby publishes no simulation snapshot at all, so the published roster
+    // is the only record the bots have of themselves.
+    const session = new Session();
+    await session.addPeer("c", "Cora");
+    await session.addPeer("a", "Ada");
+    session.advance(4);
+
+    session.peer("c").adapter.bots.addBot();
+    session.peer("c").adapter.bots.addBot();
+    session.advance(8);
+
+    session.relay.dropPeer("c");
+    session.advance(8);
+
+    const newHost = session.peer("a");
+    expect(newHost.adapter.isAuthority()).toBe(true);
+    expect(newHost.adapter.bots.botSeatIds()).toHaveLength(2);
+    const players = newHost.adapter.getSync().publicState?.players ?? [];
+    expect(players).toHaveLength(3);
+    expect(players.filter((player) => isBotSeat(player.seatId))).toHaveLength(2);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("gives a bot's seat up rather than turning a person away", async () => {
+    vi.useFakeTimers();
+    const session = new Session({ maxPlayers: 3 });
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    session.advance(4);
+
+    const host = session.peer("a");
+    host.adapter.bots.addBot();
+    session.advance(8);
+    expect(host.adapter.getSync().publicState?.players).toHaveLength(3);
+
+    await session.addPeer("c", "Cora");
+    session.advance(8);
+
+    const players = host.adapter.getSync().publicState?.players ?? [];
+    expect(players).toHaveLength(3);
+    expect(players.filter((player) => isBotSeat(player.seatId))).toHaveLength(0);
+    expect(players.map((player) => player.displayName).sort()).toEqual(["Ada", "Bex", "Cora"]);
+    expect(session.peer("c").adapter.getConnection().status).toBe("connected");
+    expect(host.adapter.bots.botSeatIds()).toHaveLength(0);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("carries a rematch the people voted for, whatever the bots outnumber them by", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS, playingBots());
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    session.advance(4);
+
+    // Three bots against two people. Bots that abstained would be three no
+    // votes, and no majority of the people could then carry a rematch at all,
+    // which is the state this room was in before they answered for themselves.
+    const host = session.peer("a");
+    host.adapter.bots.addBot();
+    host.adapter.bots.addBot();
+    host.adapter.bots.addBot();
+    session.startMatch("a", MatchPhase.Forge);
+    session.lockDisguises();
+    session.runTo(MatchPhase.Results, "a", 400);
+    expect(host.adapter.getSync().publicState?.players).toHaveLength(5);
+
+    host.adapter.sendCommand({ type: "vote_rematch", yes: true });
+    session.advance(2);
+    // One yes of two people is not a majority of them, so the bots hold off.
+    expect(
+      eventsOfType(session.peer("b"), "rematch_vote_cast").map((event) => event.yesVotes).at(-1),
+    ).toBe(1);
+
+    session.peer("b").adapter.sendCommand({ type: "vote_rematch", yes: true });
+    session.advance(2);
+    const afterBoth = eventsOfType(session.peer("b"), "rematch_vote_cast").at(-1);
+    expect(afterBoth?.yesVotes).toBe(5);
+    expect(afterBoth?.totalVoters).toBe(5);
+
+    session.advance(8);
+    expect(eventsOfType(session.peer("b"), "rematch_started").map((event) => event.round)).toEqual([
+      1,
+    ]);
+    expect(host.adapter.getSync().publicState?.round).toBe(1);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("cannot carry a rematch the people voted down", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS, playingBots());
+    await session.addPeer("a", "Ada");
+    session.advance(2);
+
+    const host = session.peer("a");
+    // Three bots and one person. Bots that always said yes would carry this
+    // room into another round over the only objection in it.
+    host.adapter.bots.addBot();
+    host.adapter.bots.addBot();
+    host.adapter.bots.addBot();
+    session.startMatch("a", MatchPhase.Forge);
+    session.lockDisguises();
+    session.runTo(MatchPhase.Results, "a", 400);
+
+    host.adapter.sendCommand({ type: "vote_rematch", yes: false });
+    session.advance(2);
+    expect(
+      eventsOfType(host, "rematch_vote_cast").map((event) => event.yesVotes).at(-1),
+    ).toBe(0);
+
+    session.runTo(MatchPhase.Lobby, "a", 400);
+    expect(eventsOfType(host, "rematch_started")).toEqual([]);
+    expect(host.adapter.getSync().publicState?.round).toBe(0);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("sends no private traffic to a seat nobody is connected on", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS, playingBots());
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    session.advance(4);
+
+    const host = session.peer("a");
+    // Every message the host broadcasts, read as the room saw it.
+    const heard = recordMessages(session.peer("b"));
+    host.adapter.bots.addBot();
+    host.adapter.bots.addBot();
+    session.startMatch("a", MatchPhase.Forge);
+    session.runTo(MatchPhase.Inspection, "a", 200);
+
+    const addressed = heard
+      .map((message) => (message as { to?: unknown }).to)
+      .filter((to): to is string => typeof to === "string");
+    expect(addressed.length).toBeGreaterThan(0);
+    expect(addressed.filter((to) => isBotSeat(to))).toEqual([]);
+    // The roles and disguises those bots were dealt did reach the simulation:
+    // this is a channel the driver reads directly, not one that is empty.
+    expect(host.adapter.getSync().publicState?.disguises.length).toBeGreaterThan(0);
     expect(session.relay.violations).toEqual([]);
     session.dispose();
   });

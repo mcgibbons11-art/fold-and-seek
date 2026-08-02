@@ -236,10 +236,8 @@ describe("deception score feedback", () => {
     expect(twice.recent[0]?.id).toBeGreaterThan(twice.recent[1]?.id ?? 0);
 
     fixture.runTo(MatchPhase.Results, 600);
+    // The bots follow the room's one person, so a single yes carries the vote.
     fixture.actions.voteRematch(true);
-    for (let index = 0; index < BOT_COUNT; index += 1) {
-      fixture.adapter.sendCommandAs(`bot-${index + 1}`, { type: "vote_rematch", yes: true });
-    }
     fixture.runTo(MatchPhase.RoleReveal, 600);
 
     expect(fixture.state().deception.points).toBe(0);

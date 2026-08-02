@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { RAIL_SIZES, railHeight, railSizeFor } from "../../src/ui/rounds/ActionRail";
+import { hiderRailActions, inspectorRailActions } from "../../src/ui/rounds/huntControls";
 import {
   HUD_REGIONS,
   REGION_RULES,
@@ -80,6 +82,53 @@ describe("HUD region table", () => {
     expect(style.transform).toBeUndefined();
     expect(style.left).toBe("calc(50% - 150px)");
     expect(style.top).toBe("calc(50% - 150px)");
+  });
+
+  it("fits a live hider's eight-chip rail inside the rail region at every size", () => {
+    // The roster that overflowed at 720p: taunt, five Forge tools, mirror, and
+    // the board, with the taunt carrying a cooldown note. Both the top chip and
+    // the bottom one were off screen.
+    const actions = hiderRailActions({
+      tauntSupported: true,
+      tauntAllowed: false,
+      tauntCooldownSeconds: 8,
+      toolMode: "pose",
+      mirror: false,
+      boardOpen: false,
+    });
+    expect(actions).toHaveLength(8);
+
+    for (const viewport of VIEWPORTS) {
+      const rect = regionRect("rightRail", viewport.width, viewport.height);
+      const available = rect.bottom - rect.top;
+      const size = railSizeFor(actions, available);
+      expect(railHeight(actions, size), `rail at ${viewport.name}`).toBeLessThanOrEqual(available);
+    }
+  });
+
+  it("fits the rail at 720p even when every chip carries a note", () => {
+    // Notes are per-chip and nothing stops several appearing at once, so the
+    // smallest size has to hold the worst roster rather than the likely one.
+    const actions = hiderRailActions({
+      tauntSupported: true,
+      tauntAllowed: false,
+      tauntCooldownSeconds: 8,
+      toolMode: "pose",
+      mirror: false,
+      boardOpen: false,
+    }).map((action) => ({ ...action, note: "wait" }));
+
+    const rect = regionRect("rightRail", 1280, 720);
+    const smallest = RAIL_SIZES[RAIL_SIZES.length - 1];
+    expect(railHeight(actions, smallest)).toBeLessThanOrEqual(rect.bottom - rect.top);
+  });
+
+  it("leaves the Inspector's short rail at the roomy size", () => {
+    // Shrinking is for the roster that needs it. Three chips must not be made
+    // small because eight of them would have been.
+    const actions = inspectorRailActions({ boardOpen: false, outOfWarrants: false });
+    const rect = regionRect("rightRail", 1280, 720);
+    expect(railSizeFor(actions, rect.bottom - rect.top).id).toBe("roomy");
   });
 
   it("clips or scrolls every region so content cannot leave its box", () => {

@@ -27,6 +27,20 @@ export function finalCountdownMs(settings: MatchSettings): number {
 export const MIN_LOCK_GRACE_MS = 1_000;
 
 /**
+ * Shortest Forge window, held even when every Mimic has already locked.
+ *
+ * Forge ends early once every Mimic is locked, which is right for a room of
+ * people and wrong for the round a solo Inspector plays: bots lock on the frame
+ * they are dealt a disguise, so the phase collapsed to about ten seconds and the
+ * Inspector's staging beat — walking the shop, reading the baseline, choosing
+ * where to start — never happened. The floor gives that beat a length whatever
+ * the roster is. It is a floor and never an extension: the settings' own
+ * `forgeMs` still ends the phase, and a shorter `forgeMs` wins over this
+ * (`min` at the call site), so a host who wants a fast round gets one.
+ */
+export const MIN_FORGE_DWELL_MS = 25_000;
+
+/**
  * Interaction cooldown after a correct accusation. Deliberately its own
  * constant: the bible's hold-to-confirm accuse control (and its
  * `accusationHoldMs` setting) was replaced by the gun per design override 1,

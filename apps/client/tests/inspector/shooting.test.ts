@@ -278,4 +278,49 @@ describe("ShootingDriver cooldown", () => {
     h.driver.setAmmo(2);
     expect(h.driver.state.ammo).toBe(2);
   });
+
+  it("counts every round that never becomes an accusation", () => {
+    // A local miss reaches the authority as nothing at all: no command, no
+    // warrant, no event back. This counter is the only thing that can tell the
+    // player the trigger did something, and the HUD kicks the reticle off it.
+    const h = harness(3);
+    expect(h.driver.state.dryFires).toBe(0);
+
+    h.fire(null);
+    expect(h.driver.state.dryFires).toBe(1);
+    expect(h.commands).toHaveLength(0);
+    expect(h.shots.map((shot) => shot.outcome)).toEqual(["miss"]);
+
+    h.wait(COOLDOWN_FRAMES);
+    h.fire(focusOn("prop-lamp", { distanceM: testSettings().accusationDistance * 2 }));
+    expect(h.driver.state.dryFires).toBe(2);
+
+    h.wait(COOLDOWN_FRAMES);
+    h.fire(focusOn("prop-column", { accusable: false }));
+    expect(h.driver.state.dryFires).toBe(3);
+
+    // A round that does land is not a dry fire, and does not touch the count.
+    h.wait(COOLDOWN_FRAMES);
+    h.fire(focusOn("prop-lamp"));
+    expect(h.commands).toHaveLength(1);
+    expect(h.driver.state.dryFires).toBe(3);
+  });
+
+  it("publishes a dry fire even when nothing else about the gun changed", () => {
+    // Two misses in a row have the same phase, the same target and the same
+    // ammunition. Without the counter in the published state the second one is
+    // indistinguishable from the first and the HUD never hears about it.
+    const published: number[] = [];
+    const driver = new ShootingDriver({
+      settings: testSettings(),
+      sendCommand: () => undefined,
+      onStateChange: (state) => published.push(state.dryFires),
+    });
+    driver.setAmmo(3);
+    driver.update(FRAME_MS, null, true, false);
+    for (let i = 0; i < COOLDOWN_FRAMES; i += 1) driver.update(FRAME_MS, null, false, false);
+    driver.update(FRAME_MS, null, true, false);
+
+    expect(published.at(-1)).toBe(2);
+  });
 });

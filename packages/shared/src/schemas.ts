@@ -855,6 +855,7 @@ export const MatchSnapshotSchema = z.strictObject({
   ie: simTime,
   ix: simTime,
   lg: simTime,
+  fd: simTime,
   ac: counter,
   op: z.array(id).max(LIMITS.maxPlayersPerMatch),
   pl: z.array(SnapshotPlayerSchema).max(LIMITS.maxPlayersPerMatch),

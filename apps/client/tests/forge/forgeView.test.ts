@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ForgeController, type ForgeWorkspace } from "../../src/forge/ForgeController";
 import { humanMimicSpawn } from "../../src/gameplay/botDisguises";
+import { DisguiseTheatre } from "../../src/gameplay/disguiseTheatre";
+import { MIMIC_BODY_TAG } from "../../src/mimic/visual/MimicVisual";
 import { WORLD_SCALE, type NavData } from "../../src/inspector/navData";
 import { NAV_DATA } from "../../src/world/maps/nav";
 import { SHOP_FORGE_WORKSPACE } from "../../src/world/ShopWorld";
@@ -29,6 +31,12 @@ interface HarnessOptions {
   readonly origin?: THREE.Vector3;
   readonly navData?: NavData;
   readonly workspace?: ForgeWorkspace;
+  /**
+   * Runs against the scene before the controller is built, for the things the
+   * Forge captures once at construction: the room it may anchor to, and the
+   * room it may sample a colour from.
+   */
+  readonly prepareScene?: (scene: THREE.Scene) => void;
 }
 
 class Harness {
@@ -62,6 +70,7 @@ class Harness {
     };
 
     this.origin = options.origin ?? new THREE.Vector3(-1.55, 0.075, -1.05);
+    options.prepareScene?.(this.scene);
     this.controller = new ForgeController({
       scene: this.scene,
       canvas: canvas as unknown as HTMLCanvasElement,
@@ -537,5 +546,47 @@ describe("moving and looking at the same time", () => {
     );
 
     expect(Math.abs(secondHeading - firstHeading)).toBeGreaterThan(0.3);
+  });
+});
+
+describe("what the Forge will let an anchor name", () => {
+  /**
+   * An anchor stores the surface it is sealed to by that object's name and
+   * resolves it again the next time the disguise is loaded, so the index behind
+   * that lookup has to hold map surfaces and nothing else.
+   *
+   * `DisguiseTheatre` builds the hunt's bodies during the load and parks them
+   * twenty metres under the boards, which puts four named Mimics in the scene
+   * before the Forge captures its room. Every part of one is called `mimic_`
+   * something, and a saved anchor naming one would resolve against whichever
+   * body happened to be holding that name — or, parked, against nothing.
+   */
+  it("indexes the room but not the bodies a theatre parked in it", async () => {
+    const scene = new THREE.Scene();
+    const theatre = new DisguiseTheatre(scene, qualitySettingsFor("medium"));
+    await theatre.prewarm(4, () => Promise.resolve());
+
+    // The parked bodies really are in the room the Forge is about to capture.
+    const mimicParts = scene.children.filter((child) => child.userData[MIMIC_BODY_TAG] === true);
+    expect(mimicParts.length).toBe(4);
+
+    const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.02, 0.3));
+    shelf.name = "test_shelf";
+    scene.add(shelf);
+
+    // The same objects, not copies of them, moved into the room the Forge is
+    // built against.
+    const anchored = new Harness({
+      prepareScene: (target) => {
+        for (const child of [...scene.children]) target.add(child);
+      },
+    });
+    const surfaces = anchored.controller.anchorSurfaceIds;
+
+    expect(surfaces).toContain("test_shelf");
+    expect(surfaces.filter((id) => id.startsWith("mimic_"))).toEqual([]);
+
+    anchored.dispose();
+    theatre.dispose();
   });
 });

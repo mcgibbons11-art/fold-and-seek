@@ -95,6 +95,34 @@ export class RoundActions {
     return this.send("voteRematch", { type: "vote_rematch", yes });
   }
 
+  /**
+   * Fills one more seat with a bot, so a room short of people can still start.
+   *
+   * This is the one verb that does not travel: only the client holding the
+   * simulation can seat anyone, and that client is the one pressing the button,
+   * so it goes straight to the adapter rather than through a command the
+   * authority would only ever receive from itself.
+   */
+  addBot(): ActionOutcome {
+    const bots = this.adapter.bots;
+    const state = this.director.getState();
+    if (bots === undefined || !state.botSeats.canManage) return refused("not_host");
+    if (state.roster.length >= state.botSeats.maxSeats) return refused("room_full");
+    return bots.addBot() === null ? refused("room_full") : SENT;
+  }
+
+  /** Gives up the most recently added bot seat. */
+  removeBot(): ActionOutcome {
+    const bots = this.adapter.bots;
+    if (bots === undefined || !this.director.getState().botSeats.canManage) {
+      return refused("not_host");
+    }
+    const seatId = bots.botSeatIds().at(-1);
+    if (seatId === undefined) return refused("target_unknown");
+    bots.removeBot(seatId);
+    return SENT;
+  }
+
   /** The gate the HUD reads to disable a control before anyone clicks it. */
   gate(action: RoundActionName): RoundViewState["actions"][RoundActionName] {
     return this.director.getState().actions[action];

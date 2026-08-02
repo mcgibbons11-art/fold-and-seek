@@ -96,6 +96,24 @@ export interface RosterEntry {
   readonly isAuthority: boolean;
 }
 
+/**
+ * Seats filled by the machine, offered by the transports that run a simulation
+ * in the page. Only the client holding that simulation can seat one, which is
+ * what `canManageBots` reports: on the loopback that is always this client, and
+ * on Portals it is whichever client is currently elected host.
+ *
+ * A transport with no simulation of its own — the dedicated server — leaves
+ * `NetworkAdapter.bots` undefined, and the lobby offers no control at all.
+ */
+export interface BotSeatControls {
+  canManageBots(): boolean;
+  /** The new seat id, or null when the transport or the room refused it. */
+  addBot(): string | null;
+  removeBot(seatId: string): void;
+  /** Seats currently held by bots, oldest first. */
+  botSeatIds(): readonly string[];
+}
+
 export interface ConnectionState {
   readonly mode: NetworkMode;
   readonly status: ConnectionStatus;
@@ -120,6 +138,8 @@ export type Unsubscribe = () => void;
 export interface NetworkAdapter {
   /** Discriminator so callers can branch on transport without instanceof. */
   readonly mode: NetworkMode;
+  /** Bot seats, on the transports that can hold them. */
+  readonly bots?: BotSeatControls;
 
   /** Acquires the transport (SDK handshake, client construction). Idempotent. */
   connect(): Promise<void>;

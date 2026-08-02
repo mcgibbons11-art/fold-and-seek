@@ -196,10 +196,8 @@ describe("the missed-finds board", () => {
     expect(fixture.state().missedFinds.received).toBe(true);
 
     fixture.runTo(MatchPhase.Results, 600);
+    // The bots follow the room's one person, so a single yes carries the vote.
     fixture.actions.voteRematch(true);
-    for (let index = 0; index < BOT_COUNT; index += 1) {
-      fixture.adapter.sendCommandAs(`bot-${index + 1}`, { type: "vote_rematch", yes: true });
-    }
     fixture.runTo(MatchPhase.RoleReveal, 600);
 
     // Last round's ranking is not this round's, and showing it would be a lie.

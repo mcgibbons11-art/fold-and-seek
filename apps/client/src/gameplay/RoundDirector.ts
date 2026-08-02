@@ -20,6 +20,7 @@ import {
   type RosterEntry,
   type Unsubscribe,
 } from "../networking/NetworkAdapter";
+import { isBotSeat } from "../networking/botSeats";
 import { Signal } from "../networking/signal";
 import { computeAvailability } from "./actionAvailability";
 import { correctAccusationStamp, phaseLabel, wrongAccusationStamp } from "./copy";
@@ -567,6 +568,15 @@ export class RoundDirector {
       timer,
       self,
       roster,
+      botSeats: {
+        supported: this.adapter.bots !== undefined,
+        canManage: this.adapter.bots?.canManageBots() ?? false,
+        // Counted off the published roster rather than off this client's own
+        // bookkeeping, so every client prints the same number and only the
+        // host's is ever non-empty by accident.
+        count: roster.filter((player) => player.isBot).length,
+        maxSeats: settings.maxPlayers,
+      },
       warrantsRemaining: publicState ? publicState.warrantsRemaining : null,
       // Zero outside a round, which the HUD reads as "no magazine to draw".
       warrantsTotal: publicState ? publicState.warrantsTotal : null,
@@ -635,6 +645,7 @@ export class RoundDirector {
         ready: false,
         lifeState: "active" as const,
         rolePublicState: "unknown" as const,
+        isBot: isBotSeat(entry.id),
       }));
     }
     return publicState.players.map((player) => ({
@@ -650,6 +661,9 @@ export class RoundDirector {
       ready: player.ready,
       lifeState: player.lifeState,
       rolePublicState: player.rolePublicState,
+      // The seat says so on its own, so a client that never saw the bot seated
+      // still knows which rows are people.
+      isBot: isBotSeat(player.seatId),
     }));
   }
 

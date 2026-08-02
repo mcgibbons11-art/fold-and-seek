@@ -36,7 +36,7 @@ import type {
  * estimateSnapshotBytes for what actually dominates the size.
  */
 
-export const MATCH_SNAPSHOT_VERSION = 1;
+export const MATCH_SNAPSHOT_VERSION = 2;
 
 export interface SnapshotStats {
   /** directLookEscapes, closePasses, peerStyleVotes. */
@@ -132,6 +132,8 @@ export interface MatchSnapshot {
   readonly ie: number;
   readonly ix: number;
   readonly lg: number;
+  /** Earliest the Forge may end early, so a room of bots cannot cut it short. */
+  readonly fd: number;
   readonly ac: number;
   readonly op: readonly string[];
   readonly pl: readonly SnapshotPlayer[];

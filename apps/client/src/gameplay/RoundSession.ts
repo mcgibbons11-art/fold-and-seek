@@ -103,6 +103,7 @@ const IDLE_GUN: InspectorGunView = {
   targetInRange: false,
   triggerProgress: 0,
   cooldownRemainingMs: 0,
+  dryFires: 0,
 };
 
 export interface RoundSessionOptions {
@@ -572,6 +573,14 @@ export class RoundSession {
       onPointerLockChange: (locked) => {
         this.pointerLocked = locked;
       },
+      // A round that never becomes an accusation is heard here and nowhere
+      // else. The report of a real shot is played from the weapon's own state
+      // in `stepGun`, so this is only the trigger clicking on nothing: no
+      // target, out of range, a decorative object, or an empty magazine.
+      onShot: (outcome) => {
+        if (outcome === "hit") return;
+        this.audio.play("gun_dry_click");
+      },
     });
     this.inspector = inspector;
     this.inspectablesRevision = this.theatre.revision;
@@ -708,6 +717,7 @@ export class RoundSession {
       gun.targetObjectId ?? "-",
       gun.targetInRange ? "1" : "0",
       Math.ceil(gun.cooldownRemainingMs / 100),
+      gun.dryFires,
       this.pointerLocked ? "1" : "0",
     ].join("|");
     if (signature === this.engineSignature) return;
@@ -741,6 +751,7 @@ export class RoundSession {
       targetInRange: published.target === "in_range",
       triggerProgress: 0,
       cooldownRemainingMs: weapon.cooldownRemainingMs,
+      dryFires: published.dryFires,
       roundsChambered: Number.isFinite(published.ammo) ? published.ammo : undefined,
     };
   }

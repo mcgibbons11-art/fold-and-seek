@@ -279,9 +279,10 @@ describe("RoundDirector", () => {
     // A second vote from the same player is refused before it is sent.
     expect(fixture.actions.voteRematch(true)).toEqual({ sent: false, reason: "duplicate_vote" });
 
-    for (const bot of ["bot-1", "bot-2"]) {
-      fixture.adapter.sendCommandAs(bot, { type: "vote_rematch", yes: true });
-    }
+    // Nobody votes on the bots' behalf. They answer a rematch by following the
+    // people in the room, and one yes among one person is a majority of them,
+    // so the two bots say yes on the next tick of their own accord.
+    fixture.advance(1);
     expect(fixture.state().rematch.yesVotes).toBe(3);
     expect(fixture.state().rematch.totalVoters).toBe(3);
 

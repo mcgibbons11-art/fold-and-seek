@@ -3,6 +3,7 @@ import type { MatchSettingsPatch } from "@foldseek/game-sim";
 import { PortalsNetAdapter } from "../networking/PortalsNetAdapter";
 import type { PortalsSdk } from "../types/portals";
 import { buildObjectRegistry } from "../world/maps/registry";
+import { createBotPlay } from "./botPlay";
 import { dealSeed, type GameRound } from "./round";
 import { RoundDirector } from "./RoundDirector";
 import { RoundSpatialBridge } from "./roundSpatial";
@@ -46,10 +47,15 @@ export interface PortalsRoundOptions {
 
 export function createPortalsRound(options: PortalsRoundOptions): PortalsRound {
   const spatial = new RoundSpatialBridge();
+  const seed = options.seed ?? dealSeed();
   const adapter = new PortalsNetAdapter(options.sdk, {
-    seed: options.seed ?? dealSeed(),
+    seed,
     spatial: spatial.validator,
     objectRegistry: buildObjectRegistry(),
+    // Bots the host seats play the round through the same brain practice uses.
+    // Like the registry and the validator, they are passed on every client,
+    // because whoever is promoted has to be able to go on driving them.
+    ...createBotPlay(spatial, seed),
     // The host's half of the eye channel: what a remote Inspector reports goes
     // into the same validator its own accusations are then checked against.
     onInspectorEye: (seatId, eye) => {

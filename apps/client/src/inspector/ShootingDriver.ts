@@ -49,6 +49,13 @@ export interface WeaponState {
   readonly lastShot: ShotOutcome | null;
   readonly lastShotObjectId: string | null;
   readonly shotsFired: number;
+  /**
+   * Rounds that never became an accusation: no target, out of range, a
+   * decorative object, or an empty magazine. The authority never hears about
+   * one, so this counter is the only thing that can tell the player it
+   * happened, and the HUD kicks the reticle off it.
+   */
+  readonly dryFires: number;
 }
 
 export interface ShootingDriverOptions {
@@ -89,6 +96,7 @@ export class ShootingDriver {
   private lastShotValue: ShotOutcome | null = null;
   private lastShotObjectIdValue: string | null = null;
   private shotsFiredValue = 0;
+  private dryFiresValue = 0;
 
   private cooldownMs = 0;
   private cooldownTotalMs = 0;
@@ -176,6 +184,7 @@ export class ShootingDriver {
 
     if (targetObjectId === null) {
       this.phaseValue = "cooling";
+      this.dryFiresValue += 1;
     } else {
       this.phaseValue = "pending";
       this.pendingMs = 0;
@@ -267,6 +276,7 @@ export class ShootingDriver {
       lastShot: this.lastShotValue,
       lastShotObjectId: this.lastShotObjectIdValue,
       shotsFired: this.shotsFiredValue,
+      dryFires: this.dryFiresValue,
     };
   }
 
@@ -285,7 +295,8 @@ export class ShootingDriver {
       previous.target === this.targetValue &&
       previous.lastShot === this.lastShotValue &&
       previous.lastShotObjectId === this.lastShotObjectIdValue &&
-      previous.shotsFired === this.shotsFiredValue
+      previous.shotsFired === this.shotsFiredValue &&
+      previous.dryFires === this.dryFiresValue
     ) {
       return;
     }

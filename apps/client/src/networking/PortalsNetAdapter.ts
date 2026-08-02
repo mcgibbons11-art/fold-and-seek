@@ -12,8 +12,16 @@ import {
 } from "@foldseek/game-sim";
 import { LIMITS, MatchPhase, MatchSnapshotSchema, type MatchSettings } from "@foldseek/shared";
 import {
+  BotSeats,
+  isBotSeat,
+  type AddBotOptions,
+  type BotSeatOptions,
+  type BotSeatSink,
+} from "./botSeats";
+import {
   EMPTY_SYNC,
   idleConnection,
+  type BotSeatControls,
   type CommandRejection,
   type ConnectionDetail,
   type ConnectionState,
@@ -113,7 +121,7 @@ export const JOIN_RETRY_DELAY_MS = 400;
  */
 export const DERIVED_SEAT_SEPARATOR = "~";
 
-export interface PortalsAdapterOptions {
+export interface PortalsAdapterOptions extends BotSeatOptions {
   readonly settings?: MatchSettingsPatch;
   readonly seed?: number;
   readonly tickHz?: number;
@@ -249,10 +257,33 @@ export class PortalsNetAdapter implements NetworkAdapter {
   );
   private readonly eyeWindow = new KeyedRateWindow(MAX_EYE_REPORTS_PER_SECOND, RATE_WINDOW_MS);
 
+  /**
+   * Seats nobody is connected on, held only by whichever client is host. They
+   * are ordinary players of that client's simulation and reach every other
+   * client through the ordinary published state, so no peer has to know they
+   * exist to render them.
+   */
+  private readonly botSeats: BotSeats;
+
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private listenersAttached = false;
   private disposed = false;
+
+  /**
+   * The lobby's add and remove controls. They run against the host's own
+   * simulation rather than travelling as a command, because only the host may
+   * seat anyone at all: a wire command would exist solely for the host to send
+   * to itself, and would give every other client a message to refuse.
+   */
+  readonly bots: BotSeatControls = {
+    canManageBots: () => this.isAuthority() && this.sim !== null,
+    addBot: () => this.addBot(),
+    removeBot: (seatId: string) => {
+      this.removeBot(seatId);
+    },
+    botSeatIds: () => this.botSeats.ids(),
+  };
 
   constructor(portals: PortalsSdk, options: PortalsAdapterOptions = {}) {
     this.portals = portals;
@@ -261,7 +292,50 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.tickHz = options.tickHz ?? PORTALS_TICK_HZ;
     this.clock = options.now ?? (() => Date.now());
     this.joinRetryDelayMs = options.joinRetryDelayMs ?? JOIN_RETRY_DELAY_MS;
+    this.botSeats = new BotSeats(options);
   }
+
+  /**
+   * Seats a bot in the host's simulation. Returns its seat, or null when this
+   * client is not the host or the room is already full.
+   */
+  addBot(options: AddBotOptions = {}): string | null {
+    if (!this.isAuthority() || this.sim === null) return null;
+    const bot = this.botSeats.add(options);
+    const seated = this.applySim("add bot", (sim) =>
+      sim.addPlayer(bot.playerId, { displayName: bot.displayName }),
+    );
+    if (seated === null || !seated.accepted) {
+      this.botSeats.remove(bot.playerId);
+      console.warn(`[portals] could not seat a bot: ${seated?.reason ?? "no simulation"}`);
+      return null;
+    }
+    // The roster every client renders comes from the published state, and the
+    // flush is 100 ms away, so the row appears without a write of its own.
+    this.emitRoster();
+    return bot.playerId;
+  }
+
+  removeBot(seatId: string): void {
+    if (!this.isAuthority() || this.sim === null) return;
+    if (!this.botSeats.remove(seatId)) return;
+    this.applySim("remove bot", (sim) => sim.removePlayer(seatId));
+    this.emitRoster();
+  }
+
+  /** Where the bot driver's commands go on the host. */
+  private readonly botSink: BotSeatSink = {
+    // A bot's refusals are its own business, and reporting one would address a
+    // wire message to a seat no connection is listening on.
+    applyCommand: (playerId, command) => {
+      this.applySim(`bot command ${command.type}`, (sim) => sim.handleCommand(playerId, command));
+    },
+    applyForgeSnapshot: (playerId, encodedPose, revision, nowMs) => {
+      this.applySim("bot forge snapshot", (sim) =>
+        sim.recordForgeSnapshot(playerId, encodedPose, revision, nowMs),
+      );
+    },
+  };
 
   async connect(): Promise<void> {
     if (this.disposed) throw new Error("PortalsNetAdapter was disposed");
@@ -296,7 +370,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       this.lastSimSeq = simChunk.seq;
       this.lastSimSnapshot = simChunk.value;
     }
-    if (snapshot && this.isRoomFull(snapshot)) {
+    if (snapshot && this.isRoomFull(snapshot, session.self)) {
       // The host would refuse the seat anyway; failing here means the player
       // gets a reason instead of sitting in a room that never seats them.
       this.selfConnectionId = null;
@@ -497,9 +571,42 @@ export class PortalsNetAdapter implements NetworkAdapter {
    * Whether the published roster already holds every seat the settings allow.
    * A rejoining player arrives on a new connection id and so needs a new seat,
    * which is why there is no exemption for someone who was here before.
+   *
+   * Two further things make this a courtesy rather than a rule, and it is
+   * written to fail towards letting the player try, since the host decides
+   * either way and refuses with a reason of its own.
+   *
+   * A publication naming this connection's own seat was written after the host
+   * had already seated it, so the room has a place for it whatever the count
+   * says. That is not hypothetical: the host seats a joiner the moment the
+   * relay reports it, and can publish again before the joiner has read the
+   * state it was handed.
+   *
+   * And a room filled out with bots is not full to a person. The host gives one
+   * of their seats up in `seatArrival` rather than turning somebody away in
+   * favour of a machine, so the joiner is let through to ask.
    */
-  private isRoomFull(snapshot: HostPublication): boolean {
-    return snapshot.publicState.players.length >= snapshot.publicState.settings.maxPlayers;
+  private isRoomFull(snapshot: HostPublication, self: PortalsNetPlayer): boolean {
+    const { players, settings } = snapshot.publicState;
+    // Both forms name this connection outright: the derived seat carries its
+    // id, and a guest's seat is its id. An account id is not among them,
+    // because a second connection of one account does not hold the first's.
+    const ownSeats = new Set([derivedSeatId(baseSeatIdOf(self), self.id), self.id]);
+    if (players.some((player) => ownSeats.has(player.seatId))) return false;
+    if (players.length < settings.maxPlayers) return false;
+    return !players.some((player) => isBotSeat(player.seatId));
+  }
+
+  /**
+   * Gives up the most recently added bot seat, to make room for a person. The
+   * newest is the one with the least of the round invested in it.
+   */
+  private freeBotSeat(): boolean {
+    const seatId = this.botSeats.ids().at(-1);
+    if (seatId === undefined) return false;
+    this.botSeats.remove(seatId);
+    this.applySim("free bot seat", (sim) => sim.removePlayer(seatId));
+    return true;
   }
 
   /** True while this client owns the authoritative simulation. */
@@ -725,9 +832,16 @@ export class PortalsNetAdapter implements NetworkAdapter {
       return;
     }
 
-    const seated = this.applySim("addPlayer", (live) =>
-      live.addPlayer(seat, { displayName: this.connectionNames.get(player.id) ?? nameOf(player) }),
-    );
+    const displayName = this.connectionNames.get(player.id) ?? nameOf(player);
+    const takeSeat = () =>
+      this.applySim("addPlayer", (live) => live.addPlayer(seat, { displayName }));
+
+    let seated = takeSeat();
+    // A room the host filled out with bots gives one of them up rather than
+    // refusing a person; `isRoomFull` let this connection through to ask.
+    if (seated && !seated.accepted && seated.reason === "room_full" && this.freeBotSeat()) {
+      seated = takeSeat();
+    }
     if (seated && !seated.accepted) {
       this.seatOwners.delete(seat);
       this.refuseConnection(player.id, seated.reason ?? "rejected", true);
@@ -986,6 +1100,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       this.seatOwners.set(seat, player.id);
       this.pendingSync.add(seat);
     }
+    this.reseatBots(snapshot);
 
     this.startTimers();
     this.publishSnapshot();
@@ -993,6 +1108,31 @@ export class PortalsNetAdapter implements NetworkAdapter {
       this.connection.status,
       interrupted ? "authority_migrated_match_reset" : "authority_assumed",
     );
+  }
+
+  /**
+   * Puts the room's bots back when the round itself could not be resumed.
+   *
+   * A lobby publishes no simulation snapshot at all — there is nothing worth
+   * resuming and no reason to leave the room's secrets in shared state — so on
+   * a change of host in the lobby this is the only record the bots have. It is
+   * the published roster, which every client has been holding all along, and
+   * the seats are taken in id order so that whichever client was promoted would
+   * have built the same room.
+   */
+  private reseatBots(snapshot: HostPublication | null): void {
+    if (snapshot === null) return;
+    const bots = snapshot.publicState.players
+      .filter((player) => isBotSeat(player.seatId))
+      .sort((left, right) => left.seatId.localeCompare(right.seatId));
+
+    for (const bot of bots) {
+      const seated = this.applySim("reseat bot", (sim) =>
+        sim.addPlayer(bot.seatId, { displayName: bot.displayName }),
+      );
+      if (seated === null || !seated.accepted) continue;
+      this.botSeats.adopt([{ seatId: bot.seatId, displayName: bot.displayName }]);
+    }
   }
 
   /**
@@ -1010,6 +1150,13 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
 
     const seats = [...new Set(this.connectionSeats.values())];
+    // Bots are players of the snapshot like any other, and no connection
+    // vouches for them, so the successor has to name their seats itself or
+    // restore() would treat every one of them as a player who had left.
+    const bots = parsed.data.pl
+      .filter((entry) => isBotSeat(entry.i))
+      .map((entry) => ({ seatId: entry.i, displayName: entry.n }));
+
     let restored: MatchSimulation;
     try {
       restored = MatchSimulation.restore(parsed.data, {
@@ -1021,7 +1168,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         // Locked poses were omitted from the snapshot because they are already
         // in the public state this client has been holding all along.
         poses: this.withBodies(publication).disguises,
-        seatedPlayerIds: seats,
+        seatedPlayerIds: [...seats, ...bots.map((bot) => bot.seatId)],
       });
     } catch (error) {
       console.warn("[portals] could not restore the published round, starting fresh", error);
@@ -1029,6 +1176,8 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
 
     this.sim = restored;
+    // Their seats survived; what has to be picked up again is the driving.
+    this.botSeats.adopt(bots);
     this.seatOwners.clear();
     for (const { seat, player } of this.seatedConnections()) {
       if (!this.seatOwners.has(seat)) this.seatOwners.set(seat, player.id);
@@ -1072,6 +1221,9 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
   private releaseAuthority(): void {
     this.sim = null;
+    // The bots go with the simulation that was holding them. Their seats live
+    // on in the published state, and whoever takes over seats them again.
+    this.botSeats.clear();
     this.publicOutbox.length = 0;
     this.privateOutbox.clear();
     this.pendingSync.clear();
@@ -1187,9 +1339,14 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (this.selfSeatId === null) return;
     if (output.public.length === 0 && output.private.size === 0) return;
 
+    this.botSeats.observe(output.public);
     this.publicOutbox.push(...output.public);
     for (const [seatId, events] of output.private) {
       if (seatId === this.selfSeatId || events.length === 0) continue;
+      // A bot's private stream is read by the driver straight off the
+      // simulation. Queueing it would spend a message per bot per flush
+      // addressed to a seat no connection is listening on.
+      if (isBotSeat(seatId)) continue;
       const queue = this.privateOutbox.get(seatId) ?? [];
       queue.push(...events);
       this.privateOutbox.set(seatId, queue);
@@ -1657,7 +1814,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
   tick(): void {
     const sim = this.sim;
     if (!sim || !this.isAuthority()) return;
-    this.applySim("tick", () => sim.tick(this.clock()));
+    // One reading drives the whole step: a bot measures how much of the match
+    // it has to catch up on against the clock the phase machine was just
+    // advanced to, so a second reading would judge it in a different moment.
+    const nowMs = this.clock();
+    this.applySim("tick", () => sim.tick(nowMs));
+    this.botSeats.drive(sim, nowMs, this.botSink);
     this.flush();
   }
 }

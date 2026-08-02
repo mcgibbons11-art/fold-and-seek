@@ -10,6 +10,7 @@ import {
   CORRECT_ACCUSATION_COOLDOWN_MS,
   DEFAULT_OBJECT_REGISTRY,
   MAX_PHASE_DURATION_MS,
+  MIN_FORGE_DWELL_MS,
   MIN_LOCK_GRACE_MS,
   SCORE_INSPECTOR_MAX_FOCUSED_OBJECTS,
   type ObjectRegistry,
@@ -601,12 +602,48 @@ describe("P2 hardening batch", () => {
       harness.command(mimicId, { type: "lock_disguise", payload: testPose(index), revision: 1 });
     }
 
+    // Every pose is in, so only the Forge's own dwell floor is still holding the
+    // phase; running it out is what puts the round into Locking.
+    harness.tick(MIN_FORGE_DWELL_MS);
     expect(harness.phase()).toBe(MatchPhase.Locking);
     harness.tick(MIN_LOCK_GRACE_MS - 500);
     expect(harness.phase()).toBe(MatchPhase.Locking);
 
     harness.tick(600);
     expect(harness.phase()).toBe(MatchPhase.InspectionIntro);
+  });
+
+  it("holds a minimum Forge dwell even when every Mimic locks instantly", () => {
+    // The solo-Inspector round: bot Mimics lock on the frame they are dealt a
+    // disguise, which used to end the Forge in about ten seconds.
+    const harness = new Harness({ players: 3, seed: 601 });
+    harness.toForge();
+    const forgeStartedAt = harness.now;
+    for (const [index, mimicId] of harness.mimicIds().entries()) {
+      harness.command(mimicId, { type: "lock_disguise", payload: testPose(index), revision: 1 });
+    }
+
+    expect(harness.phase()).toBe(MatchPhase.Forge);
+    harness.tick(MIN_FORGE_DWELL_MS - 1_000);
+    expect(harness.phase()).toBe(MatchPhase.Forge);
+
+    harness.tick(1_000);
+    expect(harness.phase()).toBe(MatchPhase.Locking);
+    expect(harness.now - forgeStartedAt).toBeGreaterThanOrEqual(MIN_FORGE_DWELL_MS);
+  });
+
+  it("never extends a Forge shorter than the dwell floor", () => {
+    // The floor is a floor on the early end, not a second duration: a host who
+    // sets a five-second Forge still gets one.
+    const harness = new Harness({ players: 3, seed: 601, settings: { forgeMs: 5_000 } });
+    harness.toForge();
+    for (const [index, mimicId] of harness.mimicIds().entries()) {
+      harness.command(mimicId, { type: "lock_disguise", payload: testPose(index), revision: 1 });
+    }
+
+    expect(harness.phase()).toBe(MatchPhase.Forge);
+    harness.tick(5_000);
+    expect(harness.phase()).toBe(MatchPhase.Locking);
   });
 
   it("exposes the default object registry it validates against", () => {

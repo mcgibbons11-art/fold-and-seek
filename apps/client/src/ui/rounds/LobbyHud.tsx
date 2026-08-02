@@ -27,6 +27,9 @@ export interface LobbyHudProps {
   readonly onReady: (ready: boolean) => void;
   readonly onStart: () => void;
   readonly onCopyRoomCode?: () => void;
+  /** Bot seats. Both are offered to the host only, on transports that hold them. */
+  readonly onAddBot?: () => void;
+  readonly onRemoveBot?: () => void;
 }
 
 const rosterRowStyle: CSSProperties = {
@@ -52,10 +55,17 @@ export function LobbyHud({
   onReady,
   onStart,
   onCopyRoomCode,
+  onAddBot,
+  onRemoveBot,
 }: LobbyHudProps): ReactElement {
   const startGate = state.actions.startMatch;
   const readyGate = state.actions.ready;
   const readyCount = state.roster.filter((player) => player.ready).length;
+  const bots = state.botSeats;
+  // Offered to the host of a transport that can hold bot seats, and to nobody
+  // else: everyone in the room sees the bots, and one person seats them.
+  const showBotSeats = bots.supported && bots.canManage && onAddBot !== undefined;
+  const roomIsFull = state.roster.length >= bots.maxSeats;
 
   return (
     <div style={overlayStyle}>
@@ -86,6 +96,7 @@ export function LobbyHud({
             <span style={{ color: player.isSelf ? BRASS : CREAM }}>
               {player.displayName}
               {player.isHost ? <span style={{ ...labelStyle, marginLeft: 8 }}>host</span> : null}
+              {player.isBot ? <span style={{ ...labelStyle, marginLeft: 8 }}>bot</span> : null}
             </span>
             <span
               style={{
@@ -98,6 +109,33 @@ export function LobbyHud({
             </span>
           </div>
         ))}
+        {showBotSeats ? (
+          <div style={{ ...rosterRowStyle, marginTop: 4 }}>
+            <span style={labelStyle}>Fill seats with bots</span>
+            <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <button
+                type="button"
+                aria-label="Remove a bot"
+                style={bots.count > 0 ? buttonStyle : disabledButtonStyle(buttonStyle)}
+                disabled={bots.count === 0}
+                onClick={onRemoveBot}
+              >
+                &minus;
+              </button>
+              <span style={{ color: BRASS, minWidth: 16, textAlign: "center" }}>{bots.count}</span>
+              <button
+                type="button"
+                aria-label="Add a bot"
+                style={roomIsFull ? disabledButtonStyle(buttonStyle) : buttonStyle}
+                disabled={roomIsFull}
+                onClick={onAddBot}
+                title={roomIsFull ? "The room is full." : ""}
+              >
+                +
+              </button>
+            </span>
+          </div>
+        ) : null}
       </div>
 
       <div

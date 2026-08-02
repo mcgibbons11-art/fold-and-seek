@@ -2,7 +2,7 @@ import type { PublicDisguiseView } from "@foldseek/game-sim";
 import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three/webgpu";
 
-import { createBotDisguisePayload } from "../../src/gameplay/botDisguises";
+import { BOT_HIDE_PLANS, createBotDisguisePayload } from "../../src/gameplay/botDisguises";
 import { DisguiseTheatre } from "../../src/gameplay/disguiseTheatre";
 import { TAUNT_SOUND } from "../../src/gameplay/huntCues";
 import { decodeDisguiseState } from "../../src/mimic/poseWire";
@@ -176,9 +176,16 @@ describe("DisguiseTheatre", () => {
     const before = paintedMeshes(scene).map((mesh) => mesh.material);
     expect(before.length).toBeGreaterThan(0);
 
-    // A different pose, same swatches: the disguise moved, nothing was recoloured.
+    // A different pose, same swatches: the same hiding place crept to the far
+    // end of its fidget, which is the update a live hunt actually sends. Two
+    // different plans would be two different finishes, and recolouring is
+    // supposed to replace a material.
     theatre.sync(
-      [publicDisguise("obj_a", createBotDisguisePayload(2), { encodedPaint })],
+      [
+        publicDisguise("obj_a", createBotDisguisePayload(0, { progress: 1, revision: 2 }), {
+          encodedPaint,
+        }),
+      ],
       null,
     );
     const after = paintedMeshes(scene).map((mesh) => mesh.material);
@@ -383,15 +390,27 @@ describe("DisguiseTheatre build cost", () => {
       publicDisguise(`obj_${String(i)}`, createBotDisguisePayload(i)),
     );
 
+  /** The same hiding place, and so the same finish, worn by several bodies. */
+  const uniformCast = (count: number): PublicDisguiseView[] =>
+    Array.from({ length: count }, (_, i) =>
+      publicDisguise(`obj_${String(i)}`, createBotDisguisePayload(0)),
+    );
+
+  /** Distinct body finishes in a cast, which is what the pool cannot share. */
+  const swatchesIn = (views: PublicDisguiseView[]): number =>
+    new Set(
+      views.map((view) => BOT_HIDE_PLANS[Number(view.publicObjectId.slice(4))]?.swatchId),
+    ).size;
+
   it("gives the whole cast one set of materials rather than one each", () => {
     const solo = new THREE.Scene();
     const one = new DisguiseTheatre(solo, QUALITY);
-    one.sync(cast(1), null);
+    one.sync(uniformCast(1), null);
     const soloMaterials = sceneMaterials(solo).size;
 
     const room = new THREE.Scene();
     const four = new DisguiseTheatre(room, QUALITY);
-    four.sync(cast(4), null);
+    four.sync(uniformCast(4), null);
 
     // Four bodies wearing the same swatches are four times the geometry and
     // exactly the same shaders. Before the pool this was 4 x soloMaterials.
@@ -399,8 +418,20 @@ describe("DisguiseTheatre build cost", () => {
     expect(sceneMaterials(room).size).toBe(soloMaterials);
     expect(four.materialCount).toBe(one.materialCount);
 
+    // A cast whose hiding places call for different finishes pays for the
+    // finishes and nothing else: one material per distinct swatch, not one set
+    // per body. Bots wear the room's own colours rather than the porcelain
+    // every Mimic starts in, so this is the shape a real hunt has.
+    const mixedScene = new THREE.Scene();
+    const mixed = new DisguiseTheatre(mixedScene, QUALITY);
+    const views = cast(4);
+    mixed.sync(views, null);
+    expect(swatchesIn(views)).toBeGreaterThan(1);
+    expect(sceneMaterials(mixedScene).size).toBe(soloMaterials + swatchesIn(views) - 1);
+
     one.dispose();
     four.dispose();
+    mixed.dispose();
   });
 
   it("builds the hunt's bodies during the load, not at the transition into it", async () => {
@@ -434,12 +465,24 @@ describe("DisguiseTheatre build cost", () => {
     const beforeBodies = scene.children.length;
     const beforeMaterials = sceneMaterials(scene).size;
 
-    theatre.sync(cast(4), null);
+    const arriving = cast(4);
+    theatre.sync(arriving, null);
 
-    // The transition adds no body and no material: it takes over four that
-    // already exist and re-poses them, which is geometry and transforms only.
+    // The transition adds no body: it takes over four that already exist and
+    // re-poses them, which is geometry and transforms only.
     expect(scene.children).toHaveLength(beforeBodies);
-    expect(sceneMaterials(scene).size).toBe(beforeMaterials);
+    // What it does add is one material per finish the arriving cast wears that
+    // the prewarm's placeholder did not, and never one per body. The prewarm
+    // builds its bodies in the porcelain a Mimic starts in, and a disguise that
+    // recoloured itself is wearing something else by definition — which is as
+    // true of a human who sampled a colour as it is of a bot. Three's material
+    // cache keys on property values and its programs on generated source, so a
+    // swatch that differs only in colour is a new material object and not a new
+    // shader; that claim is inherited from the draw-call merge work and has not
+    // been re-measured here.
+    expect(sceneMaterials(scene).size).toBeLessThanOrEqual(
+      beforeMaterials + swatchesIn(arriving),
+    );
     expect(theatre.sparedBodies).toBe(0);
     expect(theatre.proxies()).toHaveLength(4);
     // And they are real disguises, not the placeholder they were built as.

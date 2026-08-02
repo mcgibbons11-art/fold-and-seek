@@ -55,7 +55,9 @@ function layerFor(placement: PropPlacement): PropLayer {
   if (placement.hero) {
     return "hero";
   }
-  return placement.inspectable ? "standard" : "background";
+  // The background layer is what a weak tier stops drawing, so nothing whose
+  // blocker a player can walk into may live there.
+  return placement.inspectable || placement.obstacle === true ? "standard" : "background";
 }
 
 /** One unit of map building, reported so a loading screen can name it. */

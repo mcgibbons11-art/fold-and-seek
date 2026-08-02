@@ -7,6 +7,7 @@ import type {
   WalkableSurface,
 } from "../../inspector/navData";
 import { WORLD_SCALE } from "../../inspector/navData";
+import { SHOP_PLACEMENTS, type PropPlacement } from "./placements";
 import {
   CABINET_BLOCKS,
   DOOR_HEIGHT,
@@ -372,7 +373,42 @@ const FURNITURE_BLOCKERS: readonly AABB[] = [
   aabb(5.96, 0.54, 3.56, 6.24, 0.587, 3.84),
 ];
 
-export const NAV_BLOCKERS: readonly AABB[] = [...SHELL_BLOCKERS, ...FURNITURE_BLOCKERS];
+/**
+ * Ankle-height clutter, the one thing in the shop a hop is a route past.
+ *
+ * The furniture above is written out box by box because each prop needs a shape
+ * describing it: a bench blocks its legs and opens its bay, a rack blocks its
+ * boards and leaves the gaps between them. Clutter has nothing to describe. It
+ * is a small solid lump on the floor, so its blocker is taken from the prop's
+ * own footprint in `placements.ts` and the two cannot drift apart — which
+ * matters more here than anywhere else in the map, because this is the only
+ * obstacle a player meets below the knee.
+ *
+ * Every one of them stands above `WORLD_SCALE.stepHeight` and below the hop's
+ * reach, so a walk is stopped and a hop is not. `jump.test.ts` derives both
+ * bounds from this list rather than restating them.
+ */
+function clutterBlocker(placement: PropPlacement): AABB {
+  const [width, height, depth] = placement.focus;
+  const [x, , z] = placement.position;
+  // The footprint is authored in the prop's own frame, so a turned crate is
+  // taken as the rectangle it is before the axis-aligned box is measured.
+  const cos = Math.abs(Math.cos(placement.rotationY));
+  const sin = Math.abs(Math.sin(placement.rotationY));
+  const halfX = (width * cos + depth * sin) / 2;
+  const halfZ = (width * sin + depth * cos) / 2;
+  return aabb(x - halfX, 0, z - halfZ, x + halfX, height, z + halfZ);
+}
+
+export const CLUTTER_BLOCKERS: readonly AABB[] = SHOP_PLACEMENTS.filter(
+  (placement) => placement.obstacle === true,
+).map(clutterBlocker);
+
+export const NAV_BLOCKERS: readonly AABB[] = [
+  ...SHELL_BLOCKERS,
+  ...FURNITURE_BLOCKERS,
+  ...CLUTTER_BLOCKERS,
+];
 
 // ---------------------------------------------------------------------------
 // Climb links

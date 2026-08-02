@@ -123,6 +123,21 @@ export interface PropPlacement {
   /** Focus box extents (width, height, depth) measured from the origin (§8.3). */
   readonly focus: readonly [number, number, number];
   readonly practical?: PracticalLight;
+  /**
+   * True where the prop is low clutter that stops a walk, and `nav.ts` derives
+   * its navigation blocker from the focus box above rather than from a hand
+   * written box of its own.
+   *
+   * The shop's furniture is authored the other way round: each blocker is
+   * written out in `nav.ts` and spans only the height its prop really occupies,
+   * which is what lets a bench block its legs and open its bay. Clutter has no
+   * such shape to describe, and it is the one thing in the room a player walks
+   * into at ankle height, so the box that stops them and the box they can see
+   * come from the same three numbers. It also keeps the prop out of the
+   * background layer a weak tier sheds: an obstacle that a quality setting can
+   * make invisible is an invisible wall.
+   */
+  readonly obstacle?: boolean;
 }
 
 const REACTION_BY_FAMILY: Readonly<Record<PropFamily, InnocentReactionId>> = {
@@ -156,6 +171,7 @@ interface PlacementInput {
   readonly innocentReactionId?: InnocentReactionId;
   readonly focus: readonly [number, number, number];
   readonly practical?: PracticalLight;
+  readonly obstacle?: boolean;
 }
 
 function p(input: PlacementInput): PropPlacement {
@@ -2264,14 +2280,229 @@ const SECURITY_OFFICE: readonly PropPlacement[] = [
   }),
 ];
 
+// -------------------------------------------------- Hoppable floor clutter
+
+/**
+ * Ankle-height clutter on the shop floor: two-book stacks, a small packing
+ * crate, a shallow storage box. Every piece stands taller than the 0.07 m lip a
+ * walk crosses and lower than a hop's reach, so this is the one thing in the
+ * room the jump is a route past rather than only a flourish. Before it, the
+ * lowest blocker in the Curiosity Shop was the 0.26 m bottom board of the steel
+ * rack and no hop cleared anything at all.
+ *
+ * The pieces are deliberately not accusable. A Mimic is 0.35 m tall and these
+ * are a third of that, so nothing could be hiding in one, and publishing them
+ * to the registry would only spend an Inspector's warrants on targets that can
+ * never be a player. `obstacle: true` is what keeps them drawn anyway.
+ *
+ * The Cabinet Maze gets none. Its floor is the circular route and the two
+ * crossings almost end to end, and the navigation contract keeps those clear
+ * for two Inspectors abreast.
+ */
+interface HopClutterInput {
+  readonly objectId: string;
+  readonly variant: Extract<PropVariant, "book_stack" | "crate" | "storage_box">;
+  readonly zoneId: ZoneId;
+  readonly position: readonly [number, number, number];
+  readonly rotationY: number;
+  readonly size: number;
+  readonly focus: readonly [number, number, number];
+}
+
+function hopClutter(input: HopClutterInput): PropPlacement {
+  const family: PropFamily = input.variant === "book_stack" ? "book" : "container";
+  return p({
+    objectId: input.objectId,
+    variant: input.variant,
+    categoryId: input.variant,
+    family,
+    zoneId: input.zoneId,
+    position: input.position,
+    rotationY: input.rotationY,
+    size: input.size,
+    swatchIds:
+      input.variant === "crate"
+        ? ["oak_pale_03", "iron_dark_03"]
+        : input.variant === "storage_box"
+          ? ["paint_cream_01", "walnut_mid_02"]
+          : ["velvet_burgundy_01", "wool_midnight_03"],
+    inspectable: false,
+    focus: input.focus,
+    obstacle: true,
+  });
+}
+
+/**
+ * Heights are the top of the geometry the builder actually makes, quoted so a
+ * comment naming one is a claim that can be checked: a two-book stack is
+ * 0.055 + 0.044 m of covers, a 0.16 m crate is 0.66 of its edge plus half a
+ * 0.07 m board, and a 0.24 m storage box is 0.42 of its width plus the lid.
+ */
+const HOP_CLUTTER: readonly PropPlacement[] = [
+  // A — the window bay, on the boards in front of the display deck.
+  hopClutter({
+    objectId: "window_clutter_books_01",
+    variant: "book_stack",
+    zoneId: "front_window",
+    position: [-4.3, 0, -3.9],
+    rotationY: 0.4,
+    size: 2,
+    focus: [0.3, 0.1, 0.25],
+  }),
+  hopClutter({
+    objectId: "window_clutter_crate_01",
+    variant: "crate",
+    zoneId: "front_window",
+    position: [-2.2, 0, -4.3],
+    rotationY: -0.25,
+    size: 0.16,
+    focus: [0.19, 0.15, 0.19],
+  }),
+  hopClutter({
+    objectId: "window_clutter_box_01",
+    variant: "storage_box",
+    zoneId: "front_window",
+    position: [2.2, 0, -3.6],
+    rotationY: 0.15,
+    size: 0.24,
+    focus: [0.27, 0.15, 0.22],
+  }),
+
+  // B — the clock wall, along the run under the bookcases.
+  hopClutter({
+    objectId: "clockwall_clutter_books_01",
+    variant: "book_stack",
+    zoneId: "clock_wall",
+    position: [-6.6, 0, -2.0],
+    rotationY: -0.2,
+    size: 2,
+    focus: [0.3, 0.1, 0.25],
+  }),
+  hopClutter({
+    objectId: "clockwall_clutter_books_02",
+    variant: "book_stack",
+    zoneId: "clock_wall",
+    position: [-5.2, 0, -0.9],
+    rotationY: 0.55,
+    size: 2,
+    focus: [0.3, 0.1, 0.25],
+  }),
+  hopClutter({
+    objectId: "clockwall_clutter_box_01",
+    variant: "storage_box",
+    zoneId: "clock_wall",
+    position: [-6.3, 0, 0.9],
+    rotationY: -0.35,
+    size: 0.24,
+    focus: [0.27, 0.15, 0.22],
+  }),
+
+  // C — the reading nook, between the armchair and the way in.
+  hopClutter({
+    objectId: "nook_clutter_books_01",
+    variant: "book_stack",
+    zoneId: "reading_nook",
+    position: [-2.0, 0, 4.4],
+    rotationY: 0.3,
+    size: 2,
+    focus: [0.3, 0.1, 0.25],
+  }),
+  hopClutter({
+    objectId: "nook_clutter_crate_01",
+    variant: "crate",
+    zoneId: "reading_nook",
+    position: [-4.9, 0, 2.7],
+    rotationY: 0.2,
+    size: 0.16,
+    focus: [0.19, 0.15, 0.19],
+  }),
+  hopClutter({
+    objectId: "nook_clutter_books_02",
+    variant: "book_stack",
+    zoneId: "reading_nook",
+    position: [-6.5, 0, 2.6],
+    rotationY: -0.5,
+    size: 2,
+    focus: [0.3, 0.1, 0.25],
+  }),
+
+  // D — the counter, on the customer side and behind it.
+  hopClutter({
+    objectId: "counter_clutter_books_01",
+    variant: "book_stack",
+    zoneId: "collectors_counter",
+    position: [0.3, 0, 2.7],
+    rotationY: 0.45,
+    size: 2,
+    focus: [0.3, 0.1, 0.25],
+  }),
+  hopClutter({
+    objectId: "counter_clutter_crate_01",
+    variant: "crate",
+    zoneId: "collectors_counter",
+    position: [3.4, 0, 4.75],
+    rotationY: -0.4,
+    size: 0.16,
+    focus: [0.19, 0.15, 0.19],
+  }),
+  hopClutter({
+    objectId: "counter_clutter_box_01",
+    variant: "storage_box",
+    zoneId: "collectors_counter",
+    position: [0.6, 0, 4.7],
+    rotationY: 0.1,
+    size: 0.24,
+    focus: [0.27, 0.15, 0.22],
+  }),
+
+  // F — the back workshop, where a shop this untidy would really keep it.
+  hopClutter({
+    objectId: "workshop_clutter_crate_01",
+    variant: "crate",
+    zoneId: "back_workshop",
+    position: [4.4, 0, -0.9],
+    rotationY: 0.3,
+    size: 0.16,
+    focus: [0.19, 0.15, 0.19],
+  }),
+  hopClutter({
+    objectId: "workshop_clutter_box_01",
+    variant: "storage_box",
+    zoneId: "back_workshop",
+    position: [6.3, 0, 1.3],
+    rotationY: -0.2,
+    size: 0.24,
+    focus: [0.27, 0.15, 0.22],
+  }),
+  hopClutter({
+    objectId: "workshop_clutter_books_01",
+    variant: "book_stack",
+    zoneId: "back_workshop",
+    position: [4.9, 0, -3.9],
+    rotationY: -0.6,
+    size: 2,
+    focus: [0.3, 0.1, 0.25],
+  }),
+];
+
+/** The clutter of one zone, in the authored order, for splicing into its run. */
+function hopClutterIn(zoneId: ZoneId): readonly PropPlacement[] {
+  return HOP_CLUTTER.filter((placement) => placement.zoneId === zoneId);
+}
+
 export const SHOP_PLACEMENTS: readonly PropPlacement[] = [
   ...FRONT_WINDOW,
+  ...hopClutterIn("front_window"),
   ...CLOCK_WALL,
+  ...hopClutterIn("clock_wall"),
   ...cabinetPlacements(),
   ...CABINET_TOPS,
   ...READING_NOOK,
+  ...hopClutterIn("reading_nook"),
   ...COUNTER,
+  ...hopClutterIn("collectors_counter"),
   ...WORKSHOP,
+  ...hopClutterIn("back_workshop"),
   ...SECURITY_OFFICE,
 ];
 

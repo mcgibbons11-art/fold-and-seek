@@ -106,6 +106,19 @@ export class GameHost {
   private accumulator = 0;
   /** Identifies the round currently opening, so a stale build can stand down. */
   private roundToken = 0;
+  /**
+   * True while the shader sweep has the post chain aimed at the shop.
+   *
+   * The menu room goes on rendering behind the loading screen, and one frame of
+   * it would rebind the post chain to the menu's scene and camera — which
+   * rebuilds the graph, allocates a new scene-pass render target, and so throws
+   * away every program the sweep has built so far, since a render object is
+   * cached against its render context and a new target is a new context. The
+   * sweep yields a frame between batches, so that would happen dozens of times
+   * in one load. Holding the last menu frame on screen for the sweep costs
+   * nothing: a 72%-opaque loading screen is over it either way.
+   */
+  private compilingShop = false;
 
   constructor(canvas: HTMLCanvasElement, callbacks: GameHostCallbacks = {}, options: GameHostOptions = {}) {
     this.canvas = canvas;
@@ -252,9 +265,26 @@ export class GameHost {
     try {
       onProgress({ label: "the mimics", fraction: (tail - 1) / tail });
       await session.prewarmDisguises(PREWARM_BODY_COUNT, async () => {
-        onProgress({ label: "the shaders", fraction: (tail - 0.5) / tail });
+        onProgress({ label: "the shaders", fraction: (tail - 1) / tail });
         await nextFrame();
-        await shop.precompile(this.renderer.renderer, session.camera);
+        this.compilingShop = true;
+        try {
+          // The bar advances across the shader sweep rather than sitting on one
+          // number: this is the longest part of the load on a weak GPU, and a
+          // frozen figure is indistinguishable from a hung tab.
+          await shop.precompile(
+            this.renderer.renderer,
+            this.renderer.post,
+            session.camera,
+            async (done, total) => {
+              if (abandoned()) return;
+              onProgress({ label: "the shaders", fraction: (tail - 1 + done / total) / tail });
+              await nextFrame();
+            },
+          );
+        } finally {
+          this.compilingShop = false;
+        }
       });
     } catch (error) {
       // Neither is installed yet, so nothing else will ever release them: a
@@ -497,7 +527,7 @@ export class GameHost {
 
     if (session !== null && shop !== null) {
       this.renderer.render(shop.scene, session.camera);
-    } else if (world !== null) {
+    } else if (world !== null && !this.compilingShop) {
       this.renderer.render(world.scene, forge === null ? world.camera : forge.camera);
     }
     this.overlay?.update(timeMs, rawDelta * 1000, this.snapshot);

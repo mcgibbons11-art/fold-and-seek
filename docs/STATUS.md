@@ -1,5 +1,473 @@
 # STATUS
 
+## A bot in a white shell is not hiding (2026-08-02)
+
+**The round-5 critic photographed a white mannequin lying in the open on the
+floorboards** while the board read three bots still standing, and the diagnosis
+offered with it was that the authored bot poses never reach a real round. That
+diagnosis is **wrong, and the evidence is now a test**: `createLocalRound` — the
+factory the shipping build actually calls — carries every bot into the hunt
+wearing the arrangement its hiding place was authored for, joint for joint, at
+the authored root. `localRound.test.ts` could not have caught the difference
+either way, because it wires a `botPose` of its own rather than driving the
+production factory, which is the gap `localRoundBots.test.ts` closes.
+
+**What was actually wrong is one line that was never written.**
+`createBotDisguise` sets the arrangement, the root, the yaw, the map and the
+revision, and never touches `materials`. A bot has no eyedropper, so it reached
+the hunt in `mimic_porcelain`, the near-white shell **every Mimic starts in**
+(§17.3) — and a white body on brown floorboards is picked out from across the
+shop whatever shape it has folded into. Each hiding place now names a finish
+chosen for what stands around it: walnut in the clock-wall aisle, oxidized
+copper in the bay under the workshop bench, glazed ceramic in front of the
+counter, brass on the steel rack, burgundy velvet in the reading nook. The
+regression test **was confirmed to fail with that line removed**, reporting the
+exact swatch in the screenshot.
+
+**Half of the hiding places stand in the open on purpose**, and that part of the
+critic's reading was the design rather than a fault: `botDisguises.ts` says in so
+many words that three of the six plans fold into cover and three stand out and
+fidget, because a room where every bot is invisible has no stakes either. What
+those three were missing was a reason to read as furniture rather than as a
+robot, which is the colour.
+
+**One consequence, stated rather than hidden.** The hunt's prewarm builds its
+four placeholder bodies in porcelain, so a cast that recoloured itself now
+allocates one material per distinct finish at the transition. That was already
+true of any **human** who sampled a colour in the Forge; bots wearing the default
+were the only reason the theatre's "adds no material" test held. The count is one
+per swatch and never one per body, which is the invariant the pool exists for and
+which the test now states directly. Per the draw-call merge work, three keys its
+material cache on property values and its programs on generated source, so a
+swatch differing only in colour is a new material object and not a new shader —
+**that claim is inherited and was not re-measured here.** Warming the legal
+swatches inside `prewarm` would close it outright if a measurement ever asks.
+
+**Verified.** `pnpm -r typecheck` clean, `pnpm -r test` green (708 client over 68
+files, 163 game-sim, 47 shared, 23 server), `vite build` green at 244 modules,
+1.71 MB / 485 KB gzip. Four new cases in `tests/gameplay/localRoundBots.test.ts`,
+all driving the real `createLocalRound` to the hunt: every bot on an authored
+hiding place and at neither a Mimic spawn nor the origin, the authored
+arrangement joint for joint, a legal non-default finish on every published
+disguise, and a finish authored for all six plans rather than the three a
+three-bot room happens to deal. Three cases in `disguiseTheatre.test.ts` were
+re-expressed rather than relaxed: the creep case now moves one hiding place
+along its own fidget, which is what a live hunt sends, instead of swapping two
+plans that are now two different colours.
+
+**Not verified: nobody has looked at the recoloured bots in a browser.** Whether
+walnut and glazed ceramic actually read as shop objects at giant scale, rather
+than as coloured robots, is a judgement only playing it can make, and it is the
+next thing a critic should be pointed at.
+
+## The load was compiling shaders nothing would ever bind (2026-08-02)
+
+Three browser-proven defects from the round-5 critic, and one sim change.
+
+### The 85-second freeze: the precompile was aimed at the wrong render context
+
+**The measurement**, from the critic's trace on ANGLE/D3D11: `getProgramParameter`
+called 1,098 times totalling 87,883 ms, a single call peaking at 1,396 ms,
+`linkProgram` itself only 4 ms, and one unbroken 85,333 ms gap between animation
+frames with the loading screen frozen on one number behind it.
+
+**The cause is not that the shop has too many shaders. It is that they were
+compiled twice, and the second time synchronously.** A render object in three
+r185 is cached against its render context, and a render context is keyed on the
+render target and the multiple-render-target layout
+(`Renderer._renderContexts.get(renderTarget, this._mrt)`, and `getCacheKey` over
+the target's texture ids). `RenderPipeline` draws the shop through a TSL
+`pass(scene, camera)` under an MRT of output, emissive and normal. The old
+`ShopWorld.precompile` called `renderer.compileAsync(scene, camera)` with no
+render target and no MRT set, so **every program it built belonged to a context
+the game never binds** — a different fragment shader, since the MRT changes the
+output layout. The first real frame then found none of them and linked the lot on
+the main thread, where `WebGLBackend.createRenderPipeline` takes the
+`promises === null` branch straight into `_completeCompile` and its blocking
+`getProgramParameter(LINK_STATUS)`. That frame is the 85-second gap.
+
+**The 20-second deadline could not have saved it either way.** It was a
+`setTimeout` raced against one `compileAsync`, and a timer is a task: it cannot
+interrupt the call it is racing. Losing the race changed nothing about what the
+main thread was doing.
+
+**Three changes, and each is load-bearing.**
+
+`RenderPipeline.compileInScenePass` sets the renderer's render target and MRT to
+the scene pass's own for the duration of a compile and puts both back, which is
+the same thing `PassNode.compileAsync` does, applied per batch instead of per
+scene. This is the change that makes the work count. Without it the rest is
+faster waste.
+
+`compileSceneInBatches` compiles **one drawable per `compileAsync` call**, eight
+to a batch, handing the frame back between batches and checking the wall clock at
+those seams. Frustum culling is switched off for the single object being compiled
+and put straight back, rather than off across the whole map for the length of the
+call, which is what queued all ~174 programs into one animation frame. The
+deadline is now a promise the code can keep, and the loading bar advances through
+the sweep instead of sitting on 95%.
+
+**Order is what makes the deadline survivable.** Whatever the sweep does not
+reach is compiled lazily, on the frame that first draws it, and on WebGL 2 that
+compile is synchronous, so the one set that must never be cut is the set the next
+frame submits. `visibleFirst` puts the camera's own view at the front of the
+queue and everything else behind it, so a deadline costs the player a hitch when
+they turn around rather than the whole first frame.
+
+**The menu had to stop drawing for the sweep.** It renders behind the loading
+screen, and one frame of it rebinds the post chain to the menu's scene and
+camera, which rebuilds the graph and allocates a new scene-pass render target: a
+new context, so every program built so far is orphaned. The sweep yields a frame
+between batches, so that would have happened dozens of times per load.
+`GameHost.compilingShop` holds the last menu frame instead, and a 72%-opaque
+loading screen is over it either way.
+
+**Not verified: none of this was measured in a browser.** The diagnosis is read
+out of three r185's source, not out of a GPU trace, and the claim that wants
+checking first is the simple one, that the sweep's programs survive to the first
+frame. Six tests in `tests/world/precompileBatches.test.ts` cover what is
+testable headlessly: one call per drawable, yields on batch boundaries and
+nowhere else, a deadline that stops the sweep short, visible-before-hidden order
+(confirmed to fail with the ordering pass removed), culling flags restored
+exactly, and hidden subtrees and unrendered layers skipped the way a frame skips
+them.
+
+**Found and not fixed, and it is the next thing to look at.** `RenderPipeline`
+rebuilds its whole graph whenever the *camera* changes, and `RoundSession.camera`
+swaps to the Forge's camera at the Forge phase and back afterwards. A rebuilt
+pass is a new render target and therefore a new context, so entering the Forge
+relinks the shop, which is the same stall at a different moment. Swapping
+`scenePass.camera` in place is not enough on its own: `GTAONode` binds
+`uniform(camera.projectionMatrix)` and `reference('near', 'float', camera)` to
+the camera object it was constructed with, so the AO node has to be rebuilt with
+it. That is a change to the post chain and was left alone rather than made under
+this pass's clock.
+
+### The hider's rail did not fit 720p
+
+At 1280x720 the eight-chip rail (taunt, five Forge tools, mirror, board) drew
+474 px into a 420 px region, cutting the taunt off the top and the missed-spot
+board off the bottom. A chip now takes an **explicit height** from `RAIL_SIZES`
+rather than whatever its text measures, and the rail picks the largest size whose
+arithmetic fits its region: roomy at 1080p, compact at 720p, where eight chips
+come to 342 px. Content that outgrows a chip is clipped inside it, the same rule
+the regions follow. `hudLayout.test.ts` checks the arithmetic against the region
+box, including the worst case of every chip carrying a note (412 px against 420),
+and that the Inspector's three-chip rail is not shrunk because eight of them
+would have been. `huntHud.test.ts` checks the component acts on it, drops no
+chip, and follows a live resize.
+
+**One finding contradicts the report.** The critic read "two nested scrollbars"
+in the left column, and there is only one: a jsdom test enumerating every element
+in the region that declares a vertical scroll finds exactly one, the region
+itself, and it passed before any change here. What the screenshot shows is one
+scrollbar whose thumb is about a quarter of its track, which is the real problem
+underneath. A live hider's column stacks the status card, the board and the whole
+Forge tool panel, and at 720p that is roughly four times its region. The guard
+test is kept, and shortening that column is a separate piece of work.
+
+### Firing at nothing now does something
+
+A round that hits no target sends no command, spends no warrant and produces no
+event, so the authority never hears about it and the HUD had nothing to react to:
+the trigger was silent. `ShootingDriver` now counts `dryFires`, incremented on
+exactly the rounds that never become an accusation, which are no target, out of
+range, a decorative object, and an empty magazine. `RoundSession` plays
+`gun_dry_click` from `onShot` for every non-hit outcome (the report of a real
+shot is still played from the weapon's own state, so nothing doubles), and
+`InspectorSight` throws the reticle open and tints it for 200 ms whenever the
+count moves. It **counts** rather than flagging because two misses in a row are
+otherwise identical in every published field and the second would go unheard; a
+test asserts exactly that.
+
+### A solo Inspector's Forge is no longer over in ten seconds
+
+`MIN_FORGE_DWELL_MS` (25 s) is a floor on the Forge's *early* end. Bots lock on
+the frame they are dealt a disguise, so `allMimicsLocked` ended the phase almost
+immediately and the Inspector's staging beat never happened. The settings' own
+`forgeMs` still ends the phase, and the floor is `min`-ed against it, so a host
+who sets a five-second Forge gets one. It is carried in the snapshot as `fd`
+(schema version 2, with the zod schema in `packages/shared` updated to match),
+because a host migration that dropped it would end the Forge on the spot. The
+existing "minimum lock grace" test was updated rather than weakened, since it now
+runs the dwell out first, and two new tests cover the floor and the
+short-`forgeMs` case.
+
+### Verified
+
+`pnpm -r typecheck` clean across five projects. `npx vite build` green at 244
+modules, 1.71 MB / 485 KB gzip, to a scratch `--outDir`. `pnpm -r test`: shared
+47, game-sim 163, server 23 all green; client 704 of 705, the one failure being
+`tests/gameplay/localRoundBots.test.ts` on authored bot hiding places, which is a
+sibling's file and was **confirmed failing with `MIN_FORGE_DWELL_MS` set to 0**,
+so it is not this work. It went from two failures to one between two runs minutes
+apart, which is that agent landing changes as this ran.
+
+## Two people and three machines are a party (2026-08-02)
+
+**The gap this closes**, left open by name at the bottom of "The game is playable
+with other people": `LocalLoopbackOptions` had `botPose` and `botBrain` and
+`PortalsAdapterOptions` had no equivalent, so a Portals room holding one person
+could not reach `minPlayers` and simply never started. A room of two could start
+and was a thin game. **The host can now fill the empty seats**, and the bots that
+fill them play the round through the same brain practice has always used.
+
+### A bot is a player of the host's simulation and nothing else
+
+There is no bot in the protocol. The elected host seats one in its own
+`MatchSimulation` through `addPlayer`, and from that moment it travels to every
+other client the way every other player does, in the published public state. No
+peer needs a new message, a new field or a new rule to render it: it is a roster
+row with a role, a disguise and a score, and the only thing that marks it out is
+its seat.
+
+**A bot seat cannot be any seat a connection could hold.** A real seat is a
+Portals account id, a connection id, or the two joined by `~`, which is the
+separator the derived seat already rests on precisely because Portals produces it
+in neither half. A bot seat is `~bot~1`, so it carries **two** separators where
+every real seat carries at most one, and it starts with one where no account id
+can. The test walks four account ids against four connection ids, including the
+literal `bot`, and asserts no `derivedSeatId` of any pair is mistaken for one.
+
+**One driver, not two.** `networking/botSeats.ts` holds what a bot seat is and
+what it does; the loopback's `driveBots` moved into it wholesale and both
+adapters now call `BotSeats.drive`. `gameplay/botPlay.ts` is the other half, the
+Curiosity Shop brain that used to live inside `localRound.ts`, and
+`createPortalsRound` passes it exactly as it passes the object registry and the
+validator: to every client, because whoever is promoted has to go on driving
+them.
+
+### Surviving a change of host, in two different ways
+
+Bots are in the authoritative snapshot as players, so a resumed round only has to
+name them. `MatchSimulation.restore` evicts any player the caller does not list
+in `seatedPlayerIds`, and no connection vouches for a bot, so the successor reads
+the bot seats out of the snapshot's own player list and seats them alongside the
+live connections. Losing that line would silently delete every bot on the first
+migration, which is why the test drops the host mid-hunt and then measures the
+bots' disguises **still travelling** under the new one rather than merely
+counting rows.
+
+**A lobby has no snapshot at all** — nothing is worth resuming there and the
+room's secrets have no business sitting in shared state between rounds — so on a
+change of host in the lobby the published roster is the only record the bots
+have. The successor rebuilds them from it in seat order, so whichever client had
+been promoted would have built the same room.
+
+### The rematch, which bots would otherwise decide
+
+`resolveRematch` counts every connected player as a voter and needs a strict
+majority to say yes. Bots are connected players, so **bots that abstain are no
+votes**: a solo practice round has been unable to rematch for as long as it has
+had three bots in it, and three existing tests hand-voted for the bots to get
+past it. Bots that always said yes would be worse, carrying a room of one person
+and three machines into another round over its only objection.
+
+**The bots vote with the people, and not at all until the people have decided.**
+Writing H for the connected people, y for their yes votes and B for the bots: a
+human majority yes means 2y > H, so 2(y + B) > H + B and the rematch runs; a
+human majority no leaves the yes count at y with 2y ≤ H < H + B, so it does not.
+The bots never carry a rematch and never block one, and an undecided room does
+not rematch, which is what an undecided room means anyway. Two tests hold the
+two halves apart: three bots against two people who both say yes get their
+rematch, and three bots against one person who says no go back to the lobby. The
+counts a bot needs come off `rematch_vote_cast`, which already carries the voter
+and which way they went.
+
+### Three smaller things the seats forced
+
+**A bot's private stream never reaches the wire.** Roles, watched levels and
+refusals are all addressed to a seat, and nobody is connected on a bot's, so
+queueing them would spend a message per bot per flush on a message no client will
+accept. The host reads them straight off its own simulation instead, and a test
+records everything one peer hears and asserts no envelope is addressed to a bot.
+
+**A room full of bots is not full to a person.** Bots count toward `maxPlayers`,
+so a host who filled the room out would have turned their own friend away with
+`room_full`. The host now gives up its most recently added bot — the seat with
+the least of the round invested in it — rather than keeping a machine in
+preference to somebody who wants to play.
+
+**And the joiner stopped refusing itself.** Writing that test found a race that
+predates bots: the host seats a joiner the moment the relay reports it and can
+publish again before that joiner has read the state it was handed, so a
+publication that already names the newcomer's own seat could push a full room's
+early check over the line and make the client refuse a seat it was already
+holding. The check now stands down when the publication names this connection's
+seat, and it is a courtesy either way — the host decides, and refuses with a
+reason of its own.
+
+### The control, and why it does not travel
+
+`LobbyHud` gains a plus and a minus beside a count, and the roster labels a bot
+row `bot` so three rows do not read like three people. Both controls run against
+the host's own simulation through `NetworkAdapter.bots`, an optional capability
+the loopback and Portals implement and the dedicated server does not. **A wire
+command was considered and rejected**: only the host may seat anyone, so the
+command would exist for the host to send to itself and would give every other
+client a message to refuse. `canManageBots()` is what the lobby asks, and it is
+true for the elected host alone.
+
+### Verified
+
+`pnpm -r typecheck` clean across five projects, `pnpm -r test` green (695 client
+over 66 files, 163 game-sim, 47 shared, 23 server), and `vite build` green at 244
+modules, 1.71 MB / 485 KB gzip, to a scratch `--outDir`. Ten new cases: eight in
+`tests/networking/portalsNet.test.ts` covering the seat-id space, host-only
+seating with all three clients agreeing on a five-row roster, one person and two
+bots starting a round that was refused as `not_enough_players` moments earlier,
+the mid-hunt migration above, the lobby-phase migration, the bot seat given up
+for a person, and the two halves of the rematch rule; and two in
+`tests/ui/lobbyBots.test.tsx`, which drive the real adapter, director, actions
+and HUD rather than a hand-written view state.
+
+**Not verified: none of this was run inside Portals**, and the bot brain the
+Portals tests use is a stub that creeps a disguise along one axis rather than the
+shop's own. That is deliberate — the point of those tests is that the host calls
+a brain on simulation time and feeds what it returns back into the round — but it
+means the Curiosity Shop brain is still only exercised through practice.
+
+**Worth knowing for the next session:** `MIN_FORGE_DWELL_MS` landed in the
+simulation from another agent while this was running. The Forge no longer ends
+the moment every Mimic has locked, so a fixed-step test harness now pays the
+phase's full authored length; three existing cases in `portalsNet.test.ts` failed
+on their step budgets and the harness default moved from 60 to 120. Nothing about
+those cases changed.
+
+## Something to hop over, a drag that creeps, and an anchor that cannot name a creature (2026-08-02)
+
+Three fixes to the map and the Forge, all of them things a previous pass wrote
+down as known and left standing.
+
+### A saved anchor could name a parked Mimic
+
+`ForgeController` captures the room as the scene's children at construction, and
+that now happens after `DisguiseTheatre` has built the hunt's four bodies and
+parked them twenty metres under the boards. Every part of a Mimic carries a name
+of its own, so `indexAnchorSurfaces` was publishing `mimic_torso_upper` and
+twenty-odd siblings as surfaces a hand could be sealed to. An anchor stores its
+surface by name and resolves it again the next time the disguise loads, so one
+naming a body would either resolve against whichever body held that name or,
+parked, against nothing at all.
+
+**A Mimic body now says what it is.** `MimicVisual` tags its root with
+`MIMIC_BODY_TAG`, and the Forge keeps a second list, `anchorObjects`, which is
+the room minus the creatures in it. The index, the contact probe, the wall search
+and the perch search all read that list. **The eyedropper still reads the whole
+room**, because copying a colour off a peer's disguise is a fair thing to do and
+was a deliberate decision in the merge pass.
+
+The probe is filtered as well as the index, and that is the load-bearing half.
+Filtering only the index would have let a drag still capture an anchor onto a
+body, which would then fail to resolve and be dropped as unreachable, which is a
+quieter failure than the one being fixed rather than a fix.
+
+`forgeView.test.ts` prewarms a real theatre, moves its four bodies into the room
+the Forge is built against, and asserts no indexed surface starts with `mimic_`
+while a plain named shelf beside them is still there. **It was confirmed to fail
+with the filter removed**, printing the Mimic part names, so it reproduces the
+reported bug rather than describing it.
+
+### The shop now has something a hop is a route past
+
+The jump landed with nothing in the Curiosity Shop low enough to clear. The
+lowest blocker in the room was the steel rack's bottom board at 0.26 m against a
+hop's reach of 0.228 m, so the only proof that a hop crossed anything was a kerb
+the test built for itself.
+
+**Fifteen pieces of ankle-height clutter** now stand in five zones, three each in
+the window bay, the clock wall, the reading nook, the counter and the workshop.
+They are two-book stacks at 0.10 m, small packing crates at 0.15 m and shallow
+storage boxes at the same, every one of them above the 0.07 m lip a walk crosses
+and below what a hop reaches. The Cabinet Maze gets none, because its floor is
+the circular route and the two crossings almost end to end and the navigation
+contract keeps those clear for two Inspectors abreast.
+
+**The blocker is derived from the prop, not written out beside it.** The shop's
+furniture is authored the other way round, one hand-written box per prop, because
+each needs a shape describing it: a bench blocks its legs and opens its bay, a
+rack blocks its boards and leaves the gaps. Clutter has nothing to describe, and
+it is the only obstacle in the room a player meets below the knee, so
+`nav.ts` takes its box straight from the placement's own footprint through the
+same rotated-extent arithmetic the focus box uses. The two cannot drift apart.
+
+**None of it is accusable, and all of it is drawn on every tier.** A Mimic is
+0.35 m tall and these are a third of that, so nothing could be hiding in one and
+publishing them to the object registry would only spend an Inspector's warrants
+on targets that can never be a player. That normally means `inspectable: false`,
+which puts a prop in the background layer a weak tier stops drawing, and an
+obstacle a quality setting can make invisible is an invisible wall. The new
+`obstacle` flag is what separates the two questions, and both `layerFor` and
+`lodGroupFor` read it.
+
+`jump.test.ts` now drives the traversal at the workshop's own crate rather than
+at a fixture, and asserts three things about it: a walk stops a player radius
+short of its face and no further, a hop with the same approach ends past its far
+side and back on the floor, and every piece of clutter in the map falls inside
+the band between the step lip and the hop's reach, both bounds derived rather
+than restated.
+
+**A hop is not a vault, and the test says so.** The body is clear of a blocker
+only while its feet are above the obstacle's top less a step height, which is a
+fraction of a second, and `blocksCapsule` grows every box by the player radius.
+A single arc therefore does not carry a body over a crate. Holding the key does,
+in three or four hops. That is what the original kerb test was measuring too.
+
+### A pointer drag now creeps at the same speed the keys do
+
+`CharacterController` caps the walk keys by clamping its velocity to
+`hiderCreepSpeed` every frame, which is what stopped the client predicting a
+creep the authority would refuse. The pelvis handle had no such cap, so a quick
+drag during the hunt came back `moved_too_fast` and the body the player was
+holding snapped to the one the room had.
+
+**The drag is given the same allowance frame by frame.** `ForgeController` holds
+the creep speed itself now rather than only forwarding it, refreshes a metre
+budget in `update`, and clamps a pelvis drag's displacement into it before the
+target moves. Nothing is banked while the pointer is idle, which makes the client
+strictly stricter than the authority, since the authority measures from the last
+pose it accepted and owes a still body every second of it. A rule that is never
+looser cannot produce the refusal it exists to prevent.
+
+**A frame that overspends carries the debt forward.** Two things can move the
+root further than the pointer asked. A pelvis released near a surface snaps onto
+it, up to `ANCHOR_SNAP_RADIUS_M`, which is 0.036 m against a publication
+interval's budget of 0.0875 m. And an anchored contact point being dragged walks
+the root toward its anchors. Both are charged after the solve, against the root's
+real displacement rather than the pointer's, so an overspend freezes the next
+drags until it is repaid instead of being forgiven.
+
+`tests/forge/rootDragCreep.test.ts` opens a real loopback round with the local
+seat dealt a Mimic, stands a real `ForgeController` on the map's own Mimic spawn,
+locks its disguise, and then hauls the pelvis handle across the viewport for two
+seconds while publishing on the round's own interval. **Nothing is refused**, the
+body covers between half and all of the two-second budget rather than being
+frozen, and the room's copy of the root matches the local one to the wire's
+precision. Its companion runs the identical drag with the cap released and gets
+`moved_too_fast` back, so the first is proving a live rule.
+
+**Known, and not closed.** Only the pelvis drag is clamped, because it is the one
+whose target the solver writes straight into the root and clamping a hand drag
+would slow limb posing during the hunt for no reason the authority asks for. A
+hand dragged while a contact anchor is sealed can still walk the root through the
+anchor pass faster than the cap for a frame. The debt accounting throttles what
+follows, and the motion is bounded by how far the body is from its own anchors
+rather than running away, but it is a hole rather than a covered case.
+
+**Still open, and out of this pass:** `CharacterController` checks blockers along
+a step but not along a fall, so a body that runs off the window deck can land
+inside furniture (backlog item 20.3).
+
+### Verified
+
+`pnpm -r typecheck` clean across five projects. `npx vite build` green at 244
+modules, 1.71 MB and 484 KB gzipped, to a scratch `--outDir`. The client suite is
+683 passing over 64 files, which is every file except
+`tests/networking/portalsNet.test.ts`, and `pnpm -r test` has one game-sim
+failure in `tests/hardening.test.ts`. **Both of those belong to the bot-seats work
+landing in `packages/game-sim` and `networking/` at the same time**, neither of
+which this pass touches, and both were failing on files it did not edit.
+
 ## Paint parity: the glow channel, and an undo that undoes paint (2026-08-02)
 
 **Two halves of MECCHA's paint panel were still missing** (CLAUDE.md override 3).

@@ -3,17 +3,21 @@ import {
   type MatchCommand,
   type MatchSettingsPatch,
   type ObjectRegistry,
-  type PrivateMatchState,
   type PrivateSimEvent,
-  type PublicMatchState,
   type SimEvent,
   type SimOutput,
   type SpatialValidator,
 } from "@foldseek/game-sim";
-import { MatchPhase } from "@foldseek/shared";
+import {
+  BotSeats,
+  type AddBotOptions,
+  type BotSeatOptions,
+  type BotSeatSink,
+} from "./botSeats";
 import {
   EMPTY_SYNC,
   idleConnection,
+  type BotSeatControls,
   type CommandRejection,
   type ConnectionState,
   type ForgeSnapshot,
@@ -25,6 +29,14 @@ import {
 } from "./NetworkAdapter";
 import { Signal } from "./signal";
 
+export type {
+  AddBotOptions,
+  BotAction,
+  BotBrain,
+  BotSeatOptions,
+  BotTurn,
+} from "./botSeats";
+
 /**
  * Runs MatchSimulation in the page for practice and offline play. Commands go
  * straight into the simulation and its output comes straight back out, so the
@@ -34,9 +46,8 @@ import { Signal } from "./signal";
 
 export const LOCAL_TICK_HZ = 10;
 export const LOCAL_SELF_ID = "local-self";
-const BOT_POSE_PREFIX = "bot-pose-";
 
-export interface LocalLoopbackOptions {
+export interface LocalLoopbackOptions extends BotSeatOptions {
   readonly settings?: MatchSettingsPatch;
   readonly seed?: number;
   readonly tickHz?: number;
@@ -49,58 +60,6 @@ export interface LocalLoopbackOptions {
   readonly spatial?: SpatialValidator;
   /** Objects an Inspector may accuse. Defaults to the simulation's own fixture. */
   readonly objectRegistry?: ObjectRegistry;
-  /**
-   * Encoded disguise an auto-playing bot locks, by seat order. Returning null
-   * leaves the bot to the simulation's §5.8 fallback, which is a starting
-   * arrangement at the world origin rather than anywhere in the room.
-   */
-  readonly botPose?: (index: number, playerId: string) => string | null;
-  /**
-   * Behaviour for auto-playing bots beyond readying up and locking: patrolling,
-   * accusing, creeping. Omitted, bots lock a disguise and do nothing else, and
-   * a round in which the bots inspect runs the clock out.
-   */
-  readonly botBrain?: BotBrain;
-}
-
-/**
- * What one bot may do on one tick. A command is anything a player could send;
- * a forge snapshot is the pose channel, which is not a command because it is
- * validated on its own terms (creep speed, revision, play volume).
- */
-export type BotAction =
-  | { readonly kind: "command"; readonly command: MatchCommand }
-  | { readonly kind: "forge_snapshot"; readonly encodedPose: string; readonly revision: number };
-
-export interface BotTurn {
-  /** Seat order, which is what `botPose` indexes bot disguises by. */
-  readonly index: number;
-  readonly playerId: string;
-  readonly nowMs: number;
-  readonly publicState: PublicMatchState;
-  /**
-   * This bot's own private state. No other seat's is ever offered here, so a
-   * brain cannot read another player's role or disguise even by mistake.
-   */
-  readonly privateState: PrivateMatchState;
-}
-
-export interface BotBrain {
-  act(turn: BotTurn): readonly BotAction[];
-  /** A bot that has left the room, so any state kept for it can go. */
-  release?(playerId: string): void;
-}
-
-export interface AddBotOptions {
-  readonly displayName?: string;
-  /** Bots ready up and lock a placeholder pose so a solo round can progress. */
-  readonly autoPlay?: boolean;
-}
-
-interface Bot {
-  readonly playerId: string;
-  readonly displayName: string;
-  readonly autoPlay: boolean;
 }
 
 export class LocalLoopbackAdapter implements NetworkAdapter {
@@ -118,17 +77,32 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
   private readonly syncSignal = new Signal<MatchSync>();
 
   private sim: MatchSimulation | null = null;
-  private readonly bots: Bot[] = [];
+  private readonly botSeats: BotSeats;
   private displayName = "Visitor";
   private connection: ConnectionState = idleConnection("local");
   private sync: MatchSync = EMPTY_SYNC;
   private timer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
 
+  /**
+   * Bot seats, for the lobby's add and remove controls. Practice starts with
+   * three, and the local player is always the host, so the only thing that can
+   * stop either verb is not having joined yet.
+   */
+  readonly bots: BotSeatControls = {
+    canManageBots: () => this.sim !== null,
+    addBot: () => (this.sim === null ? null : this.addBot()),
+    removeBot: (seatId: string) => {
+      this.removeBot(seatId);
+    },
+    botSeatIds: () => this.botSeats.ids(),
+  };
+
   constructor(options: LocalLoopbackOptions = {}) {
     this.options = options;
     this.tickHz = options.tickHz ?? LOCAL_TICK_HZ;
     this.clock = options.now ?? (() => performance.now());
+    this.botSeats = new BotSeats(options);
   }
 
   async connect(): Promise<void> {
@@ -147,7 +121,7 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
       this.options.objectRegistry,
     );
     this.publish(this.sim.addPlayer(LOCAL_SELF_ID, { displayName, isHost: true }));
-    for (const bot of this.bots) {
+    for (const bot of this.botSeats.list()) {
       this.publish(this.sim.addPlayer(bot.playerId, { displayName: bot.displayName }));
     }
 
@@ -256,22 +230,17 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
    * seated when the session starts.
    */
   addBot(options: AddBotOptions = {}): string {
-    const playerId = `bot-${this.bots.length + 1}`;
-    const displayName = options.displayName ?? `Bot ${this.bots.length + 1}`;
-    this.bots.push({ playerId, displayName, autoPlay: options.autoPlay ?? true });
+    const bot = this.botSeats.add(options);
     if (this.sim) {
-      this.publish(this.sim.addPlayer(playerId, { displayName }));
+      this.publish(this.sim.addPlayer(bot.playerId, { displayName: bot.displayName }));
       this.emitRoster();
       this.emitSync();
     }
-    return playerId;
+    return bot.playerId;
   }
 
   removeBot(playerId: string): void {
-    const index = this.bots.findIndex((bot) => bot.playerId === playerId);
-    if (index < 0) return;
-    this.bots.splice(index, 1);
-    this.options.botBrain?.release?.(playerId);
+    if (!this.botSeats.remove(playerId)) return;
     if (this.sim) {
       this.publish(this.sim.removePlayer(playerId));
       this.emitRoster();
@@ -289,7 +258,7 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
     // moment from the one the authority is judging them in.
     const nowMs = this.clock();
     this.publish(sim.tick(nowMs));
-    this.driveBots(sim, nowMs);
+    this.botSeats.drive(sim, nowMs, this.botSink);
     this.emitSync();
   }
 
@@ -305,7 +274,7 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
     if (!this.sim) return [];
     return [
       { id: LOCAL_SELF_ID, displayName: this.displayName, isSelf: true, isAuthority: true },
-      ...this.bots.map((bot) => ({
+      ...this.botSeats.list().map((bot) => ({
         id: bot.playerId,
         displayName: bot.displayName,
         isSelf: false,
@@ -355,70 +324,17 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
     this.timer = null;
   }
 
-  /**
-   * Gets every bot through the round. Readying up in the lobby and locking a
-   * disguise in the Forge are the two things a seat must do for the match to
-   * progress at all, so they live here; everything a bot chooses to do after
-   * that is the brain's, and a round without one runs the clock out.
-   *
-   * `nowMs` is the step's own clock reading and is the only time a brain is
-   * given. Ticks are not counted anywhere: this interval is coalesced by the
-   * browser whenever the main thread is busy, so a brain that acted per callback
-   * would slow down exactly when the match did not.
-   */
-  private driveBots(sim: MatchSimulation, nowMs: number): void {
-    const phase = sim.getPhase();
-    const brain = this.options.botBrain;
-    // Taken once and shared: it is a defensive copy of the whole room, and one
-    // per bot per tick would be several disguise poses of garbage a second.
-    const publicState = brain === undefined ? null : sim.getPublicState();
-
-    for (const [index, bot] of this.bots.entries()) {
-      if (!bot.autoPlay) continue;
-      const state = sim.getPrivateStateFor(bot.playerId);
-      if (!state) continue;
-
-      if ((phase === MatchPhase.Lobby || phase === MatchPhase.Loading) && !state.ready) {
-        this.publish(sim.handleCommand(bot.playerId, { type: "player_ready", ready: true }));
-        continue;
-      }
-      if (phase === MatchPhase.Forge && state.role === "mimic" && state.ownDisguise === null) {
-        this.publish(
-          sim.handleCommand(bot.playerId, {
-            type: "lock_disguise",
-            payload:
-              this.options.botPose?.(index, bot.playerId) ?? `${BOT_POSE_PREFIX}${bot.playerId}`,
-            revision: 1,
-          }),
-        );
-        continue;
-      }
-      if (brain === undefined || publicState === null) continue;
-
-      const actions = brain.act({
-        index,
-        playerId: bot.playerId,
-        nowMs,
-        publicState,
-        privateState: state,
-      });
-      for (const action of actions) this.applyBotAction(bot.playerId, action, nowMs);
-    }
-  }
-
-  private applyBotAction(playerId: string, action: BotAction, nowMs: number): void {
-    const sim = this.sim;
-    if (!sim) return;
-    if (action.kind === "command") {
-      this.sendCommandAs(playerId, action.command);
-      return;
-    }
-    // A creep is judged on its own terms, so it goes to the pose channel rather
-    // than through handleCommand, exactly as a human hider's does, and against
-    // the moment the brain decided on it rather than a later reading of the
-    // clock, because the authority measures creep speed over that interval.
-    this.publish(sim.recordForgeSnapshot(playerId, action.encodedPose, action.revision, nowMs));
-  }
+  /** Where BotSeats puts what it decides. Bots issue commands as any seat does. */
+  private readonly botSink: BotSeatSink = {
+    applyCommand: (playerId, command) => {
+      this.sendCommandAs(playerId, command);
+    },
+    applyForgeSnapshot: (playerId, encodedPose, revision, nowMs) => {
+      const sim = this.sim;
+      if (!sim) return;
+      this.publish(sim.recordForgeSnapshot(playerId, encodedPose, revision, nowMs));
+    },
+  };
 
   /**
    * Public events reach the one local player; private events reach them only if
@@ -426,6 +342,7 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
    * transport performs.
    */
   private publish(output: SimOutput): void {
+    this.botSeats.observe(output.public);
     for (const event of output.public) this.eventSignal.emit(event);
     for (const event of output.private.get(LOCAL_SELF_ID) ?? []) this.privateSignal.emit(event);
     if (output.public.some((event) => event.type === "player_joined" || event.type === "player_left")) {

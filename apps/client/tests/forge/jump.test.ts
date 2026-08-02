@@ -10,7 +10,7 @@ import {
   type MutableVec3,
   type NavData,
 } from "../../src/inspector/navData";
-import { NAV_DATA, WALKABLE_SURFACES } from "../../src/world/maps/nav";
+import { CLUTTER_BLOCKERS, NAV_DATA, WALKABLE_SURFACES } from "../../src/world/maps/nav";
 import { box, openNavData, surface, testSettings, SHOP_FLOOR } from "../inspector/navFixture";
 
 /**
@@ -29,22 +29,23 @@ const FACING_NORTH = 0;
 const HOP_REACH_M = JUMP_HEIGHT_M + WORLD_SCALE.stepHeight;
 
 /**
- * A kerb of floor clutter: taller than the lip a walk crosses, shorter than a
- * hop's reach. Nothing in the shop is currently this low, which is the point of
- * building it here rather than borrowing one.
+ * The workshop's small packing crate, which is the obstacle these traversal
+ * claims are made against. It is a real prop with a real blocker rather than a
+ * fixture: the Curiosity Shop used to have nothing a hop could cross, so the
+ * only way to prove the jump was a route past anything was to build a kerb for
+ * it, and that proved the physics without proving the map.
  */
-const KERB_HEIGHT_M = (WORLD_SCALE.stepHeight + HOP_REACH_M) / 2;
-const KERB: AABB = box(-0.4, 0, -1.2, 0.4, KERB_HEIGHT_M, -1.0);
+const CRATE: AABB = (() => {
+  const found = CLUTTER_BLOCKERS.find(
+    (blocker) => blocker.min.x > 4.2 && blocker.max.x < 4.7 && blocker.min.z > -1.1,
+  );
+  if (found === undefined) throw new Error("the map no longer has the workshop clutter crate");
+  return found;
+})();
 
-function kerbNavData(): NavData {
-  return {
-    floors: [SHOP_FLOOR],
-    blockers: [KERB],
-    climbLinks: [],
-    spawnPoints: { inspectors: [], mimics: [] },
-    securityOffice: box(-9, 0, -9, -8, 1, -8),
-  };
-}
+/** Straight at the crate from the south, on the open boards of zone F. */
+const CRATE_APPROACH_X = (CRATE.min.x + CRATE.max.x) / 2;
+const CRATE_APPROACH_Z = CRATE.max.z + 0.5;
 
 function at(x: number, y: number, z: number): MutableVec3 {
   return { x, y, z };
@@ -100,17 +101,38 @@ describe("the hop", () => {
     expect(root.y).toBeCloseTo(0, 6);
   });
 
-  it("clears a kerb that stops a walk", () => {
-    const walked = at(0, 0, -0.5);
-    runKeys(new HiderLocomotion(kerbNavData()), ["w"], 2, walked);
-    // Walking north, the kerb's south face is at z = -1.0 and the body stops a
-    // player radius short of it.
-    expect(walked.z).toBeGreaterThan(-1.0 - WORLD_SCALE.playerRadius - 0.01);
+  it("crosses a crate on the shop's own floor that stops a walk", () => {
+    const walked = at(CRATE_APPROACH_X, 0, CRATE_APPROACH_Z);
+    runKeys(new HiderLocomotion(NAV_DATA), ["w"], 3, walked);
+    // Travelling north, the walk is held a player radius south of the crate's
+    // own face and gets no further however long the key is held.
+    expect(walked.z).toBeGreaterThan(CRATE.max.z + WORLD_SCALE.playerRadius - 0.01);
+    // And it was the crate that stopped it, rather than the walk never starting
+    // or something else in the shop getting in the way first.
+    expect(walked.z).toBeLessThan(CRATE.max.z + WORLD_SCALE.playerRadius + 0.02);
 
-    const hopped = at(0, 0, -0.5);
-    runKeys(new HiderLocomotion(kerbNavData()), ["w", " "], 2, hopped);
-    expect(hopped.z).toBeLessThan(-1.2 - WORLD_SCALE.playerRadius);
+    // The same approach with space held. A hop is not a vault: the body is
+    // clear of the blocker only while its feet are above the crate's top less a
+    // step, which is a fraction of a second, so it crosses in a few hops rather
+    // than in one bound. What matters is that it crosses at all and that it is
+    // standing on the floor when it does.
+    const hopped = at(CRATE_APPROACH_X, 0, CRATE_APPROACH_Z);
+    runKeys(new HiderLocomotion(NAV_DATA), ["w", " "], 3, hopped);
+    expect(hopped.z).toBeLessThan(CRATE.min.z - WORLD_SCALE.playerRadius);
     expect(hopped.y).toBeCloseTo(0, 6);
+  });
+
+  it("gives every piece of map clutter a height a hop crosses and a walk does not", () => {
+    // The band the clutter is authored into, taken from the map rather than
+    // restated: retuning the hop or a crate fails here rather than quietly
+    // turning a hoppable obstacle into a wall or into a lip.
+    expect(CLUTTER_BLOCKERS.length).toBeGreaterThanOrEqual(12);
+    for (const blocker of CLUTTER_BLOCKERS) {
+      const where = `clutter at ${blocker.min.x.toFixed(2)},${blocker.min.z.toFixed(2)}`;
+      expect(blocker.min.y, where).toBe(0);
+      expect(blocker.max.y, where).toBeGreaterThan(WORLD_SCALE.stepHeight);
+      expect(blocker.max.y, where).toBeLessThan(HOP_REACH_M);
+    }
   });
 
   it("reaches nothing in the shop that can be stood on", () => {

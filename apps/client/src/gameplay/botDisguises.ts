@@ -1,5 +1,6 @@
 import { Quaternion, Vector3 } from "three";
 
+import { BODY_SLOT_ID } from "../forge/materialAssignment";
 import type { SpawnPose } from "../inspector/navData";
 import {
   createStarterArrangement,
@@ -40,6 +41,15 @@ export interface BotHidePlan {
   readonly yaw: number;
   readonly arrangementId: StarterArrangementId;
   /**
+   * What the body is finished in. A bot samples no colour of its own, so
+   * without this it wears the porcelain every Mimic starts in (§17.3) — and a
+   * white shell on brown floorboards is the one thing an Inspector can pick out
+   * from across the shop whatever shape it has folded into. The swatch is
+   * chosen for what stands around the hiding place, so the body reads as
+   * something the room already owns.
+   */
+  readonly swatchId: string;
+  /**
    * Full extent of this bot's fidget, as an offset from `position`. The body
    * creeps out to it and back, so a restless bot stays inside the hiding place
    * it chose rather than wandering across the shop. A zero vector is a bot that
@@ -70,43 +80,49 @@ export const BOT_HIDE_PLANS: readonly BotHidePlan[] = [
     position: [-5.6, 0, -1.2],
     yaw: EAST,
     arrangementId: "tall",
+    swatchId: "wood_walnut",
     creepOffset: [0, 0, 0.08],
-    note: "open floor of the clock-wall aisle",
+    note: "open floor of the clock-wall aisle, as a longcase in walnut",
   },
   {
     position: [6.8, 0, -0.7],
     yaw: WEST,
     arrangementId: "compact",
+    swatchId: "metal_patina",
     creepOffset: [0, 0, 0],
-    note: "cover: the bay under the workshop bench",
+    note: "cover: the bay under the workshop bench, as oxidized copper",
   },
   {
     position: [1.2, 0, 1.6],
     yaw: NORTH,
     arrangementId: "wide",
+    swatchId: "ceramic_glazed",
     creepOffset: [0.08, 0, 0],
-    note: "open floor in front of the counter",
+    note: "open floor in front of the counter, as a glazed vessel",
   },
   {
     position: [7.05, 0.84, -3.6],
     yaw: WEST,
     arrangementId: "compact",
+    swatchId: "metal_brass",
     creepOffset: [0, 0, 0],
-    note: "cover: the second board of the steel rack",
+    note: "cover: the second board of the steel rack, as brass fittings",
   },
   {
     position: [-3.6, 0, 4.6],
     yaw: SOUTH,
     arrangementId: "tripod",
+    swatchId: "fabric_velvet_burgundy",
     creepOffset: [0, 0, -0.08],
-    note: "open floor of the reading nook",
+    note: "open floor of the reading nook, as an upholstered stool",
   },
   {
     position: [0.9, 0, -4.0],
     yaw: SOUTH,
     arrangementId: "compact",
+    swatchId: "wood_walnut",
     creepOffset: [0, 0, 0],
-    note: "cover: under the ladderback chair in the window",
+    note: "cover: under the ladderback chair in the window, as walnut",
   },
 ];
 
@@ -158,6 +174,9 @@ export function createBotDisguise(index: number, options: BotPoseOptions = {}): 
   const plan = botHidePlan(index);
   const state = createStarterArrangement(plan.arrangementId);
   state.mapId = CURIOSITY_SHOP_MAP_ID;
+  // The whole body, which is what a Mimic who samples one colour and fills with
+  // it gets. A bot has no eyedropper, so the plan does the sampling for it.
+  state.materials = [{ slotId: BODY_SLOT_ID, swatchId: plan.swatchId }];
   state.root.position = [
     plan.position[0] + plan.creepOffset[0] * progress,
     plan.position[1] + plan.creepOffset[1] * progress,

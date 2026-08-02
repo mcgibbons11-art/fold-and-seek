@@ -78,6 +78,8 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
     [session],
   );
   const onRematch = useCallback((yes: boolean) => session.actions.voteRematch(yes), [session]);
+  const onAddBot = useCallback(() => session.actions.addBot(), [session]);
+  const onRemoveBot = useCallback(() => session.actions.removeBot(), [session]);
 
   const [boardOpen, setBoardOpen] = useState(false);
   const onToggleBoard = useCallback(() => {
@@ -148,6 +150,8 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
         onStart,
         onVote,
         onRematch,
+        onAddBot,
+        onRemoveBot,
       })}
       <HudLayout
         regions={{
@@ -171,6 +175,8 @@ interface PhaseHandlers {
   readonly onStart: () => void;
   readonly onVote: (category: ResultVoteCategory, targetPublicObjectId: string) => void;
   readonly onRematch: (yes: boolean) => void;
+  readonly onAddBot: () => void;
+  readonly onRemoveBot: () => void;
 }
 
 function phaseHud(state: RoundViewState, handlers: PhaseHandlers): ReactElement | null {
@@ -183,6 +189,8 @@ function phaseHud(state: RoundViewState, handlers: PhaseHandlers): ReactElement 
           roomCode={LOCAL_ROOM_CODE}
           onReady={handlers.onReady}
           onStart={handlers.onStart}
+          onAddBot={handlers.onAddBot}
+          onRemoveBot={handlers.onRemoveBot}
         />
       );
 
