@@ -404,35 +404,50 @@ export class PortalsNetAdapter implements NetworkAdapter {
   }
 
   /**
-   * The SDK's own join, with one automatic retry.
+   * The SDK's own join, with automatic recovery.
    *
-   * Measured in the Portals editor (2026-08-02): the first join of a session
-   * can time out while still registering internally, after which every further
-   * attempt is refused with "a multiplayer session is already active — leave()
-   * first". Leaving before reporting the failure clears that, and the editor's
-   * slow first arming is then answered by trying once more rather than by the
-   * player seeing a join that failed for no reason they can act on.
+   * Measured in the Portals editor (2026-08-02, twice): the first join of a
+   * session can time out while still registering internally. The first cut of
+   * this method left and retried once — and the user's own debug log showed
+   * the hole in it: the SDK can finish registering the timed-out join AFTER
+   * our cleanup ran, so the retry itself is refused with "a multiplayer
+   * session is already active — leave() first". That refusal is not a dead
+   * end; it is PROOF a session now exists, so the answer is to leave the now
+   * real session and join again.
    *
-   * One retry, not a loop: a relay that refuses twice is refusing for a reason
-   * retrying cannot fix, and a game that keeps knocking would hide it.
+   * Shape: up to three attempts. A timeout-style failure leaves, waits, and
+   * retries. An "already active" failure leaves (this time there is
+   * definitely something to leave) and retries immediately. Anything else, or
+   * a third failure, is reported — a relay that keeps refusing is refusing
+   * for a reason knocking cannot fix.
    */
   private async joinRelay(room: string): Promise<PortalsNetSession> {
     const options = room.length > 0 ? { channel: room } : undefined;
-    try {
-      return await this.net.join(options);
-    } catch (first) {
-      console.warn("[portals] relay join failed, clearing the session and retrying once", first);
-      await this.leaveQuietly();
-      if (this.joinRetryDelayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, this.joinRetryDelayMs));
-      }
+    const attempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
       try {
         return await this.net.join(options);
-      } catch (second) {
+      } catch (error) {
+        lastError = error;
+        if (attempt === attempts) break;
+        const alreadyActive = /already active/i.test(String(error));
+        console.warn(
+          alreadyActive
+            ? "[portals] the timed-out join registered late; leaving the now-real session and retrying"
+            : "[portals] relay join failed, clearing the session and retrying",
+          error,
+        );
         await this.leaveQuietly();
-        throw second;
+        // A late registration was just cleared for certain, so rejoin at
+        // once; a timeout-style failure gets the arming delay instead.
+        if (!alreadyActive && this.joinRetryDelayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, this.joinRetryDelayMs));
+        }
       }
     }
+    await this.leaveQuietly();
+    throw lastError;
   }
 
   /** Best effort: after a failed join there may genuinely be nothing to leave. */

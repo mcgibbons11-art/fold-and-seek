@@ -48,6 +48,13 @@ export interface FakePeerOptions {
    * to survive rather than a join that simply says no.
    */
   readonly failJoins?: number;
+  /**
+   * When true, a timed-out join registers its session only at the moment the
+   * NEXT join arrives — after the adapter's cleanup leave() has already run.
+   * Measured in the editor (2026-08-02): the retry is then refused with
+   * "already active", and only a further leave()-and-retry gets in.
+   */
+  readonly registerLate?: boolean;
 }
 
 export class FakePortalsRelay {
@@ -69,6 +76,7 @@ export class FakePortalsRelay {
         avatarUrl: null,
       },
       options.failJoins ?? 0,
+      options.registerLate ?? false,
     );
     // Only ready() and net are exercised; the rest of the SDK surface is not
     // part of the transport contract this fake stands in for.
@@ -194,21 +202,38 @@ class FakePortalsNet implements PortalsNet {
   private readonly listeners = new Map<keyof PortalsNetEvents, Set<Listener>>();
   private joined = false;
   private pendingJoinFailures: number;
+  private readonly registerLate: boolean;
   /** A session the SDK registered for a join it then reported as failed. */
   private halfJoined = false;
+  /** A timed-out join whose registration has not landed yet (registerLate). */
+  private lateRegistration = false;
 
-  constructor(relay: FakePortalsRelay, self: PortalsNetPlayer, failJoins: number) {
+  constructor(
+    relay: FakePortalsRelay,
+    self: PortalsNetPlayer,
+    failJoins: number,
+    registerLate = false,
+  ) {
     this.relay = relay;
     this.selfPlayer = self;
     this.pendingJoinFailures = failJoins;
+    this.registerLate = registerLate;
   }
 
   async join(_options?: PortalsNetJoinOptions): Promise<PortalsNetSession> {
     this.relay.countJoinAttempt(this.selfPlayer.id);
     if (this.pendingJoinFailures > 0) {
       this.pendingJoinFailures -= 1;
-      this.halfJoined = true;
+      if (this.registerLate) this.lateRegistration = true;
+      else this.halfJoined = true;
       throw new Error("join timed out");
+    }
+    if (this.lateRegistration) {
+      // The timed-out join's registration lands NOW — after any leave() the
+      // caller ran in between — so this attempt is the one that gets refused.
+      this.lateRegistration = false;
+      this.halfJoined = true;
+      throw new Error("a multiplayer session is already active — leave() first");
     }
     if (this.halfJoined) {
       throw new Error("a multiplayer session is already active — leave() first");

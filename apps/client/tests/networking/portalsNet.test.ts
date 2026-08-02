@@ -90,6 +90,8 @@ interface PeerOptions {
   readonly playerId?: string;
   /** Joins that time out after half-registering, before the one that works. */
   readonly failJoins?: number;
+  /** The timed-out join registers only after the cleanup leave() has run. */
+  readonly registerLate?: boolean;
 }
 
 class Session {
@@ -118,6 +120,7 @@ class Session {
       displayName,
       ...(options.playerId === undefined ? {} : { playerId: options.playerId }),
       ...(options.failJoins === undefined ? {} : { failJoins: options.failJoins }),
+      ...(options.registerLate === undefined ? {} : { registerLate: options.registerLate }),
     });
     const adapter = new PortalsNetAdapter(sdk, {
       settings: this.settings,
@@ -976,12 +979,39 @@ describe("PortalsNetAdapter join retry", () => {
     session.dispose();
   });
 
-  it("reports a join that fails twice rather than knocking again", async () => {
+  it("recovers when the timed-out join registers only after the cleanup ran", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("a", "Ada", { playerId: "account-a" });
+
+    // The user's own preview log (2026-08-02): join times out, the adapter
+    // leaves and retries — and the retry is refused with "already active"
+    // because the SDK registered the dead join late. That refusal is proof a
+    // session now exists, so one more leave()-and-join must get in.
+    const slow = await session.addPeer("b", "Bex", {
+      playerId: "account-b",
+      failJoins: 1,
+      registerLate: true,
+    });
+    session.advance(4);
+
+    expect(session.relay.joinAttempts.get("b")).toBe(3);
+    expect(slow.adapter.getConnection().status).toBe("connected");
+    expect(slow.statuses.map((state) => state.status)).not.toContain("error");
+    expect(session.peer("a").adapter.getSync().publicState?.players).toHaveLength(2);
+    expect(session.relay.violations).toEqual([]);
+
+    warn.mockRestore();
+    session.dispose();
+  });
+
+  it("reports a join that keeps failing rather than knocking forever", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const session = new Session(RECONNECT_SETTINGS);
     const adapter = new PortalsNetAdapter(
-      session.relay.createPeer({ id: "b", displayName: "Bex", failJoins: 2 }),
+      session.relay.createPeer({ id: "b", displayName: "Bex", failJoins: 3 }),
       { seed: 5, now: () => session.now(), joinRetryDelayMs: 0 },
     );
     const statuses: ConnectionState[] = [];
@@ -989,9 +1019,9 @@ describe("PortalsNetAdapter join retry", () => {
     await adapter.connect();
 
     await expect(adapter.join(CHANNEL, "Bex")).rejects.toThrow();
-    // Exactly one retry: a relay refusing twice is refusing for a reason
-    // retrying cannot fix, and the player is told instead.
-    expect(session.relay.joinAttempts.get("b")).toBe(2);
+    // Three attempts, then the player is told: a relay that refuses this
+    // consistently is refusing for a reason knocking cannot fix.
+    expect(session.relay.joinAttempts.get("b")).toBe(3);
     expect(adapter.getConnection().status).toBe("error");
     expect(adapter.getConnection().detail).toBe("join_failed");
     expect(adapter.getConnection().canRejoin).toBe(true);
