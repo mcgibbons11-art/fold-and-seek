@@ -406,20 +406,24 @@ export class PortalsNetAdapter implements NetworkAdapter {
   /**
    * The SDK's own join, with automatic recovery.
    *
-   * Measured in the Portals editor (2026-08-02, twice): the first join of a
-   * session can time out while still registering internally. The first cut of
-   * this method left and retried once — and the user's own debug log showed
-   * the hole in it: the SDK can finish registering the timed-out join AFTER
-   * our cleanup ran, so the retry itself is refused with "a multiplayer
-   * session is already active — leave() first". That refusal is not a dead
-   * end; it is PROOF a session now exists, so the answer is to leave the now
-   * real session and join again.
+   * Measured in the Portals editor (2026-08-02, three separate logs): the
+   * first join of a session can time out while still registering internally,
+   * and the registration can land at any point AFTER our cleanup leave() has
+   * run. Two earlier cuts of this method tried to clear that late session
+   * with leave() and knock again — the editor logs proved leave() cannot
+   * reliably clear a session that is still settling, and every further join
+   * is refused with "a multiplayer session is already active — leave()
+   * first".
    *
-   * Shape: up to three attempts. A timeout-style failure leaves, waits, and
-   * retries. An "already active" failure leaves (this time there is
-   * definitely something to leave) and retries immediately. Anything else, or
-   * a third failure, is reported — a relay that keeps refusing is refusing
-   * for a reason knocking cannot fix.
+   * The standing insight: that refusal means the timed-out join SUCCEEDED.
+   * The session it registered is the one we asked for (same channel), so the
+   * right move is to adopt it — the SDK exposes self(), players(), and
+   * getState(), which is everything a join() result contains. Fighting the
+   * session with leave() is what loses.
+   *
+   * Timeout-style failures still get leave-wait-retry, three attempts in
+   * all; anything past that is reported, because a relay that keeps refusing
+   * is refusing for a reason knocking cannot fix.
    */
   private async joinRelay(room: string): Promise<PortalsNetSession> {
     const options = room.length > 0 ? { channel: room } : undefined;
@@ -430,24 +434,38 @@ export class PortalsNetAdapter implements NetworkAdapter {
         return await this.net.join(options);
       } catch (error) {
         lastError = error;
+        if (/already active/i.test(String(error))) {
+          const adopted = this.adoptActiveSession();
+          if (adopted !== null) {
+            console.warn(
+              "[portals] the timed-out join registered late; adopting the live session",
+              error,
+            );
+            return adopted;
+          }
+          // Active with no self is a half-state worth one more clear-and-knock.
+        }
         if (attempt === attempts) break;
-        const alreadyActive = /already active/i.test(String(error));
-        console.warn(
-          alreadyActive
-            ? "[portals] the timed-out join registered late; leaving the now-real session and retrying"
-            : "[portals] relay join failed, clearing the session and retrying",
-          error,
-        );
+        console.warn("[portals] relay join failed, clearing the session and retrying", error);
         await this.leaveQuietly();
-        // A late registration was just cleared for certain, so rejoin at
-        // once; a timeout-style failure gets the arming delay instead.
-        if (!alreadyActive && this.joinRetryDelayMs > 0) {
+        if (this.joinRetryDelayMs > 0) {
           await new Promise((resolve) => setTimeout(resolve, this.joinRetryDelayMs));
         }
       }
     }
     await this.leaveQuietly();
     throw lastError;
+  }
+
+  /**
+   * Rebuilds a join() result from the session the SDK already holds. Only
+   * meaningful right after an "already active" refusal, when the session that
+   * exists is the one this adapter just asked for.
+   */
+  private adoptActiveSession(): PortalsNetSession | null {
+    const self = this.net.self();
+    if (self === null) return null;
+    return { self, players: this.net.players(), state: this.net.getState() };
   }
 
   /** Best effort: after a failed join there may genuinely be nothing to leave. */

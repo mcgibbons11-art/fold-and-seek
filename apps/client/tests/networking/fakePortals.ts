@@ -230,9 +230,14 @@ class FakePortalsNet implements PortalsNet {
     }
     if (this.lateRegistration) {
       // The timed-out join's registration lands NOW — after any leave() the
-      // caller ran in between — so this attempt is the one that gets refused.
+      // caller ran in between — so this attempt is refused, but the session
+      // it refuses in favor of is REAL and live: the relay knows this peer,
+      // and self()/players()/getState() all work. Measured in the editor:
+      // leave() cannot clear this state, adoption is the only way in.
       this.lateRegistration = false;
       this.halfJoined = true;
+      this.joined = true;
+      this.relay.register(this);
       throw new Error("a multiplayer session is already active — leave() first");
     }
     if (this.halfJoined) {
