@@ -491,11 +491,27 @@ const MIMIC_SPAWNS: readonly SpawnPose[] = [
   pose(6.8, 0.92, -0.7, WEST),
 ];
 
-/** Inspectors stage inside the office and step out through its door (§5.9). */
+/** Centre of the office door gap in the x=4.8 partition (blockers above). */
+const OFFICE_DOOR = { x: 4.8, z: 3.6 };
+
+/**
+ * Yaw that faces (x, z) toward the target. Forward is (-sin yaw, -cos yaw):
+ * yaw 0 is SOUTH (-Z) and pi is NORTH (+Z), matching the compass constants.
+ */
+function yawToward(x: number, z: number, target: { x: number; z: number }): number {
+  return Math.atan2(-(target.x - x), -(target.z - z));
+}
+
+/**
+ * Inspectors stage inside the office and step out through its door (§5.9),
+ * so every spawn FACES the door. The round-5 critic proved the cost of
+ * getting this wrong: all three spawns faced walls, W walked into plaster,
+ * and the Inspector role was unplayable for a full 75-second hunt.
+ */
 const INSPECTOR_SPAWNS: readonly SpawnPose[] = [
-  pose(6.6, 0, 4.9, NORTH),
-  pose(5.4, 0, 4.9, NORTH),
-  pose(5.2, 0, 2.9, WEST),
+  pose(6.6, 0, 4.9, yawToward(6.6, 4.9, OFFICE_DOOR)),
+  pose(5.4, 0, 4.9, yawToward(5.4, 4.9, OFFICE_DOOR)),
+  pose(5.2, 0, 3.6, WEST),
 ];
 
 export const SPAWN_POINTS: SpawnPoints = {
