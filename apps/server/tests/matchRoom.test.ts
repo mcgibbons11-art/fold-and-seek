@@ -474,6 +474,42 @@ describe("MatchRoom simulation wiring", () => {
   });
 });
 
+describe("MatchRoom public state channel", () => {
+  it("hands the joining client the room picture directly", () => {
+    const harness = new TestRoom();
+    const host = harness.join("s1", "Ada");
+    const states = host.messagesOfType(SERVER_MESSAGE.publicState);
+    expect(states.length).toBeGreaterThan(0);
+    const last = states.at(-1) as { phase: string; players: unknown[] };
+    expect(last.phase).toBe(MatchPhase.Lobby);
+    expect(last.players).toHaveLength(1);
+  });
+
+  it("broadcasts on change and stays quiet on unchanged ticks", () => {
+    const harness = new TestRoom();
+    const host = harness.join("s1", "Ada");
+    harness.join("s2", "Bex");
+    const broadcastCount = () =>
+      harness.broadcasts.filter((entry) => entry.type === SERVER_MESSAGE.publicState).length;
+
+    const before = broadcastCount();
+    harness.advance(5);
+    expect(broadcastCount()).toBe(before);
+
+    harness.room.handleMatchCommand(host.asClient(), "player_ready", {
+      type: "player_ready",
+      ready: true,
+    });
+    harness.advance(1);
+    expect(broadcastCount()).toBeGreaterThan(before);
+
+    const last = harness.broadcasts
+      .filter((entry) => entry.type === SERVER_MESSAGE.publicState)
+      .at(-1)?.payload as { players: { ready: boolean }[] };
+    expect(last.players.some((player) => player.ready)).toBe(true);
+  });
+});
+
 describe("MatchRoom tick fault handling", () => {
   interface FaultHarness {
     readonly harness: TestRoom;

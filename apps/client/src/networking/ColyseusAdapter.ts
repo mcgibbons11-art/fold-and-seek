@@ -16,7 +16,7 @@ import {
   type Unsubscribe,
 } from "./NetworkAdapter";
 import { Signal } from "./signal";
-import { parseCommandRejection, parsePrivateState } from "./stateSchemas";
+import { parseCommandRejection, parsePrivateState, parsePublicState } from "./stateSchemas";
 
 /**
  * colyseus.js client for the dedicated server. The server holds authority, so
@@ -32,6 +32,7 @@ const SERVER_MESSAGE = {
   simEvents: "sim_events",
   privateEvents: "private_events",
   privateState: "private_state",
+  publicState: "public_state",
   commandRejected: "command_rejected",
 } as const;
 
@@ -241,6 +242,15 @@ export class ColyseusAdapter implements NetworkAdapter {
       this.sync = { publicState: this.sync.publicState, privateState };
       this.syncSignal.emit(this.sync);
       this.readRoster(room.state);
+    });
+    room.onMessage(SERVER_MESSAGE.publicState, (message) => {
+      const publicState = parsePublicState(message);
+      if (!publicState) {
+        console.warn("[colyseus] dropped malformed public state");
+        return;
+      }
+      this.sync = { publicState, privateState: this.sync.privateState };
+      this.syncSignal.emit(this.sync);
     });
     room.onMessage(SERVER_MESSAGE.commandRejected, (message) => {
       const rejection = parseCommandRejection(message);

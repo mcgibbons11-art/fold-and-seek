@@ -52,6 +52,7 @@ export const SERVER_MESSAGE = {
   simEvents: "sim_events",
   privateEvents: "private_events",
   privateState: "private_state",
+  publicState: "public_state",
   commandRejected: "command_rejected",
 } as const;
 
@@ -107,6 +108,8 @@ export class MatchRoom extends Room<MatchStateSchema> {
     RATE_WINDOW_MS,
   );
   private consecutiveTickFailures = 0;
+  /** Last public state broadcast, serialized; the broadcast is change-driven. */
+  private lastPublicStateJson = "";
 
   override onCreate(options: MatchRoomOptions = {}): void {
     this.sim = new MatchSimulation(
@@ -153,6 +156,9 @@ export class MatchRoom extends Room<MatchStateSchema> {
     }
     this.publish(seated);
     this.sendPrivateState(client);
+    // The join broadcast reaches everyone else; the joiner needs the current
+    // room picture directly, and cannot wait for the next state change.
+    client.send(SERVER_MESSAGE.publicState, this.sim.getPublicState());
   }
 
   override async onLeave(client: Client, consented?: boolean): Promise<void> {
@@ -172,6 +178,7 @@ export class MatchRoom extends Room<MatchStateSchema> {
       await this.allowReconnection(client, graceSeconds);
       this.publish(this.sim.markReconnected(client.sessionId, Date.now()));
       this.sendPrivateState(client);
+      client.send(SERVER_MESSAGE.publicState, this.sim.getPublicState());
     } catch {
       this.publish(this.sim.removePlayer(client.sessionId, "reconnect_timeout"));
     }
@@ -349,7 +356,21 @@ export class MatchRoom extends Room<MatchStateSchema> {
     if (output.public.some((event) => event.type === "phase_changed")) {
       for (const client of this.clients) this.sendPrivateState(client);
     }
-    this.syncSchema();
+
+    // Everything RoundDirector renders beyond the lobby roster — disguises,
+    // warrants, settings, results — travels in the public state, so the room
+    // republishes it whenever it changes. Serialized comparison keeps the
+    // quiet ticks free: no change, no broadcast.
+    const publicState = this.sim.getPublicState();
+    // `now` is a clock sample that advances every tick; it is excluded from the
+    // comparison so a quiet room stays quiet, while any real change still
+    // ships with a fresh sample on it.
+    const json = JSON.stringify({ ...publicState, now: 0 });
+    if (json !== this.lastPublicStateJson) {
+      this.lastPublicStateJson = json;
+      this.broadcast(SERVER_MESSAGE.publicState, publicState);
+    }
+    this.syncSchema(publicState);
   }
 
   private sendPrivateState(client: Client): void {
@@ -357,8 +378,7 @@ export class MatchRoom extends Room<MatchStateSchema> {
     if (privateState) client.send(SERVER_MESSAGE.privateState, privateState);
   }
 
-  private syncSchema(): void {
-    const publicState = this.sim.getPublicState();
+  private syncSchema(publicState = this.sim.getPublicState()): void {
     this.state.phase = publicState.phase;
     this.state.phaseEndsAt = publicState.phaseEndsAt;
     this.state.round = publicState.round;
