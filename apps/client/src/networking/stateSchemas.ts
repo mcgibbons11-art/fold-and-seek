@@ -35,6 +35,7 @@ const settingValue = z.number().min(0).max(LIMITS.maxTimestamp);
 const settingsShape: Record<keyof MatchSettings, z.ZodNumber> = {
   minPlayers: settingValue,
   maxPlayers: settingValue,
+  seekerCount: settingValue,
   mapIntroMs: settingValue,
   roleRevealMs: settingValue,
   baselineScanMs: settingValue,
@@ -103,6 +104,8 @@ export const PublicMatchStateSchema = z.strictObject({
   phaseEndsAt: timestamp,
   warrantsRemaining: count,
   warrantsTotal: count,
+  /** One seeker's allowance, which is the magazine an Inspector's HUD draws. */
+  warrantsPerInspector: count,
   mimicsRemaining: count,
   settings: MatchSettingsSchema,
   players: z.array(PublicPlayerViewSchema).max(LIMITS.maxPlayersPerMatch),

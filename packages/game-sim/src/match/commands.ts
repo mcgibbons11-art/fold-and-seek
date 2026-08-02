@@ -1,4 +1,4 @@
-import { LIMITS, type MatchSettings, type TauntId } from "@foldseek/shared";
+import { LIMITS, MAX_SEEKER_COUNT, type MatchSettings, type TauntId } from "@foldseek/shared";
 import type { ResultVoteCategory } from "./constants";
 import type { SimOutput } from "./events";
 
@@ -27,6 +27,7 @@ export type MatchCommandType = MatchCommand["type"];
 /** Host-settable subset of the match settings (§5.3). */
 export const SETTABLE_SETTING_KEYS = [
   "maxPlayers",
+  "seekerCount",
   "mapIntroMs",
   "roleRevealMs",
   "baselineScanMs",
@@ -63,6 +64,7 @@ const phaseDurationBound: SettingBound = { min: 0, max: MAX_PHASE_DURATION_MS };
  */
 export const SETTING_BOUNDS: Readonly<Record<SettableSettingKey, SettingBound>> = {
   maxPlayers: { min: 2, max: LIMITS.maxPlayersPerMatch },
+  seekerCount: { min: 1, max: MAX_SEEKER_COUNT },
   mapIntroMs: phaseDurationBound,
   roleRevealMs: phaseDurationBound,
   baselineScanMs: phaseDurationBound,

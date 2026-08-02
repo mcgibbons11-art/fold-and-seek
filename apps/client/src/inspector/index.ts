@@ -7,10 +7,11 @@ import { CameraSamplePublisher, type CameraSample } from "./cameraSamples";
 import { FocusSystem, InspectableSet, type FocusMetadata } from "./FocusSystem";
 import { nearestBlockerEntry } from "./geometry";
 import { GunView, MISS_RANGE_M, shotImpactPoint } from "./GunView";
+import { InspectorBody } from "./InspectorBody";
 import { InspectorCamera, type InspectorCameraOptions } from "./InspectorCamera";
 import { createMoveInput, InspectorController } from "./InspectorController";
 import { InspectorInput } from "./InspectorInput";
-import type { NavData, SpawnPose } from "./navData";
+import { BRISK_WALK_MULTIPLIER, type NavData, type SpawnPose } from "./navData";
 
 export {
   blocksCapsule,
@@ -58,6 +59,7 @@ export {
   type WeaponState,
 } from "./ShootingDriver";
 export { GunView, shotImpactPoint, type GunFrame } from "./GunView";
+export { InspectorBody, ARM_REACH, GUN_SHOULDER, type InspectorBodyFrame } from "./InspectorBody";
 export { CameraSamplePublisher, type CameraSample } from "./cameraSamples";
 export {
   SpatialValidatorImpl,
@@ -90,6 +92,12 @@ export interface InspectorSystemDeps {
   readonly onWeaponState?: (state: WeaponState) => void;
   readonly onPointerLockChange?: (locked: boolean) => void;
   readonly cameraOptions?: InspectorCameraOptions;
+  /**
+   * Whether the Inspector's body drops a shadow, which is the light tier's
+   * `dynamicShadows`. Defaults to on: at the "light" tier the renderer has no
+   * shadow map to draw into and the flag costs nothing either way.
+   */
+  readonly castShadow?: boolean;
 }
 
 export interface InspectorSystem {
@@ -101,6 +109,8 @@ export interface InspectorSystem {
   readonly weapon: ShootingDriver;
   /** The gun the player can see: model, sway, recoil, and what a round leaves behind. */
   readonly gun: GunView;
+  /** The Inspector everyone else sees, with the gun in its right hand. */
+  readonly body: InspectorBody;
   /** Null when no DOM element was supplied. */
   readonly input: InspectorInput | null;
   /** False freezes movement and the trigger, for the reveal of §5.14. */
@@ -148,6 +158,11 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
     onStateChange: deps.onWeaponState,
   });
   const gun = new GunView(deps.scene);
+  // The body hangs off the root, which is already carried to the controller's
+  // feet and turned to its heading every frame; the hand it holds the gun in
+  // lives in the scene, because the carry is authored against the eye.
+  const body = new InspectorBody(root, deps.scene, deps.castShadow ?? true);
+  gun.attachToHand(body.hand);
   const onCameraSample = deps.onCameraSample;
   const samples = new CameraSamplePublisher(
     onCameraSample === undefined ? 0 : deps.settings.cameraSampleHz,
@@ -189,6 +204,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
     focusSystem,
     weapon,
     gun,
+    body,
     input,
     enabled: true,
 
@@ -229,6 +245,19 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
         aimAmount: cameraRig.aimAmount,
         swayScale: cameraRig.swayScale,
         speedMps: controller.speed,
+      });
+
+      // After the gun and never before it: the arm is solved to reach the hand
+      // the carry above has just placed, so a body updated first would spend
+      // every frame reaching for where the gun was last one.
+      body.update(dtSeconds, {
+        speedMps: controller.speed,
+        speedCapMps: deps.settings.inspectorMoveSpeed * (moveInput.brisk ? BRISK_WALK_MULTIPLIER : 1),
+        airborne: controller.airborne,
+        climbing: controller.climbState !== null,
+        landingSpeed: controller.justLanded ? controller.landingSpeed : 0,
+        pitch: controller.pitch,
+        aimAmount: cameraRig.aimAmount,
       });
 
       // A round is shown from the weapon's own count rather than from the
@@ -302,6 +331,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
     dispose(): void {
       input?.dispose();
       gun.dispose();
+      body.dispose();
       root.removeFromParent();
     },
   };

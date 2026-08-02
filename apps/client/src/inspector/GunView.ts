@@ -18,6 +18,13 @@ import { WORLD_SCALE, type Vec3Like } from "./navData";
  * look direction: the boom pulling in against a wall therefore brings the
  * camera closer to the gun instead of dragging the gun through the wall.
  *
+ * That carry is written into `InspectorBody`'s hand rather than into the gun
+ * itself once a body is attached, and the gun rides under the hand with no
+ * transform of its own. The arm is then solved to reach whatever the carry
+ * decided (`InspectorBody.reachForGun`), which makes the two impossible to
+ * separate: there is no tuning that can leave the gun beside the hand instead
+ * of in it, and the sway, the aim blend and the kick all stay in one place.
+ *
  * No light is added for the muzzle flash. Adding and removing a light changes
  * the lighting configuration every material in the shop was linked against,
  * and on this project's ANGLE path a relink costs about a second per program
@@ -30,25 +37,55 @@ const BODY_M = WORLD_SCALE.playerHeight;
 
 /**
  * Barrel-to-butt length. A real pistol on a 0.35 m body would be four
- * centimetres, which at the boom distance is a speck; this is hero scale, sized
- * so the gun reads as held at a glance, like the oversized tools in the
- * reference diorama art.
+ * centimetres, which at the boom distance is a speck, so this is still hero
+ * scale, like the oversized tools in the reference diorama art.
+ *
+ * It used to be half a body height, which was sized to read as held when there
+ * was nothing holding it: with `InspectorBody` behind it, a gun as long as the
+ * Inspector's trunk is a cannon under one arm rather than a warrant pistol in a
+ * hand. At this length it is still most of twice the forearm — unmistakable at
+ * the distance a hider first sees it — and it is a hand's prop again.
  */
-const GUN_LENGTH_M = BODY_M * 0.52;
+const GUN_LENGTH_M = BODY_M * 0.3;
 
-/** Where the hand carries it, in the look basis: right of, below, and ahead of the eye. */
-const HIP_RIGHT_M = BODY_M * 0.46;
-const HIP_DOWN_M = BODY_M * 0.34;
-const HIP_FORWARD_M = BODY_M * 0.34;
+/**
+ * Where the hand carries it, in the look basis: right of, below, and ahead of
+ * the eye.
+ *
+ * Every one of these is inside `ARM_REACH` of `GUN_SHOULDER`, and that is a
+ * constraint rather than a coincidence. The first draft of this carry put the
+ * grip half a body height out to the side of the eye, which is further from the
+ * shoulder than an arm is long: with `InspectorBody` behind it, no pose reaches
+ * the gun, and that unreachable carry is exactly why the gun read as floating
+ * in mid-air rather than as being held. The hip and aim points below are about
+ * four fifths of the arm's reach, which leaves the elbow bent.
+ */
+const HIP_RIGHT_M = BODY_M * 0.28;
+const HIP_DOWN_M = BODY_M * 0.38;
+const HIP_FORWARD_M = BODY_M * 0.14;
 /**
  * Aiming brings the gun up and forward without putting it over the target. The
  * rig watches from behind the shoulder, so a gun on the sight line would sit on
  * top of the thing the player is trying to read; it settles below and right of
  * the reticle instead, where a shoulder-cam player expects to find it.
  */
-const AIM_RIGHT_M = BODY_M * 0.3;
-const AIM_DOWN_M = BODY_M * 0.26;
-const AIM_FORWARD_M = BODY_M * 0.52;
+const AIM_RIGHT_M = BODY_M * 0.24;
+const AIM_DOWN_M = BODY_M * 0.2;
+const AIM_FORWARD_M = BODY_M * 0.22;
+/**
+ * How much of the look pitch swings the gun's *position*, as against its
+ * aim, which always carries all of it.
+ *
+ * Pitching the carry offsets about the eye by the full look angle sweeps the
+ * hand through most of a body height between the pitch limits, and at the top
+ * of that arc the grip ends up further from the shoulder than an arm reaches:
+ * the elbow straightens, the wrist stops short, and the gun leaves the hand
+ * (`InspectorBody.reachForGun` clamps rather than tearing the arm off, so the
+ * failure is a gun floating again). A third of it keeps the hand inside the
+ * arm at every pitch, and it is what a shooter's shoulder actually does — the
+ * gun is brought round to the target far more than it is carried up to it.
+ */
+const CARRY_PITCH_SHARE = 0.35;
 /** Cant at the hip, levelled as the gun comes up. */
 const HIP_ROLL_RAD = 0.28;
 /**
@@ -167,6 +204,12 @@ export class GunView {
   private readonly root = new THREE.Group();
   private readonly effectRoot = new THREE.Group();
   private readonly scene: THREE.Object3D;
+  /**
+   * What the carry is written into: the Inspector's hand once a body has been
+   * attached, and the gun's own root until then. Unattached is the headless
+   * case and the practice one, where there is nobody holding it.
+   */
+  private carry: THREE.Object3D;
 
   private readonly materials: THREE.Material[] = [];
   private readonly geometries: THREE.BufferGeometry[] = [];
@@ -186,6 +229,9 @@ export class GunView {
   private readonly sharedCylinder: THREE.CylinderGeometry;
   private readonly scratch = new THREE.Vector3();
   private readonly scratchTo = new THREE.Vector3();
+  /** Kept apart from the pair above, which are both live during a shot. */
+  private readonly scratchWorld = new THREE.Vector3();
+  private readonly scratchQuaternion = new THREE.Quaternion();
   /** The colour the seal cools back to, kept rather than rebuilt every frame. */
   private readonly coolColor = new THREE.Color(BRASS_LIT_COLOR);
 
@@ -205,6 +251,7 @@ export class GunView {
 
   constructor(scene: THREE.Object3D) {
     this.scene = scene;
+    this.carry = this.root;
     this.root.name = "inspector-gun";
     this.effectRoot.name = "inspector-gun-effects";
     this.root.rotation.order = "YXZ";
@@ -372,6 +419,35 @@ export class GunView {
     }
   }
 
+  /**
+   * Hands the gun to the Inspector's right hand, or takes it back with null.
+   *
+   * The gun keeps no transform of its own once it is held: the carry that used
+   * to be written into its root is written into the hand instead, and the hand
+   * is what the arm reaches for. Everything downstream reads world positions,
+   * so the muzzle, the flash and the mark are unaffected by which of the two is
+   * carrying the transform.
+   */
+  attachToHand(hand: THREE.Object3D | null): void {
+    this.root.position.set(0, 0, 0);
+    this.root.rotation.set(0, 0, 0);
+    if (hand === null) {
+      this.scene.add(this.root);
+      this.carry = this.root;
+      return;
+    }
+    hand.add(this.root);
+    this.carry = hand;
+  }
+
+  /**
+   * The gun in the scene graph. Held, it is a child of the hand rather than of
+   * the scene, so this is how anything that needs to find it does so.
+   */
+  get model(): THREE.Object3D {
+    return this.root;
+  }
+
   /** Chambers still loaded, which is what a test without a renderer can count. */
   get liveChambers(): number {
     return this.shells.filter((shell) => shell.visible).length;
@@ -395,7 +471,9 @@ export class GunView {
     }
     this.recoilVelocity += RECOIL_IMPULSE;
 
-    this.root.updateMatrixWorld(true);
+    // From the top of the chain: once the gun is held, the transform that
+    // decides where the muzzle is belongs to the hand above it.
+    this.muzzle.updateWorldMatrix(true, false);
     const from = this.muzzle.getWorldPosition(this.scratch).clone();
     const to = impact === null ? from : this.scratchTo.set(impact.x, impact.y, impact.z).clone();
     this.pendingImpact = outcome === "hit" ? to : null;
@@ -421,7 +499,7 @@ export class GunView {
    * its angular size down wherever it lands.
    */
   private markRadius(at: THREE.Vector3): number {
-    const distance = at.distanceTo(this.root.position);
+    const distance = at.distanceTo(this.root.getWorldPosition(this.scratchWorld));
     return Math.min(GUN_LENGTH_M * 0.5, distance * MARK_MAX_ANGULAR_SHARE);
   }
 
@@ -466,14 +544,25 @@ export class GunView {
     // The hand first, in the look basis, so the carry is where the arm is
     // whatever the gun is doing; then the wrist, which is the toe-in and the
     // kick, and turns the gun about the grip rather than swinging the arm.
-    this.root.position.set(frame.eye.x, frame.eye.y, frame.eye.z);
-    this.root.rotation.set(frame.pitch + swayPitch, frame.yaw + swayYaw, 0);
-    this.root.translateX(HIP_RIGHT_M + (AIM_RIGHT_M - HIP_RIGHT_M) * aim);
-    this.root.translateY(-(HIP_DOWN_M + (AIM_DOWN_M - HIP_DOWN_M) * aim));
-    this.root.translateZ(-(HIP_FORWARD_M + (AIM_FORWARD_M - HIP_FORWARD_M) * aim) + this.recoil * RECOIL_BACK_M);
-    this.root.rotation.x += this.recoil * RECOIL_PITCH_RAD;
-    this.root.rotation.y += HIP_TOE_IN_RAD + (AIM_TOE_IN_RAD - HIP_TOE_IN_RAD) * aim;
-    this.root.rotation.z = HIP_ROLL_RAD * (1 - aim);
+    //
+    // Both go into the same object, which is the hand once the Inspector has a
+    // body: a hand holding a gun is canted and toed-in with it, and splitting
+    // the two across a parent and a child would compose the Euler angles in a
+    // different order and quietly change a carry that was tuned as one.
+    const carry = this.carry;
+    carry.rotation.order = "YXZ";
+    carry.position.set(frame.eye.x, frame.eye.y, frame.eye.z);
+    // Placed on the damped pitch and then turned onto the real one: the offsets
+    // below are measured in whatever basis the rotation is in when they run, so
+    // the order here is what separates where the hand goes from where the gun
+    // points.
+    carry.rotation.set(frame.pitch * CARRY_PITCH_SHARE + swayPitch, frame.yaw + swayYaw, 0);
+    carry.translateX(HIP_RIGHT_M + (AIM_RIGHT_M - HIP_RIGHT_M) * aim);
+    carry.translateY(-(HIP_DOWN_M + (AIM_DOWN_M - HIP_DOWN_M) * aim));
+    carry.translateZ(-(HIP_FORWARD_M + (AIM_FORWARD_M - HIP_FORWARD_M) * aim) + this.recoil * RECOIL_BACK_M);
+    carry.rotation.x = frame.pitch + swayPitch + this.recoil * RECOIL_PITCH_RAD;
+    carry.rotation.y += HIP_TOE_IN_RAD + (AIM_TOE_IN_RAD - HIP_TOE_IN_RAD) * aim;
+    carry.rotation.z = HIP_ROLL_RAD * (1 - aim);
 
     // Cocked as the gun comes up, thrown forward by the shot.
     this.hammer.rotation.x = -0.9 * this.hammerCock + 1.1 * this.hammerSnap;
@@ -511,8 +600,10 @@ export class GunView {
     flash.fromScale.set(GUN_LENGTH_M * 0.1, GUN_LENGTH_M * 0.1, GUN_LENGTH_M * 0.34);
     flash.toScale.set(GUN_LENGTH_M * 0.22, GUN_LENGTH_M * 0.22, GUN_LENGTH_M * 0.5);
     // A flash points where the barrel does, so it is stretched along the shot
-    // rather than being a ball hanging off the front of the gun.
-    flash.mesh.quaternion.copy(this.root.quaternion);
+    // rather than being a ball hanging off the front of the gun. The effect
+    // lives in the scene while the gun may live in a hand, so this is the
+    // gun's world orientation rather than its local one.
+    flash.mesh.quaternion.copy(this.root.getWorldQuaternion(this.scratchQuaternion));
   }
 
   /**

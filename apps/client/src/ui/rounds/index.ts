@@ -7,6 +7,7 @@ export { ForgePhaseHud, type ForgePhaseHudProps } from "./ForgePhaseHud";
 export {
   InspectorSight,
   InspectorStatusCard,
+  warrantAllowanceOf,
   warrantsRemainingOf,
   type GunAimState,
   type InspectorGunView,

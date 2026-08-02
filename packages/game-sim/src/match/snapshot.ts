@@ -36,7 +36,7 @@ import type {
  * estimateSnapshotBytes for what actually dominates the size.
  */
 
-export const MATCH_SNAPSHOT_VERSION = 2;
+export const MATCH_SNAPSHOT_VERSION = 3;
 
 export interface SnapshotStats {
   /** directLookEscapes, closePasses, peerStyleVotes. */
@@ -122,8 +122,14 @@ export interface MatchSnapshot {
   readonly r: number;
   readonly ph: MatchPhase;
   readonly pe: number;
-  readonly wr: number;
-  /** Warrants the round started with. */
+  /**
+   * Warrants each seeker was issued this round, and what each has left, keyed
+   * by seat. The pools are per seeker rather than shared, so a round with two
+   * hunters cannot be captured as one number.
+   */
+  readonly wi: number;
+  readonly wp: ReadonlyArray<readonly [string, number]>;
+  /** Warrants the round started with, across every seeker. */
   readonly wt: number;
   /** Next missed-finds board time, and how many have been published. */
   readonly mf: number;

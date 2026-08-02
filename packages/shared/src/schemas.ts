@@ -4,6 +4,7 @@ import {
   DISGUISE_WIRE_VERSION,
   INNOCENT_REACTION_IDS,
   MAX_PANELS,
+  MAX_SEEKER_COUNT,
   PANEL_MAX_HINGE_DEG,
   PANEL_MIN_HINGE_DEG,
   PANEL_PROFILE_IDS,
@@ -498,6 +499,8 @@ const settingsValue = z.number().int().min(0).max(LIMITS.maxTimestamp);
 export const MatchSettingsPatchSchema = z
   .strictObject({
     maxPlayers: z.number().int().min(2).max(LIMITS.maxPlayersPerMatch),
+    /** One or two seekers per round; the simulation enforces the seat floor. */
+    seekerCount: z.number().int().min(1).max(MAX_SEEKER_COUNT),
     mapIntroMs: settingsValue,
     roleRevealMs: settingsValue,
     baselineScanMs: settingsValue,
@@ -898,7 +901,9 @@ export const MatchSnapshotSchema = z.strictObject({
   r: counter,
   ph: MatchPhaseSchema,
   pe: simTime,
-  wr: z.number().int(),
+  /** Warrants each seeker was issued, and what each has left, keyed by seat. */
+  wi: z.number().int(),
+  wp: z.array(z.tuple([id, z.number().int()])).max(LIMITS.maxPlayersPerMatch),
   /** Warrants the round started with, so a late joiner can render spent rounds. */
   wt: z.number().int(),
   /** Next missed-finds board time, and how many have been published. */

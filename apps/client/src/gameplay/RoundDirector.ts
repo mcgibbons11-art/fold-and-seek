@@ -593,6 +593,7 @@ export class RoundDirector {
       warrantsRemaining: publicState ? publicState.warrantsRemaining : null,
       // Zero outside a round, which the HUD reads as "no magazine to draw".
       warrantsTotal: publicState ? publicState.warrantsTotal : null,
+      warrantsPerInspector: publicState ? publicState.warrantsPerInspector : null,
       mimicsRemaining: publicState?.mimicsRemaining ?? 0,
       accusations: this.buildAccusations(roster, selfPublicId),
       missedFinds: this.buildMissedFinds(selfPublicId, serverNowMs),

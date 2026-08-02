@@ -155,17 +155,19 @@ describe("HUD region table", () => {
     }
   });
 
-  it("folds the tool panels at every size, because the rail already carries them", () => {
-    // Folding used to happen only where the panels did not fit whole, which
-    // left them open at 1080p. The round-1 critic counted the result: the open
-    // column and the right rail are the same toolset drawn twice, about 35
-    // elements on a hider's screen. The rail is the copy that always fits and
-    // always has the keys, so the column starts folded whatever the height.
+  it("opens the tool panels where they fit and folds them where they do not", () => {
+    // USER DIRECTIVE (2026-08-02): "the player should never lose access to
+    // their fold tools even mid round." The sim always honoured that; a folded
+    // panel merely READ as the tools being taken away, and how it reads is
+    // what the player experiences — so the panels start open wherever the
+    // column can hold them whole. The round-1 critic's clutter finding keeps
+    // the case it was actually about: at 720p the open stack does not fit, so
+    // it starts folded there and the rail's keys remain the way in.
     const short = regionRect("leftColumn", 1280, 720);
     const tall = regionRect("leftColumn", 1920, 1080);
 
     expect(forgePanelsOpenByDefault(short.bottom - short.top)).toBe(false);
-    expect(forgePanelsOpenByDefault(tall.bottom - tall.top)).toBe(false);
+    expect(forgePanelsOpenByDefault(tall.bottom - tall.top)).toBe(true);
     // The density still answers for the column as it would be with the panels
     // open, so opening them by hand at 720p still gets the compact sizes.
     expect(columnDensityFor(short.bottom - short.top).id).toBe("compact");

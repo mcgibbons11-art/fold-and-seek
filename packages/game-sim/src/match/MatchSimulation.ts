@@ -25,6 +25,7 @@ import {
   CLOSE_PASS_DWELL_MS,
   CORRECT_ACCUSATION_COOLDOWN_MS,
   CREEP_SPEED_TOLERANCE,
+  DUAL_SEEKER_MIN_SEATS,
   LOADING_TIMEOUT_MS,
   MISSED_FINDS_JITTER_MS,
   MISSED_FINDS_MIN_INTERVAL_MS,
@@ -77,7 +78,12 @@ import {
   type ObjectRegistry,
   type RegisteredObject,
 } from "./objects";
-import { assignInspectors, inspectorCountForRoster, type RoleHistory } from "./roles";
+import {
+  assignInspectors,
+  inspectorCountFor,
+  inspectorCountForRoster,
+  type RoleHistory,
+} from "./roles";
 import { scoreInspector, scoreMimic } from "./scoring";
 import { PERMISSIVE_SPATIAL_VALIDATOR, type SpatialValidator } from "./spatial";
 
@@ -119,9 +125,16 @@ export interface PublicMatchState {
   readonly round: number;
   readonly phase: MatchPhase;
   readonly phaseEndsAt: number;
+  /** Warrants left across every seeker, which is the room's remaining ammunition. */
   readonly warrantsRemaining: number;
   /** What the round started with, so spent rounds can be rendered. */
   readonly warrantsTotal: number;
+  /**
+   * Warrants one seeker was issued. With a single seeker it is `warrantsTotal`;
+   * with two it is half of it, and it is the number an Inspector's own magazine
+   * is drawn from, since the pools are separate.
+   */
+  readonly warrantsPerInspector: number;
   readonly mimicsRemaining: number;
   readonly settings: MatchSettings;
   readonly players: readonly PublicPlayerView[];
@@ -478,7 +491,18 @@ export class MatchSimulation {
   private phase: MatchPhase = MatchPhase.Lobby;
   private phaseEndsAt = 0;
 
-  private warrantsRemaining = 0;
+  /**
+   * Warrants per seeker, and what each seeker has left, keyed by seat.
+   *
+   * The pools are separate rather than shared. A round with two hunters would
+   * otherwise let the first to shoot spend the other's ammunition, and one
+   * careless Inspector could disarm a careful one; separate pools also make a
+   * catch attributable, since the warrant that resolved it came from a named
+   * magazine. With one seeker there is one entry and the behaviour is exactly
+   * what a single pool gave.
+   */
+  private warrantsPerInspector = 0;
+  private readonly warrantsRemainingBy = new Map<string, number>();
   private warrantsTotal = 0;
   private nextMissedFindsAtMs = 0;
   private missedFindsCount = 0;
@@ -597,6 +621,9 @@ export class MatchSimulation {
     this.players.delete(playerId);
     this.endFocusHold(playerId);
     this.accusationReadyAt.delete(playerId);
+    // A departing seeker takes their unspent warrants with them, so the room's
+    // remaining total falls to what the hunters still present can actually fire.
+    this.warrantsRemainingBy.delete(playerId);
     this.rematchVotes.delete(playerId);
     this.lastEscapeAt.delete(playerId);
     this.lastClosePassAt.delete(playerId);
@@ -1149,8 +1176,9 @@ export class MatchSimulation {
       round: this.round,
       phase: this.phase,
       phaseEndsAt: this.phaseEndsAt,
-      warrantsRemaining: this.warrantsRemaining,
+      warrantsRemaining: this.warrantsRemainingTotal(),
       warrantsTotal: this.warrantsTotal,
+      warrantsPerInspector: this.warrantsPerInspector,
       mimicsRemaining: this.countRemainingMimics(),
       settings: { ...this.settings },
       players: [...this.players.values()].map((player) => ({
@@ -1199,7 +1227,9 @@ export class MatchSimulation {
           }
         : null,
       knownDisguiseOwners: this.entitledDisguiseOwners(player),
-      warrantsRemaining: player.role === "inspector" ? this.warrantsRemaining : null,
+      // An Inspector's own pool, never the room's total: what this player may
+      // still spend is the only warrant figure their HUD can act on.
+      warrantsRemaining: player.role === "inspector" ? this.warrantsFor(player.playerId) : null,
       accusationReadyAt:
         player.role === "inspector" ? (this.accusationReadyAt.get(player.playerId) ?? 0) : null,
       tauntReadyAtMs:
@@ -1284,7 +1314,8 @@ export class MatchSimulation {
       r: this.round,
       ph: this.phase,
       pe: this.phaseEndsAt,
-      wr: this.warrantsRemaining,
+      wi: this.warrantsPerInspector,
+      wp: [...this.warrantsRemainingBy.entries()].map(([id, left]) => [id, left] as const),
       wt: this.warrantsTotal,
       mf: this.nextMissedFindsAtMs,
       mc: this.missedFindsCount,
@@ -1414,7 +1445,8 @@ export class MatchSimulation {
     sim.round = snapshot.r;
     sim.phase = snapshot.ph;
     sim.phaseEndsAt = snapshot.pe;
-    sim.warrantsRemaining = snapshot.wr;
+    sim.warrantsPerInspector = snapshot.wi;
+    for (const [playerId, left] of snapshot.wp) sim.warrantsRemainingBy.set(playerId, left);
     sim.warrantsTotal = snapshot.wt;
     sim.nextMissedFindsAtMs = snapshot.mf;
     sim.missedFindsCount = snapshot.mc;
@@ -1527,6 +1559,11 @@ export class MatchSimulation {
     if (next.maxPlayers < next.minPlayers) return reject("invalid_settings", "maxPlayers");
     // The room cannot be shrunk below the people already standing in it.
     if (next.maxPlayers < this.players.size) return reject("invalid_settings", "maxPlayers");
+    // Two seekers need somewhere for two hiders to hide. Seats rather than
+    // heads, since bots fill the room before the round starts.
+    if (next.seekerCount > 1 && next.maxPlayers < DUAL_SEEKER_MIN_SEATS) {
+      return reject("invalid_settings", "seekerCount");
+    }
     if (changedKeys.length === 0) return this.accept();
 
     this.settings = next;
@@ -1584,7 +1621,8 @@ export class MatchSimulation {
   private commandAccuse(player: InternalPlayer, targetObjectId: string): CommandResult {
     if (!this.isInspectionPhase()) return reject("wrong_phase");
     if (player.role !== "inspector") return reject("wrong_role");
-    if (this.warrantsRemaining <= 0) return reject("no_warrants");
+    // This seeker's own pool. A partner still holding warrants cannot lend one.
+    if (this.warrantsFor(player.playerId) <= 0) return reject("no_warrants");
 
     const record = this.disguises.get(targetObjectId);
     if (!record && !this.registeredObjects.has(targetObjectId)) return reject("target_unknown");
@@ -1633,7 +1671,7 @@ export class MatchSimulation {
       inspectorPublicId: inspector.publicPlayerId,
       correct: true,
       targetObjectId,
-      warrantsRemaining: this.warrantsRemaining,
+      warrantsRemaining: this.warrantsFor(inspector.playerId),
       revealedPlayerPublicId: record.ownerPublicPlayerId,
     });
     this.emit({
@@ -1648,7 +1686,7 @@ export class MatchSimulation {
 
   private resolveWrongAccusation(inspector: InternalPlayer, targetObjectId: string): void {
     this.resolvedObjects.set(targetObjectId, "innocent");
-    this.warrantsRemaining -= 1;
+    this.spendWarrant(inspector.playerId);
     inspector.stats.wrongAccusations += 1;
     this.accusationReadyAt.set(
       inspector.playerId,
@@ -1664,7 +1702,7 @@ export class MatchSimulation {
       inspectorPublicId: inspector.publicPlayerId,
       correct: false,
       targetObjectId,
-      warrantsRemaining: this.warrantsRemaining,
+      warrantsRemaining: this.warrantsFor(inspector.playerId),
       reactionId,
     });
     this.emit({
@@ -1942,7 +1980,13 @@ export class MatchSimulation {
       inspectorRounds: player.inspectorRounds,
       joinedRound: player.joinedRound,
     }));
-    const inspectorIds = new Set(assignInspectors(histories, rng));
+    const inspectorIds = new Set(
+      assignInspectors(
+        histories,
+        rng,
+        inspectorCountFor(participants.length, this.settings.seekerCount),
+      ),
+    );
 
     const inspectorPublicIds: string[] = [];
     const mimicPublicIds: string[] = [];
@@ -2067,13 +2111,21 @@ export class MatchSimulation {
     this.inspectionStartedAtMs = this.nowMs;
     this.inspectionEndsAtMs = this.phaseEndsAt;
     this.inspectionEndedAtMs = 0;
-    this.warrantsRemaining = this.countRemainingMimics() + this.settings.warrantsBonus;
-    this.warrantsTotal = this.warrantsRemaining;
+    // Every seeker is issued the same allowance: one warrant per hider plus the
+    // bonus. It is not a shared pool divided up, because two hunters each have
+    // to be able to convict every hider they find rather than half of them.
+    this.warrantsPerInspector = this.countRemainingMimics() + this.settings.warrantsBonus;
+    this.warrantsRemainingBy.clear();
+    for (const player of this.players.values()) {
+      if (player.role !== "inspector") continue;
+      this.warrantsRemainingBy.set(player.playerId, this.warrantsPerInspector);
+    }
+    this.warrantsTotal = this.warrantsRemainingTotal();
     this.scheduleNextMissedFinds();
     this.emit({
       type: "inspection_started",
       endsAt: this.inspectionEndsAtMs,
-      warrantsRemaining: this.warrantsRemaining,
+      warrantsRemaining: this.warrantsTotal,
       mimicsRemaining: this.countRemainingMimics(),
     });
   }
@@ -2195,7 +2247,8 @@ export class MatchSimulation {
     this.pendingEscapes = [];
     this.objectIdPool = [];
     this.accusationCounter = 0;
-    this.warrantsRemaining = 0;
+    this.warrantsPerInspector = 0;
+    this.warrantsRemainingBy.clear();
     this.warrantsTotal = 0;
     this.nextMissedFindsAtMs = 0;
     this.missedFindsCount = 0;
@@ -2412,6 +2465,22 @@ export class MatchSimulation {
       if (this.isWithinReconnectGrace(player)) continue;
       this.detachPlayer(player.playerId, "reconnect_timeout");
     }
+  }
+
+  /** Warrants this seeker may still spend. Zero for anyone who is not one. */
+  private warrantsFor(playerId: string): number {
+    return this.warrantsRemainingBy.get(playerId) ?? 0;
+  }
+
+  private spendWarrant(playerId: string): void {
+    this.warrantsRemainingBy.set(playerId, Math.max(0, this.warrantsFor(playerId) - 1));
+  }
+
+  /** What the room has left to fire, summed over the seekers still in it. */
+  private warrantsRemainingTotal(): number {
+    let total = 0;
+    for (const left of this.warrantsRemainingBy.values()) total += left;
+    return total;
   }
 
   private countRemainingMimics(): number {

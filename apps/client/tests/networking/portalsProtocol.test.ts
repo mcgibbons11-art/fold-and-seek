@@ -10,7 +10,6 @@ import {
   PAINT_WIRE_MAX_BASE64_LENGTH,
 } from "@foldseek/shared";
 import {
-  decodeHostPublication,
   decodePaintBook,
   decodePoseBook,
   encodeChunks,
@@ -263,9 +262,20 @@ describe("envelope validation", () => {
 
   it("accepts a command envelope and a resync", () => {
     expect(
-      parseEnvelope({ v: 1, t: "cmd", to: "host-1", cmd: { type: "start_match" } }),
+      parseEnvelope({
+        v: PORTALS_PROTOCOL_VERSION,
+        t: "cmd",
+        r: "ABCD",
+        to: "host-1",
+        cmd: { type: "start_match" },
+      }),
     ).not.toBeNull();
-    expect(parseEnvelope({ v: 1, t: "resync" })).not.toBeNull();
+    expect(
+      parseEnvelope({ v: PORTALS_PROTOCOL_VERSION, t: "resync", r: "ABCD" }),
+    ).not.toBeNull();
+    // The room is what separates one match from another on a channel they
+    // share, so an envelope without one addresses nobody and is refused.
+    expect(parseEnvelope({ v: PORTALS_PROTOCOL_VERSION, t: "resync" })).toBeNull();
   });
 });
 

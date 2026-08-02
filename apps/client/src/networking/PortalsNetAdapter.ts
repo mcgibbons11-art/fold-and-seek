@@ -11,6 +11,7 @@ import {
   type SpatialValidator,
 } from "@foldseek/game-sim";
 import {
+  DEFAULT_MATCH_SETTINGS,
   eyesAgree,
   LIMITS,
   MatchPhase,
@@ -60,16 +61,24 @@ import {
   RATE_WINDOW_MS,
   RateWindow,
   SEND_RATE_LIMIT,
-  PAINT_STATE_KEYS,
-  POSE_STATE_KEYS,
-  SIM_STATE_KEYS,
-  SNAPSHOT_STATE_KEYS,
   SNAPSHOT_WRITES_PER_SECOND,
   STATE_WRITES_PER_SECOND,
   type HostPublication,
   type PaintBook,
   type PoseBook,
 } from "./portalsProtocol";
+import {
+  DEFAULT_ROOM_SLOT,
+  ROOM_HEARTBEAT_MS,
+  ROOM_SLOTS,
+  RoomDirectory,
+  VACANT_SLOT,
+  freeRoomCode,
+  sanitizeRoomName,
+  type RoomAd,
+  type RoomListing,
+  type RoomSlot,
+} from "./roomRegistry";
 import { Signal } from "./signal";
 import type {
   PortalsNet,
@@ -97,6 +106,18 @@ import type {
  * who drops and returns inside the reconnect grace lands back in their own slot
  * with their role and disguise intact (§27.9). A guest has no stable id, so
  * their connection id is their seat and they behave as before.
+ *
+ * ROOMS. One relay channel carries every match in the session, because the SDK
+ * holds a single net session and a client cannot be in two channels at once. A
+ * room is therefore a logical partition: each one owns a disjoint range of state
+ * keys, every envelope names the room it belongs to, and a client drops the
+ * traffic of any room but its own. `roomRegistry.ts` holds the slot table, the
+ * key budget that fixes how many rooms a session can carry, and the
+ * advertisements that let a player find them. Joining the channel and joining a
+ * match are separate steps here — `joinSession` does the first and leaves the
+ * client browsing, `enterRoom` and `createRoom` do the second — and `join` runs
+ * both, which is what keeps a session with one room behaving exactly as it did
+ * before rooms existed.
  *
  * A second LIVE connection of one account is a second player rather than a
  * refusal. Both panes of the Portals editor's two-player preview carry the same
@@ -165,6 +186,24 @@ export interface PortalsAdapterOptions extends BotSeatOptions {
   readonly joinRetryDelayMs?: number;
 }
 
+/**
+ * Why a room could not be entered. Every one of these is the player's business
+ * and reaches them as a sentence, so none of them is reported as a bare failure.
+ */
+export type RoomEntryFailure =
+  /** Not in the relay session at all, so there is nothing to browse. */
+  | "not_in_session"
+  /** The code names no live room: it was mistyped, or the room has closed. */
+  | "no_such_room"
+  | "room_full"
+  /** Both of the session's room slots are taken (roomRegistry.ts). */
+  | "session_full"
+  | "already_in_room";
+
+export type RoomEntryResult =
+  | { readonly ok: true; readonly code: string }
+  | { readonly ok: false; readonly reason: RoomEntryFailure };
+
 /** Reads the SDK the Portals host injects, or null outside Portals. */
 export function detectPortals(): PortalsSdk | null {
   if (typeof window === "undefined") return null;
@@ -209,6 +248,34 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private readonly connectionNames = new Map<string, string>();
   /** Host only: which connection currently holds each seated player's slot. */
   private readonly seatOwners = new Map<string, string>();
+
+  /**
+   * The room this client is playing in, and the state keys that room publishes
+   * on. Null while the client is in the session but has not picked a room, which
+   * is the state the browser is read in: no simulation, no authority, and every
+   * envelope on the channel dropped.
+   */
+  private roomCode: string | null = null;
+  private roomSlot: RoomSlot = DEFAULT_ROOM_SLOT;
+  private roomName = "";
+  /** The settings the room was opened with, clamped to what its slot can carry. */
+  private roomSettings: MatchSettingsPatch = {};
+  /**
+   * Seats the session was already using when this client arrived, read once out
+   * of every room's publication. `indexSeats` needs it to tell a second live
+   * connection of one account from a returning one before this client has
+   * entered a room and so has a publication of its own.
+   */
+  private knownSeatIds: ReadonlySet<string> = new Set();
+  /** The name to play under, kept from the join so `enterRoom` can announce it. */
+  private displayName = "";
+  private readonly directory = new RoomDirectory();
+  private readonly directorySignal = new Signal<readonly RoomListing[]>();
+  /** Host only: the advertisement's heartbeat, and when it last went out. */
+  private adBeat = 0;
+  private lastAdAt = 0;
+  /** The last advertisement written, minus its beat, to spot a real change. */
+  private lastAdBody = "";
 
   private connection: ConnectionState = idleConnection("portals");
   private sync: MatchSync = EMPTY_SYNC;
@@ -345,7 +412,47 @@ export class PortalsNetAdapter implements NetworkAdapter {
     await this.portals.ready();
   }
 
+  /**
+   * Enters the session and lands in a room, which is what every caller that does
+   * not show a room browser wants.
+   *
+   * The rule reproduces what the transport did before rooms existed: everybody
+   * converges on the one room. A session already running a joinable room puts
+   * this client in it, and an empty session gets a room created for it, so a
+   * lone client, the editor's two preview panes, and a party that never opens
+   * the browser all behave exactly as they did.
+   *
+   * A session whose rooms are all full is a refusal rather than a new room.
+   * Opening one would be a defensible thing for a browser to offer, but this
+   * entry point means "put me in the game", and a player who lands alone in a
+   * room of their own has not joined the party they were trying to join.
+   */
   async join(room: string, displayName: string): Promise<ConnectionState> {
+    await this.joinSession(room, displayName);
+
+    const nowMs = this.clock();
+    const target = this.directory.quickJoinTarget(nowMs);
+    const entered =
+      target !== null
+        ? this.enterRoom(target.code)
+        : this.directory.list(nowMs).length === 0
+          ? this.createRoom(defaultRoomName(displayName))
+          : ({ ok: false, reason: "room_full" } as const);
+    if (!entered.ok) {
+      this.setStatus("error", entered.reason === "room_full" ? "room_full" : "join_failed");
+      await this.leaveQuietly();
+      throw new Error(entered.reason);
+    }
+    return this.connection;
+  }
+
+  /**
+   * Joins the relay channel and stops there, leaving this client in the session
+   * and in no room: it can read the directory and pick one, and until it does,
+   * every envelope on the channel belongs to somebody else's match and is
+   * dropped. This is the state a room browser is shown in.
+   */
+  async joinSession(room: string, displayName: string): Promise<ConnectionState> {
     if (this.disposed) throw new Error("PortalsNetAdapter was disposed");
     this.setStatus("connecting", null);
 
@@ -358,6 +465,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
 
     this.selfConnectionId = session.self.id;
+    this.displayName = displayName;
     this.players = mergeSelf(session.players, session.self);
     if (session.self.displayName === null) {
       // Portals owns display names; the requested one is only a fallback.
@@ -365,42 +473,189 @@ export class PortalsNetAdapter implements NetworkAdapter {
         player.id === session.self.id ? { ...player, displayName } : player,
       );
     }
-    const snapshot = decodeHostPublication(session.state);
-    this.poseBook = decodePoseBook(session.state) ?? {};
-    this.paintBook = decodePaintBook(session.state) ?? {};
-    const simChunk = decodeChunks(session.state, SIM_STATE_KEYS);
+
+    this.attachListeners();
+    this.directory.observeState(session.state, this.clock());
+    // Seats already spoken for anywhere in the session, gathered once so that
+    // the exact rule in `indexSeats` — a derived seat names the connection that
+    // owns it — applies to a client that has not entered a room yet and so has
+    // no publication of its own to read.
+    this.knownSeatIds = publishedSeatIds(session.state);
+    this.indexSeats();
+    this.selfSeatId = this.connectionSeats.get(session.self.id) ?? baseSeatIdOf(session.self);
+
+    this.startTimers();
+    this.setStatus("connected");
+    this.emitRoster();
+    this.emitDirectory();
+    return this.connection;
+  }
+
+  /* ------------------------------------------------------------------ rooms */
+
+  /** Live rooms in this session, newest reading of the registry. */
+  listRooms(): readonly RoomListing[] {
+    return this.directory.list(this.clock());
+  }
+
+  /** The room this client is playing in, or null while it is browsing. */
+  getRoomCode(): string | null {
+    return this.roomCode;
+  }
+
+  /** Fires whenever the session's advertised rooms change. */
+  onDirectory(listener: (rooms: readonly RoomListing[]) => void): Unsubscribe {
+    return this.directorySignal.subscribe(listener);
+  }
+
+  /**
+   * Opens a room and takes its host seat.
+   *
+   * The slot decides the room's size rather than the caller: the key ranges a
+   * slot owns are what a room's poses and paint have to fit inside, so a room
+   * seated past its slot would stop publishing the very thing that makes its
+   * disguises visible (roomRegistry.ts).
+   */
+  createRoom(name: string): RoomEntryResult {
+    if (this.connection.status !== "connected" || this.selfSeatId === null) {
+      return { ok: false, reason: "not_in_session" };
+    }
+    if (this.roomCode !== null) return { ok: false, reason: "already_in_room" };
+
+    const nowMs = this.clock();
+    const slot = this.directory.freeSlot(nowMs);
+    if (slot === null) return { ok: false, reason: "session_full" };
+
+    this.roomSlot = slot;
+    this.roomCode = freeRoomCode(this.directory, nowMs);
+    this.roomName = sanitizeRoomName(name, defaultRoomName(this.displayName));
+    this.roomSettings = {
+      ...(this.options.settings ?? {}),
+      maxPlayers: Math.min(
+        this.options.settings?.maxPlayers ?? DEFAULT_MATCH_SETTINGS.maxPlayers,
+        slot.maxPlayers,
+      ),
+    };
+    this.resetRoomState();
+
+    // The room's first host is whoever opened it, without an election: nobody
+    // else is in it, so there is nothing to elect between.
+    this.authoritySeatId = this.selfSeatId;
+    this.assumeAuthority();
+    this.publishAd(true);
+    this.emitDirectory();
+    return { ok: true, code: this.roomCode };
+  }
+
+  /** Takes a seat in a room somebody else opened. */
+  enterRoom(code: string): RoomEntryResult {
+    if (this.connection.status !== "connected" || this.selfConnectionId === null) {
+      return { ok: false, reason: "not_in_session" };
+    }
+    if (this.roomCode !== null) return { ok: false, reason: "already_in_room" };
+
+    const nowMs = this.clock();
+    const listing = this.directory.find(code, nowMs);
+    if (listing === null) return { ok: false, reason: "no_such_room" };
+    const slot = ROOM_SLOTS[listing.slot];
+    if (slot === undefined) return { ok: false, reason: "no_such_room" };
+
+    const state = this.net.getState();
+    const snapshot = decodeHostPublication(state, slot.keys.snapshot);
+    const self = this.players.find((player) => player.id === this.selfConnectionId);
+    if (snapshot !== null && self !== undefined && this.isRoomFull(snapshot, self)) {
+      // The host would refuse the seat anyway; failing here means the player
+      // gets a reason instead of sitting in a room that never seats them.
+      return { ok: false, reason: "room_full" };
+    }
+
+    this.roomSlot = slot;
+    this.roomCode = listing.code;
+    this.roomName = listing.name;
+    this.roomSettings = {
+      ...(this.options.settings ?? {}),
+      maxPlayers: Math.min(listing.maxPlayers, slot.maxPlayers),
+    };
+    this.resetRoomState();
+
+    this.poseBook = decodePoseBook(state, slot.keys.pose) ?? {};
+    this.paintBook = decodePaintBook(state, slot.keys.paint) ?? {};
+    const simChunk = decodeChunks(state, slot.keys.sim);
     if (simChunk) {
       this.lastSimSeq = simChunk.seq;
       this.lastSimSnapshot = simChunk.value;
     }
-    if (snapshot && this.isRoomFull(snapshot, session.self)) {
-      // The host would refuse the seat anyway; failing here means the player
-      // gets a reason instead of sitting in a room that never seats them.
-      this.selfConnectionId = null;
-      this.players = [];
-      this.setStatus("error", "room_full");
-      await this.net.leave();
-      throw new Error("room_full");
-    }
-
-    this.attachListeners();
-    // Held before the seats are worked out: the published roster is what tells
-    // this client which of two same-account connections already holds the
-    // account's own seat.
     this.lastSnapshot = snapshot;
-    this.indexSeats();
-    this.selfSeatId = this.connectionSeats.get(session.self.id) ?? baseSeatIdOf(session.self);
-    if (this.lastSnapshot) {
-      this.adoptSnapshotSeq(this.lastSnapshot);
-      this.setSync(this.withBodies(this.lastSnapshot), null);
+    if (snapshot !== null) {
+      this.adoptSnapshotSeq(snapshot);
+      this.setSync(this.withBodies(snapshot), null);
     }
 
     this.resolveAuthority();
-    this.startTimers();
-    this.setStatus("connected");
-    this.emitRoster();
+    // The relay's own arrival event says somebody opened the game, not that they
+    // joined this match, so the room's host is told in as many words. It reaches
+    // every client and only that host acts on it.
+    this.rawSend({
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "enter",
+      displayName: this.displayName.slice(0, LIMITS.displayNameLength) || "Visitor",
+    });
     if (!this.isAuthority()) this.requestResync();
-    return this.connection;
+    this.emitRoster();
+    return { ok: true, code: this.roomCode };
+  }
+
+  /** Enters the fullest room with a seat left, or opens one when none has. */
+  quickJoin(name?: string): RoomEntryResult {
+    const target = this.directory.quickJoinTarget(this.clock());
+    if (target !== null) return this.enterRoom(target.code);
+    return this.createRoom(name ?? defaultRoomName(this.displayName));
+  }
+
+  /**
+   * Gives up this client's seat and returns it to the browser, still in the
+   * session. A host that is the last one out retires its room's advertisement so
+   * the slot is free at once rather than after the heartbeat times out.
+   */
+  leaveRoom(): void {
+    const code = this.roomCode;
+    if (code === null) return;
+
+    if (this.isAuthority()) {
+      const remaining = this.roomSeats().filter((seat) => seat !== this.selfSeatId);
+      if (remaining.length === 0) this.retireAd();
+    }
+    this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "exit" });
+
+    this.roomCode = null;
+    this.authoritySeatId = null;
+    this.releaseAuthority();
+    this.resetRoomState();
+    this.setStatus(this.connection.status, null);
+    this.emitRoster();
+    this.emitDirectory();
+  }
+
+  /** Everything one room's worth of published state, cleared between rooms. */
+  private resetRoomState(): void {
+    this.lastSnapshot = null;
+    this.lastSimSnapshot = null;
+    this.lastSimSeq = 0;
+    this.poseBook = {};
+    this.paintBook = {};
+    this.lastPoseSerialized = "";
+    this.lastPaintSerialized = "";
+    this.poseSeq = 0;
+    this.paintSeq = 0;
+    this.snapshotSeq = 0;
+    this.snapshotDirty = false;
+    this.lastSnapshotAt = 0;
+    this.adBeat = 0;
+    this.lastAdAt = 0;
+    this.lastAdBody = "";
+    this.oversizedRanges.clear();
+    this.sync = EMPTY_SYNC;
+    this.syncSignal.emit(this.sync);
   }
 
   /**
@@ -487,9 +742,14 @@ export class PortalsNetAdapter implements NetworkAdapter {
   }
 
   async disconnect(): Promise<void> {
+    // Leaving the session leaves the room first, so a host that is the last one
+    // out frees its slot for whoever opens the next room.
+    this.leaveRoom();
     this.stopTimers();
     this.detachListeners();
     this.releaseAuthority();
+    this.directory.clear();
+    this.roomCode = null;
     this.players = [];
     this.connectionSeats.clear();
     this.connectionNames.clear();
@@ -510,6 +770,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.eventSignal.clear();
     this.privateSignal.clear();
     this.rejectionSignal.clear();
+    this.directorySignal.clear();
     this.rosterSignal.clear();
     this.statusSignal.clear();
     this.syncSignal.clear();
@@ -594,10 +855,15 @@ export class PortalsNetAdapter implements NetworkAdapter {
     // Keyed by seat rather than by connection, which is the identity every
     // other part of the game speaks in. Two connections of one account hold two
     // seats and appear twice, under names a numeral tells apart.
+    //
+    // It is the room's roster, not the session's: the channel also carries the
+    // people in the other match and the people still choosing one, and a lobby
+    // listing them would be counting players who are not in the round.
+    const members = new Set(this.roomSeats());
     const bySeat = new Map<string, RosterEntry>();
     for (const player of this.players) {
       const seat = this.connectionSeats.get(player.id);
-      if (seat === undefined || bySeat.has(seat)) continue;
+      if (seat === undefined || !members.has(seat) || bySeat.has(seat)) continue;
       bySeat.set(seat, {
         id: seat,
         displayName: this.connectionNames.get(player.id) ?? nameOf(player),
@@ -699,6 +965,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
       console.warn("[portals] dropped malformed message from", fromId);
       return;
     }
+
+    // The room partition, and the whole of it. Every client in the session hears
+    // every broadcast, so a match's traffic is separated from its neighbour's
+    // here and nowhere else: an envelope for another room is another room's
+    // business, and a client that has not entered one has no business at all.
+    if (this.roomCode === null || envelope.r !== this.roomCode) return;
 
     // Everything below is decided on the sender's seat. The relay reports a
     // connection, and a connection with no seat has nothing to say to the room.
@@ -814,28 +1086,61 @@ export class PortalsNetAdapter implements NetworkAdapter {
         this.pendingPaintResend = this.lastPaintUpdate;
         return;
 
+      case "enter": {
+        // Only this room's host seats anyone, and it does so from the message
+        // rather than from the relay's arrival event, which says nothing about
+        // which room the arrival meant.
+        if (!this.isAuthority()) return;
+        if (!this.commandWindow.tryConsume(fromId, this.clock())) return;
+        const player = this.players.find((candidate) => candidate.id === fromId);
+        if (player === undefined) return;
+        this.connectionNames.set(fromId, this.connectionNames.get(fromId) ?? envelope.displayName);
+        this.seatArrival(player);
+        // A joiner reads the state keys as it enters, so publish as early as the
+        // write cadence allows; the state event carries the rest moments later.
+        this.maybeWriteSnapshot();
+        this.publishAd();
+        this.emitRoster();
+        return;
+      }
+
+      case "exit": {
+        if (!this.isAuthority() || fromSeat === undefined) return;
+        if (this.seatOwners.get(fromSeat) !== fromId) return;
+        // A deliberate departure is not a dropout: the seat is freed outright
+        // rather than held through the reconnect grace, because the player is
+        // still in the session and has chosen to be somewhere else.
+        this.releaseSeat(fromSeat);
+        this.applySim("removePlayer", (sim) => sim.removePlayer(fromSeat));
+        this.publishAd();
+        this.emitRoster();
+        return;
+      }
+
       case "refused":
         // Addressed by connection, so that only the tab that arrived second is
         // turned away when two share a seat.
         if (envelope.to !== this.selfConnectionId) return;
-        this.stopTimers();
+        this.roomCode = null;
+        this.releaseAuthority();
+        this.authoritySeatId = null;
         this.setStatus("error", refusalDetail(envelope.reason));
         return;
     }
   };
 
+  /**
+   * Someone opened the game. That is all it means: the session's one channel
+   * carries every room, so an arrival has joined no match until it says which
+   * one it wants, which is the `enter` envelope. All this does is give the new
+   * connection a seat id to be addressed by.
+   */
   private readonly handlePlayerJoin = (
-    player: PortalsNetPlayer,
+    _player: PortalsNetPlayer,
     players: PortalsNetPlayer[],
   ): void => {
     this.players = players;
     this.indexSeats();
-    if (this.sim && this.isAuthority()) {
-      this.seatArrival(player);
-      // A joiner reads the state keys during join(), so publish as early as the
-      // write cadence allows; the state event carries the rest moments later.
-      this.maybeWriteSnapshot();
-    }
     this.resolveAuthority();
     this.emitRoster();
   };
@@ -908,21 +1213,29 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.eyeWindow.forget(player.id);
 
     if (this.sim && this.isAuthority() && this.seatOwners.get(seat) === player.id) {
-      // A departed Inspector's last reported eye is not where anybody is
-      // standing, so the host forgets it rather than keeping a ghost's view.
-      this.options.onInspectorEye?.(seat, null);
-      this.seatOwners.delete(seat);
-      this.pendingSync.delete(seat);
-      this.privateOutbox.delete(seat);
-      this.pendingRejections.delete(seat);
+      this.releaseSeat(seat);
       // Hold the slot rather than dropping it. The simulation runs the grace
       // window and evicts the seat itself once it expires, and a return inside
       // that window is reattached by seatArrival.
       this.applySim("markDisconnected", (sim) => sim.markDisconnected(seat, this.clock()));
+      this.publishAd();
     }
     this.resolveAuthority();
     this.emitRoster();
   };
+
+  /**
+   * Lets go of everything the host was holding for one seat. The eye goes with
+   * it: a departed Inspector's last reported position is not where anybody is
+   * standing, and keeping it would leave the validator answering for a ghost.
+   */
+  private releaseSeat(seat: string): void {
+    this.options.onInspectorEye?.(seat, null);
+    this.seatOwners.delete(seat);
+    this.pendingSync.delete(seat);
+    this.privateOutbox.delete(seat);
+    this.pendingRejections.delete(seat);
+  }
 
   /**
    * Re-reads the roster from the relay and settles who is authoritative. Used
@@ -968,9 +1281,10 @@ export class PortalsNetAdapter implements NetworkAdapter {
       this.connectionNames.delete(connectionId);
     }
 
-    const publishedSeats = new Set(
-      (this.lastSnapshot?.publicState.players ?? []).map((entry) => entry.seatId),
-    );
+    const publishedSeats = new Set([
+      ...this.knownSeatIds,
+      ...(this.lastSnapshot?.publicState.players ?? []).map((entry) => entry.seatId),
+    ]);
     const undecided: PortalsNetPlayer[] = [];
     for (const player of this.players) {
       if (this.connectionSeats.has(player.id)) continue;
@@ -1007,12 +1321,21 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.connectionNames.set(player.id, numberedName(nameOf(player), Math.max(2, earlier + 1)));
   }
 
-  private readonly handleState = (key: string): void => {
-    if (this.isAuthority()) return;
+  private readonly handleState = (key: string, value: unknown): void => {
+    // The registry is read whatever room this client is in, and whether or not
+    // it is in one at all: it is how a browser learns that a room opened, filled
+    // up, started its round or went quiet.
+    if (this.directory.observe(key, value, this.clock())) {
+      this.checkAdOwnership();
+      this.emitDirectory();
+      return;
+    }
+    if (this.isAuthority() || this.roomCode === null) return;
+    const keys = this.roomSlot.keys;
     const state = this.net.getState();
 
-    if ((POSE_STATE_KEYS as readonly string[]).includes(key)) {
-      const poses = decodePoseBook(state);
+    if ((keys.pose as readonly string[]).includes(key)) {
+      const poses = decodePoseBook(state, keys.pose);
       if (poses) {
         this.poseBook = poses;
         // The publication this client already holds described these disguises
@@ -1022,8 +1345,8 @@ export class PortalsNetAdapter implements NetworkAdapter {
       return;
     }
 
-    if ((PAINT_STATE_KEYS as readonly string[]).includes(key)) {
-      const paint = decodePaintBook(state);
+    if ((keys.paint as readonly string[]).includes(key)) {
+      const paint = decodePaintBook(state, keys.paint);
       if (paint) {
         this.paintBook = paint;
         if (this.lastSnapshot) this.setSync(this.withBodies(this.lastSnapshot), this.sync.privateState);
@@ -1031,11 +1354,11 @@ export class PortalsNetAdapter implements NetworkAdapter {
       return;
     }
 
-    if ((SIM_STATE_KEYS as readonly string[]).includes(key)) {
+    if ((keys.sim as readonly string[]).includes(key)) {
       // Held unparsed until this client actually has to take over. Reading it
       // eagerly would mean every client decoding the room's secrets on every
       // publish for no reason.
-      const chunked = decodeChunks(state, SIM_STATE_KEYS);
+      const chunked = decodeChunks(state, keys.sim);
       if (chunked && chunked.seq >= this.lastSimSeq) {
         this.lastSimSeq = chunked.seq;
         this.lastSimSnapshot = chunked.value;
@@ -1043,8 +1366,8 @@ export class PortalsNetAdapter implements NetworkAdapter {
       return;
     }
 
-    if (!(SNAPSHOT_STATE_KEYS as readonly string[]).includes(key)) return;
-    const snapshot = decodeHostPublication(state);
+    if (!(keys.snapshot as readonly string[]).includes(key)) return;
+    const snapshot = decodeHostPublication(state, keys.snapshot);
     if (!snapshot) return;
     if (this.lastSnapshot && snapshot.seq <= this.lastSnapshot.seq) return;
     this.lastSnapshot = snapshot;
@@ -1067,8 +1390,40 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
   // ------------------------------------------------------------------ authority
 
+  /**
+   * The seats this client believes are in its own room.
+   *
+   * Authority is elected inside a room, never across the session, so the
+   * candidate set has to exclude the people browsing and the people playing next
+   * door. Two sources agree on it: the room's published roster, which every
+   * client has been holding all along, and — on the host, which is the only
+   * client that knows it first-hand — the seats it has actually seated. Bots are
+   * left out because no connection stands behind them, and a seat whose
+   * connection has gone is left out because it cannot run anything.
+   */
+  private roomSeats(): string[] {
+    if (this.roomCode === null) return [];
+    const live = new Set(this.connectionSeats.values());
+    const seats = new Set<string>();
+    if (this.selfSeatId !== null) seats.add(this.selfSeatId);
+    for (const player of this.lastSnapshot?.publicState.players ?? []) {
+      if (!isBotSeat(player.seatId) && live.has(player.seatId)) seats.add(player.seatId);
+    }
+    for (const seat of this.seatOwners.keys()) {
+      if (live.has(seat)) seats.add(seat);
+    }
+    return [...seats];
+  }
+
   private resolveAuthority(): void {
-    const seats = [...new Set(this.connectionSeats.values())];
+    if (this.roomCode === null) {
+      // Nobody is authoritative over a client that is only browsing.
+      if (this.authoritySeatId === null) return;
+      this.authoritySeatId = null;
+      this.releaseAuthority();
+      return;
+    }
+    const seats = this.roomSeats();
     const held = this.authoritySeatId !== null && seats.includes(this.authoritySeatId);
     const published = this.lastSnapshot?.authorityId;
     const next = held
@@ -1112,9 +1467,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (this.resumeFromSnapshot(snapshot)) return;
 
     const interrupted = snapshot !== null && snapshot.publicState.phase !== MatchPhase.Lobby;
-    const settings = snapshot
-      ? settingsPatchOf(snapshot.publicState.settings)
-      : (this.options.settings ?? {});
+    const settings = snapshot ? settingsPatchOf(snapshot.publicState.settings) : this.roomSettings;
 
     this.sim = new MatchSimulation(
       settings,
@@ -1254,12 +1607,17 @@ export class PortalsNetAdapter implements NetworkAdapter {
     return true;
   }
 
-  /** Every live connection paired with the seat it was given, in roster order. */
+  /**
+   * Every connection in THIS ROOM paired with the seat it was given, in roster
+   * order. The session's other connections are in another match or in none, and
+   * a new host that seated them would pull the whole channel into its round.
+   */
   private seatedConnections(): { seat: string; player: PortalsNetPlayer }[] {
+    const members = new Set(this.roomSeats());
     const seated: { seat: string; player: PortalsNetPlayer }[] = [];
     for (const player of this.players) {
       const seat = this.connectionSeats.get(player.id);
-      if (seat !== undefined) seated.push({ seat, player });
+      if (seat !== undefined && members.has(seat)) seated.push({ seat, player });
     }
     return seated;
   }
@@ -1410,23 +1768,22 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (this.selfSeatId === null) return;
     this.drainPaintResend();
     this.drainEyeReport();
-    if (!this.isAuthority()) return;
+    const room = this.roomCode;
+    if (!this.isAuthority() || room === null) return;
+    this.publishAd();
 
     if (this.publicOutbox.length > 0) {
       const pending = coalesceDisguiseUpdates(
         this.publicOutbox.splice(0, this.publicOutbox.length),
       );
-      const { batches, oversized } = batchEvents(pending, (events) => ({
+      const buildPublic = (events: SimEvent[]): Record<string, unknown> => ({
         v: PORTALS_PROTOCOL_VERSION,
         t: "ev",
         events,
-      }));
+      });
+      const { batches, oversized } = batchEvents(pending, buildPublic);
       this.reportDroppedEvents(oversized, null);
-      const unsent = this.sendBatches(batches, (events) => ({
-        v: PORTALS_PROTOCOL_VERSION,
-        t: "ev",
-        events,
-      }));
+      const unsent = this.sendBatches(batches, buildPublic);
       if (unsent.length > 0) this.publicOutbox.unshift(...unsent);
     }
 
@@ -1442,7 +1799,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         this.pendingSync.delete(seatId);
         continue;
       }
-      const build = (events: PrivateSimEvent[]): unknown => ({
+      const build = (events: PrivateSimEvent[]): Record<string, unknown> => ({
         v: PORTALS_PROTOCOL_VERSION,
         t: "pev",
         to: seatId,
@@ -1504,6 +1861,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
    */
   private drainEyeReport(): void {
     if (!this.eyeReported || this.isAuthority() || this.authoritySeatId === null) return;
+    if (this.roomCode === null) return;
     const eye = this.pendingEye;
     if (eyesAgree(eye, this.sentEye)) return;
     if (
@@ -1550,7 +1908,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
 
     this.lastSimSeq += 1;
-    if (this.writeChunked(snapshot, this.lastSimSeq, SIM_STATE_KEYS, "simulation snapshot") === "written") {
+    if (this.writeChunked(snapshot, this.lastSimSeq, this.roomSlot.keys.sim, "simulation snapshot") === "written") {
       this.lastSimSnapshot = snapshot;
     }
   }
@@ -1565,7 +1923,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (serialized === this.lastPoseSerialized) return;
 
     this.poseSeq += 1;
-    if (this.writeChunked(book, this.poseSeq, POSE_STATE_KEYS, "locked poses") === "written") {
+    if (this.writeChunked(book, this.poseSeq, this.roomSlot.keys.pose, "locked poses") === "written") {
       this.poseBook = book;
       this.lastPoseSerialized = serialized;
     }
@@ -1582,7 +1940,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (serialized === this.lastPaintSerialized) return;
 
     this.paintSeq += 1;
-    if (this.writeChunked(book, this.paintSeq, PAINT_STATE_KEYS, "body paint") === "written") {
+    if (this.writeChunked(book, this.paintSeq, this.roomSlot.keys.paint, "body paint") === "written") {
       this.paintBook = book;
       this.lastPaintSerialized = serialized;
     }
@@ -1613,7 +1971,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.lastSimSeq += 1;
     // A one-chunk empty marker supersedes whatever was there, since the relay
     // has no delete.
-    this.writeChunked(null, this.lastSimSeq, SIM_STATE_KEYS, "simulation snapshot");
+    this.writeChunked(null, this.lastSimSeq, this.roomSlot.keys.sim, "simulation snapshot");
   }
 
   /**
@@ -1669,6 +2027,95 @@ export class PortalsNetAdapter implements NetworkAdapter {
     console.error(`[portals] ${label} exceeds the ${keyCount}-key budget and cannot publish`);
   }
 
+  /**
+   * Writes this room's advertisement, which is the whole of what a player
+   * browsing the session can see of it.
+   *
+   * Only the room's host writes it, and only to its own slot's key, so the two
+   * rooms in a session never overwrite each other under last-write-wins.
+   *
+   * It goes out on either of two conditions. Anything a browser can read having
+   * changed — a player arriving, the round starting — is published at once,
+   * because a room browser that is three seconds behind sends people to a room
+   * that filled up while they were reading it. Nothing having changed still
+   * publishes on the heartbeat, because the beat is what tells every other
+   * client the room is alive at all: a reader retires a room whose counter has
+   * stopped moving, measured on the reader's own clock, since the session has no
+   * clock the two of them share.
+   */
+  private publishAd(force = false): void {
+    if (!this.isAuthority() || this.roomCode === null || this.selfSeatId === null) return;
+
+    const state = this.sim?.getPublicState();
+    const body = {
+      v: PORTALS_PROTOCOL_VERSION,
+      code: this.roomCode,
+      name: this.roomName,
+      host: this.selfSeatId,
+      slot: this.roomSlot.index,
+      players: state?.players.length ?? 1,
+      bots: state?.players.filter((player) => isBotSeat(player.seatId)).length ?? 0,
+      maxPlayers: Math.min(
+        state?.settings.maxPlayers ?? this.roomSlot.maxPlayers,
+        this.roomSlot.maxPlayers,
+      ),
+      seekers: state?.settings.seekerCount ?? DEFAULT_MATCH_SETTINGS.seekerCount,
+      phase: state?.phase ?? MatchPhase.Lobby,
+    } as const;
+
+    const nowMs = this.clock();
+    const serialized = JSON.stringify(body);
+    const changed = serialized !== this.lastAdBody;
+    if (!force && !changed && nowMs - this.lastAdAt < ROOM_HEARTBEAT_MS) return;
+    if (!this.stateWindow.tryConsume(nowMs)) return;
+
+    this.adBeat += 1;
+    this.lastAdAt = nowMs;
+    this.lastAdBody = serialized;
+    const ad: RoomAd = { ...body, beat: this.adBeat };
+    this.net.setState(this.roomSlot.adKey, ad);
+    // The writer hears its own state event, so the directory learns about this
+    // room the same way it learns about the other one.
+  }
+
+  /** Frees this room's slot at once, rather than leaving it to time out. */
+  private retireAd(): void {
+    if (this.roomCode === null) return;
+    this.directory.forget(this.roomSlot.index);
+    this.net.setState(this.roomSlot.adKey, VACANT_SLOT);
+  }
+
+  /**
+   * Gives up a slot this client lost the race for.
+   *
+   * Two clients can open a room in the same instant and pick the same free slot,
+   * and the relay settles it the only way it can: last write wins, so one of the
+   * two advertisements is simply gone. The loser finds a stranger's room on the
+   * key it thought it owned, and has to stand down rather than go on publishing
+   * a match nobody can find into keys another room is using.
+   */
+  private checkAdOwnership(): void {
+    if (this.roomCode === null || !this.isAuthority()) return;
+    const mine = this.directory
+      .list(this.clock())
+      .find((room) => room.slot === this.roomSlot.index);
+    if (mine === undefined || mine.code === this.roomCode) return;
+
+    console.warn(`[portals] lost room slot ${this.roomSlot.index} to ${mine.code}, standing down`);
+    const lost = this.roomCode;
+    this.roomCode = null;
+    this.authoritySeatId = null;
+    this.releaseAuthority();
+    this.resetRoomState();
+    this.rejectionSignal.emit(rejectionOf("create_room", "slot_taken", lost));
+    this.setStatus(this.connection.status, null);
+    this.emitRoster();
+  }
+
+  private emitDirectory(): void {
+    this.directorySignal.emit(this.directory.list(this.clock()));
+  }
+
   private adoptSnapshotSeq(snapshot: HostPublication): void {
     this.snapshotSeq = Math.max(this.snapshotSeq, snapshot.seq);
   }
@@ -1683,7 +2130,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
   /** Sends batches in order, returning the events it could not fit in the budget. */
   private sendBatches<E extends SimEvent | PrivateSimEvent>(
     batches: E[][],
-    build: (events: E[]) => unknown,
+    build: (events: E[]) => Record<string, unknown>,
   ): E[] {
     for (let index = 0; index < batches.length; index += 1) {
       const batch = batches[index] as E[];
@@ -1718,8 +2165,20 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "resync" });
   }
 
-  /** The single exit to the relay. Enforces the 8 KB and ~20/s ceilings. */
-  private rawSend(payload: unknown): boolean {
+  /**
+   * The single exit to the relay. Enforces the 8 KB and ~20/s ceilings.
+   *
+   * It takes a whole envelope rather than any object, so that every message
+   * naming the room it belongs to is a compile-time fact rather than a habit:
+   * an envelope sent without one would be dropped by every client in the
+   * session, silently, and only in a session that had more than one room.
+   */
+  private rawSend(body: Record<string, unknown>): boolean {
+    const room = this.roomCode;
+    // Nothing leaves a client that is not in a room: there is no match for it
+    // to belong to, and an unaddressed envelope would be dropped by everyone.
+    if (room === null) return false;
+    const payload = { ...body, r: room };
     const bytes = jsonByteLength(payload);
     if (bytes > MAX_PAYLOAD_BYTES) {
       console.warn(`[portals] dropped ${bytes} byte message over the ${MAX_PAYLOAD_BYTES} byte limit`);
@@ -1758,7 +2217,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         })),
       },
     };
-    if (this.writeChunked(snapshot, this.snapshotSeq, SNAPSHOT_STATE_KEYS, "public state") !== "written") {
+    if (this.writeChunked(snapshot, this.snapshotSeq, this.roomSlot.keys.snapshot, "public state") !== "written") {
       return;
     }
     this.lastSnapshot = snapshot;
@@ -1976,6 +2435,26 @@ function refusalDetail(reason: string): ConnectionDetail {
   return "join_failed";
 }
 
+/**
+ * Every seat the session has already handed out, read from all rooms at once.
+ * `indexSeats` needs it before this client has entered a room of its own, and
+ * one pass over the state map at join is the whole cost of having it.
+ */
+function publishedSeatIds(state: Record<string, unknown>): ReadonlySet<string> {
+  const seats = new Set<string>();
+  for (const slot of ROOM_SLOTS) {
+    const publication = decodeHostPublication(state, slot.keys.snapshot);
+    for (const player of publication?.publicState.players ?? []) seats.add(player.seatId);
+  }
+  return seats;
+}
+
+/** What a room is called when its host never named it. */
+function defaultRoomName(displayName: string): string {
+  const owner = displayName.trim();
+  return owner.length > 0 ? `${owner}'s room` : "The Curiosity Shop";
+}
+
 function mergeSelf(players: PortalsNetPlayer[], self: PortalsNetPlayer): PortalsNetPlayer[] {
   return players.some((player) => player.id === self.id) ? [...players] : [...players, self];
 }
@@ -1993,6 +2472,7 @@ function nameOf(player: PortalsNetPlayer): string {
 function settingsPatchOf(settings: MatchSettings): Required<MatchSettingsPatch> {
   return {
     maxPlayers: settings.maxPlayers,
+    seekerCount: settings.seekerCount,
     mapIntroMs: settings.mapIntroMs,
     roleRevealMs: settings.roleRevealMs,
     baselineScanMs: settings.baselineScanMs,

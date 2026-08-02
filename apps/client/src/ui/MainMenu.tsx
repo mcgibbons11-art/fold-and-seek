@@ -1,6 +1,7 @@
 import { useState, type CSSProperties, type ReactElement } from "react";
 
 import { ControlsLegend } from "./ControlsLegend";
+import { RoomBrowser, type RoomBrowserProps } from "./RoomBrowser";
 import {
   CORE_CONTROL_HINTS,
   HIDER_CONTROL_HINTS,
@@ -53,6 +54,10 @@ const cardStyle: CSSProperties = {
   width: 400,
   maxWidth: "88vw",
   textAlign: "center",
+  // The room browser can add several rows to this card, so it scrolls inside
+  // itself the way the rules card does rather than running off a short screen.
+  maxHeight: "min(88vh, 760px)",
+  overflowY: "auto",
 };
 
 const buttonBlock: CSSProperties = { display: "block", width: "100%", marginTop: 10 };
@@ -181,6 +186,12 @@ export interface MainMenuProps {
   readonly multiplayer?: boolean;
   /** Why the last attempt did not open a round. Null hides the line. */
   readonly notice?: string | null;
+  /**
+   * The session's rooms and the ways into one. Present only once this client is
+   * in the relay session: until then there is nothing to browse, and the menu
+   * offers the single play button it always did.
+   */
+  readonly browser?: RoomBrowserProps | null;
 }
 
 export function MainMenu({
@@ -189,6 +200,7 @@ export function MainMenu({
   starting = false,
   multiplayer = false,
   notice = null,
+  browser = null,
 }: MainMenuProps): ReactElement {
   const [showRules, setShowRules] = useState(false);
 
@@ -215,15 +227,21 @@ export function MainMenu({
           whatever is lying.
         </p>
 
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          style={{ ...(starting ? disabledButtonStyle(primaryButtonStyle) : primaryButtonStyle), ...buttonBlock }}
-          onClick={onPlayRound}
-          disabled={starting}
-        >
-          {starting ? "Opening the shop…" : multiplayer ? "Join the room" : "Start game"}
-        </button>
+        {/* With a room browser, picking a room IS starting the game, so a play
+            button above it would be a second answer to the same question. */}
+        {browser === null ? (
+          <button
+            type="button"
+            className={PRESS_CLASS}
+            style={{ ...(starting ? disabledButtonStyle(primaryButtonStyle) : primaryButtonStyle), ...buttonBlock }}
+            onClick={onPlayRound}
+            disabled={starting}
+          >
+            {starting ? "Opening the shop…" : multiplayer ? "Join the room" : "Start game"}
+          </button>
+        ) : (
+          <RoomBrowser {...browser} />
+        )}
         <button
           type="button"
           className={PRESS_CLASS}

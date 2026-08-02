@@ -321,7 +321,7 @@ describe("host migration snapshot", () => {
       MatchSimulation.restore(tampered((d) => (d["backdoor"] = true)) as MatchSnapshot),
     ).toThrow(/not valid state/);
     expect(() =>
-      MatchSimulation.restore(tampered((d) => delete d["wr"]) as MatchSnapshot),
+      MatchSimulation.restore(tampered((d) => delete d["wp"]) as MatchSnapshot),
     ).toThrow(/not valid state/);
     expect(() =>
       MatchSimulation.restore(tampered((d) => (d["rc"] = -1)) as MatchSnapshot),

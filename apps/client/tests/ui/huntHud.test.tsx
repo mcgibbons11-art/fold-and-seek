@@ -311,10 +311,11 @@ describe("hunt HUD region ownership", () => {
     expect(scrollers[0]).toBe(column);
   });
 
-  it("folds a hider's tool panels at every size, so the toolset is not drawn twice", () => {
-    // The panels' own contents have to be absent from the DOM rather than
-    // merely hidden: what they cost is the count of things on screen, and the
-    // rail beside them is already the whole toolset with the keys on it.
+  it("opens a hider's tool panels where they fit, folds them only at 720p", () => {
+    // USER DIRECTIVE (2026-08-02): the fold tools must never READ as taken
+    // away mid-round, so the panels start open wherever the column holds them
+    // whole. At 720p they would open onto a scrollbar, so the critic's folded
+    // default keeps that case and the rail's keys remain the way in.
     const restore = { width: window.innerWidth, height: window.innerHeight };
     const folded: Record<string, string | null> = {};
     for (const viewport of VIEWPORTS) {
@@ -343,7 +344,7 @@ describe("hunt HUD region ownership", () => {
     Object.defineProperty(window, "innerHeight", { value: restore.height, configurable: true });
 
     expect(folded["1280x720"]).toBe("folded");
-    expect(folded["1920x1080"]).toBe("folded");
+    expect(folded["1920x1080"]).toBe("open");
   });
 
   it("opens the folded panels when the header is pressed", () => {

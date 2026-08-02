@@ -21,7 +21,14 @@ import {
  * net.send, ~20 sends/s per player, 8 KB per net.setState value, 64 keys.
  */
 
-export const PORTALS_PROTOCOL_VERSION = 1;
+/**
+ * Version 2 gave every envelope a room, so that one relay channel can carry
+ * several concurrent matches (networking/roomRegistry.ts). A client refuses an
+ * envelope of any other version outright rather than reading it with defaults:
+ * nothing has shipped, so there is no older client in the world worth carrying,
+ * and a silent upgrade path is a bug waiting for the first real one.
+ */
+export const PORTALS_PROTOCOL_VERSION = 2;
 
 /** Hard ceiling for one net.send payload and for one net.setState value. */
 export const MAX_PAYLOAD_BYTES = 8_192;
@@ -96,7 +103,10 @@ export const POSE_STATE_KEYS = [
  * this paragraph: the measurement is printed by the "body paint range" test in
  * portalsProtocol.test.ts, which fails if the ceiling outgrows the range.
  *
- * The relay allows 64 keys per session; this whole protocol uses forty.
+ * The relay allows 64 keys per session. These four ranges are ONE room's forty;
+ * the rest fund the session's second room and the two advertisements that make
+ * both of them findable. networking/roomRegistry.ts owns that allocation and
+ * derives it from the ceilings above rather than restating them.
  */
 export const PAINT_STATE_KEYS = [
   "paint",
@@ -138,6 +148,17 @@ export const MAX_EVENTS_PER_MESSAGE = 64;
 export const MAX_REJECTIONS_PER_MESSAGE = 8;
 const connectionId = z.string().min(1).max(LIMITS.idLength);
 const version = z.literal(PORTALS_PROTOCOL_VERSION);
+/**
+ * Which room an envelope belongs to.
+ *
+ * One relay channel carries every room in the session, and the relay has no
+ * notion of a subgroup, so this field is the whole of the partition: a client
+ * drops any envelope whose room is not its own before looking at anything else
+ * (networking/roomRegistry.ts). It is bounded rather than exactly shaped here
+ * because the registry owns the code format and routing is an equality test
+ * against the reader's own code, so a malformed code simply addresses nobody.
+ */
+const roomCode = z.string().min(1).max(16);
 
 /**
  * Every `to` in this protocol is a SEAT id (the identity the simulation knows a
@@ -147,11 +168,18 @@ const version = z.literal(PORTALS_PROTOCOL_VERSION);
  */
 export const NetEnvelopeSchema = z.discriminatedUnion("t", [
   /** Command from a non-authoritative client, addressed to the current host. */
-  z.strictObject({ v: version, t: z.literal("cmd"), to: connectionId, cmd: MatchCommandSchema }),
+  z.strictObject({
+    v: version,
+    t: z.literal("cmd"),
+    r: roomCode,
+    to: connectionId,
+    cmd: MatchCommandSchema,
+  }),
   /** Public event batch from the host. */
   z.strictObject({
     v: version,
     t: z.literal("ev"),
+    r: roomCode,
     events: z.array(SimEventSchema).max(MAX_EVENTS_PER_MESSAGE),
   }),
   /**
@@ -172,6 +200,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
   z.strictObject({
     v: version,
     t: z.literal("pev"),
+    r: roomCode,
     to: connectionId,
     events: z.array(PrivateSimEventSchema).max(MAX_EVENTS_PER_MESSAGE),
     privateState: PrivateMatchStateSchema.nullable(),
@@ -190,6 +219,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
   z.strictObject({
     v: version,
     t: z.literal("snap"),
+    r: roomCode,
     to: connectionId,
     snapshot: ForgeSnapshotSchema,
   }),
@@ -202,6 +232,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
   z.strictObject({
     v: version,
     t: z.literal("paint"),
+    r: roomCode,
     to: connectionId,
     paint: PaintUpdateSchema,
   }),
@@ -223,11 +254,34 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
   z.strictObject({
     v: version,
     t: z.literal("eye"),
+    r: roomCode,
     to: connectionId,
     eye: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).nullable(),
   }),
   /** A client asking the host for a fresh sync after a join or a reconnect. */
-  z.strictObject({ v: version, t: z.literal("resync") }),
+  z.strictObject({ v: version, t: z.literal("resync"), r: roomCode }),
+  /**
+   * A client taking a seat in a room.
+   *
+   * Relay-level arrival cannot stand in for this. Every client in the session
+   * shares one channel, so `playerjoin` means somebody opened the game, not that
+   * they joined this match; a host that seated every arrival would seat the
+   * people browsing and the people playing next door. The host of the named room
+   * answers by seating the sender, or by refusing it a place.
+   */
+  z.strictObject({
+    v: version,
+    t: z.literal("enter"),
+    r: roomCode,
+    displayName: z.string().min(1).max(LIMITS.displayNameLength),
+  }),
+  /**
+   * A client giving up its seat while staying in the session, which is what
+   * leaving a room for the browser is. It is not a dropout: the host frees the
+   * seat outright rather than holding it through the reconnect grace, because
+   * the player is still here and has chosen not to be in this room.
+   */
+  z.strictObject({ v: version, t: z.literal("exit"), r: roomCode }),
   /**
    * A new host asking every Mimic to re-send its working Forge pose.
    *
@@ -237,7 +291,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * them again: each client re-sends what it last gave the transport, so no
    * player's work is lost and nothing extra is written to room state.
    */
-  z.strictObject({ v: version, t: z.literal("reforge") }),
+  z.strictObject({ v: version, t: z.literal("reforge"), r: roomCode }),
   /**
    * The host refusing one client a seat.
    *
@@ -249,6 +303,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
   z.strictObject({
     v: version,
     t: z.literal("refused"),
+    r: roomCode,
     to: connectionId,
     reason: z.string().min(1).max(LIMITS.idLength),
   }),
@@ -392,25 +447,40 @@ export function decodeChunks(
   return null;
 }
 
-/** The locked poses, validated. */
-export function decodePoseBook(state: Record<string, unknown>): PoseBook | null {
-  const chunked = decodeChunks(state, POSE_STATE_KEYS);
+/**
+ * The locked poses, validated.
+ *
+ * Every decoder here takes the key range to read, because a session holds more
+ * than one room and each publishes on a range of its own (roomRegistry.ts). The
+ * default is the first room's, which is the range these names always meant.
+ */
+export function decodePoseBook(
+  state: Record<string, unknown>,
+  keys: readonly string[] = POSE_STATE_KEYS,
+): PoseBook | null {
+  const chunked = decodeChunks(state, keys);
   if (!chunked) return null;
   const result = PoseBookSchema.safeParse(chunked.value);
   return result.success ? result.data : null;
 }
 
 /** The published paint layers, validated. */
-export function decodePaintBook(state: Record<string, unknown>): PaintBook | null {
-  const chunked = decodeChunks(state, PAINT_STATE_KEYS);
+export function decodePaintBook(
+  state: Record<string, unknown>,
+  keys: readonly string[] = PAINT_STATE_KEYS,
+): PaintBook | null {
+  const chunked = decodeChunks(state, keys);
   if (!chunked) return null;
   const result = PaintBookSchema.safeParse(chunked.value);
   return result.success ? result.data : null;
 }
 
 /** The public publication, validated. */
-export function decodeHostPublication(state: Record<string, unknown>): HostPublication | null {
-  const chunked = decodeChunks(state, SNAPSHOT_STATE_KEYS);
+export function decodeHostPublication(
+  state: Record<string, unknown>,
+  keys: readonly string[] = SNAPSHOT_STATE_KEYS,
+): HostPublication | null {
+  const chunked = decodeChunks(state, keys);
   if (!chunked) return null;
   const result = HostPublicationSchema.safeParse(chunked.value);
   return result.success ? result.data : null;

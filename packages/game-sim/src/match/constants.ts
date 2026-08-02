@@ -151,7 +151,9 @@ export const SCORE_MIMIC_MAX_LINE_OF_SIGHT_POINTS = 200;
 export const CREEP_SPEED_TOLERANCE = 1.05;
 
 export {
+  DUAL_SEEKER_MIN_SEATS,
   INNOCENT_REACTION_IDS,
+  MAX_SEEKER_COUNT,
   RESULT_VOTE_CATEGORIES,
   type InnocentReactionId,
   type ResultVoteCategory,

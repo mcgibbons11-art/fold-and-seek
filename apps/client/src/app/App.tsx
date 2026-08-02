@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { MenuAmbience } from "../audio/MenuAmbience";
+import { getMusicEngine } from "../audio/music";
 import { installUiSounds } from "../audio/uiSounds";
 import { GameHost, type RoundLoadProgress } from "../engine/GameHost";
 import type { ForgeController } from "../forge/ForgeController";
@@ -8,12 +9,14 @@ import {
   LOCAL_ROUND_NAME,
   seedFromLocation,
 } from "../gameplay/localRound";
-import { createPortalsRound, PORTALS_ROUND_CHANNEL } from "../gameplay/portalsRound";
+import { createPortalsRound, PORTALS_ROUND_CHANNEL, type PortalsRound } from "../gameplay/portalsRound";
 import type { GameRound } from "../gameplay/round";
 import type { RoundSession } from "../gameplay/RoundSession";
 import { detectPortalsSession, type PortalsBoot } from "../networking/portalsBoot";
 import { QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
 import type { ConnectionDetail } from "../networking/NetworkAdapter";
+import type { RoomEntryFailure, RoomEntryResult } from "../networking/PortalsNetAdapter";
+import { MAX_CONCURRENT_ROOMS, type RoomListing } from "../networking/roomRegistry";
 import { RendererInitError, type DeviceEvent, type RenderBackend } from "../rendering/RendererManager";
 import { ForgeHud } from "../ui/ForgeHud";
 import {
@@ -32,6 +35,7 @@ import {
 } from "../ui/rounds/theme";
 import { LoadingScreen } from "../ui/LoadingScreen";
 import { MainMenu } from "../ui/MainMenu";
+import type { RoomBrowserProps } from "../ui/RoomBrowser";
 import { RoundHud } from "../ui/RoundHud";
 
 type BootState =
@@ -51,6 +55,13 @@ interface ActiveRound {
 }
 
 const DEFAULT_PLAYER_NAME = "Curator";
+
+/**
+ * How often the menu re-reads the session's rooms. Well inside the window a
+ * room is retired after, so a room that goes quiet leaves the list promptly
+ * without the menu polling hard enough to be felt.
+ */
+const ROOM_LIST_REFRESH_MS = 2_000;
 
 const NO_BACKEND_HEADLINE = "This browser cannot draw the shop";
 const NO_BACKEND_DETAIL =
@@ -98,6 +109,15 @@ function joinFailureCopy(detail: ConnectionDetail, error: unknown): string {
   if (known !== undefined) return known;
   return error instanceof Error ? error.message : "The round could not be opened.";
 }
+
+/** What to tell the player about a room they could not get into. */
+const ROOM_FAILURE_COPY: Readonly<Record<RoomEntryFailure, string>> = {
+  not_in_session: "This game is not connected to the others in this session yet.",
+  no_such_room: "That room has closed. Pick another, or open one of your own.",
+  room_full: "That room already has as many players as a round allows.",
+  session_full: `This session holds ${MAX_CONCURRENT_ROOMS} rooms at once. Join one of them, or wait for a room to empty.`,
+  already_in_room: "You are already in a room.",
+};
 
 const panelStyle: CSSProperties = {
   position: "absolute",
@@ -196,7 +216,19 @@ export function App(): ReactElement {
   /** Why the last attempt to open a round did not get as far as the shop. */
   const [roundError, setRoundError] = useState<string | null>(null);
   const [deviceFault, setDeviceFault] = useState<DeviceEvent | null>(null);
+  /**
+   * The relay session held open at the menu, so the room browser has something
+   * to read. It is a whole round object rather than a bare adapter because the
+   * adapter is built with the map, the validator and the bots that whichever
+   * client ends up host will need, and building that twice would mean the
+   * browser and the round disagreeing about the shop.
+   */
+  const [lobby, setLobby] = useState<PortalsRound | null>(null);
+  const [rooms, setRooms] = useState<readonly RoomListing[]>([]);
+  /** True while the session is being joined or rejoined, so nothing is pressed twice. */
+  const [lobbyBusy, setLobbyBusy] = useState(false);
   const hostRef = useRef<GameHost | null>(null);
+  const lobbyRef = useRef<PortalsRound | null>(null);
   const roundRef = useRef<ActiveRound | null>(null);
   /** Read inside the click handler, where the loading state itself is stale. */
   const loadingRef = useRef(false);
@@ -292,6 +324,8 @@ export function App(): ReactElement {
       // before the host that owns the scene its systems are attached to.
       roundRef.current?.round.dispose();
       roundRef.current = null;
+      lobbyRef.current?.dispose();
+      lobbyRef.current = null;
       host?.dispose();
       hostRef.current = null;
     };
@@ -319,6 +353,83 @@ export function App(): ReactElement {
     if (atMenu) menuAmbience.start();
     else menuAmbience.stop();
   }, [atMenu, menuAmbience]);
+
+  /**
+   * The score, everywhere there is no round. A round reads the phase and the
+   * watched meter every frame and sets its own scene, so the shell stands back
+   * while one exists; what is left is the menu, the loading screen and the
+   * practice workbench, and exactly one of them is on screen at a time. Keeping
+   * the decision in one place is what stops two owners writing to the one
+   * engine and cutting each other off mid-bar.
+   */
+  useEffect(() => {
+    if (round !== null) return;
+    getMusicEngine().setScene(forge === null ? "menu" : "forge");
+  }, [round, forge]);
+  useEffect(() => () => {
+    getMusicEngine().setScene("silent");
+  }, []);
+
+  /**
+   * Holds a relay session open while the player is at the menu, which is what
+   * the room browser reads.
+   *
+   * It runs after the renderer is up rather than beside it. The join is a
+   * ten-second-capped handshake with the Portals host, and a build holding the
+   * main thread was measured (editor, 2026-08-02) blocking the reply past that
+   * cap: the join "timed out", the host kept the seat, and every retry was
+   * refused. At the menu the reply has the thread to itself.
+   *
+   * A session this client cannot join is not an error. A bare game page has no
+   * host to reach, and the menu falls back to the single play button and a solo
+   * round, which is what it offered before rooms existed.
+   */
+  const openSession = useCallback(async (session: PortalsBoot): Promise<void> => {
+    if (lobbyRef.current !== null) return;
+    setLobbyBusy(true);
+    const opened = createPortalsRound({ sdk: session.sdk });
+    lobbyRef.current = opened;
+    try {
+      await opened.adapter.connect();
+      await opened.adapter.joinSession(
+        PORTALS_ROUND_CHANNEL,
+        session.player.displayName ?? DEFAULT_PLAYER_NAME,
+      );
+    } catch (error) {
+      console.warn("[rooms] no relay session here; playing solo", error);
+      lobbyRef.current = null;
+      opened.dispose();
+      setLobbyBusy(false);
+      return;
+    }
+    setRooms(opened.adapter.listRooms());
+    opened.adapter.onDirectory(setRooms);
+    setLobby(opened);
+    setLobbyBusy(false);
+  }, []);
+
+  useEffect(() => {
+    if (boot.kind !== "ready" || portals === null) return;
+    void openSession(portals);
+  }, [boot.kind, portals, openSession]);
+
+  /**
+   * Re-reads the registry on a timer as well as on every write.
+   *
+   * A room that ends because its host closed the tab writes nothing at all: it
+   * simply stops advertising, and the registry retires it once its heartbeat has
+   * been quiet long enough. Nothing on the wire marks that moment, so without a
+   * clock of its own the browser would go on offering a room that is not there.
+   */
+  useEffect(() => {
+    if (lobby === null) return undefined;
+    const timer = setInterval(() => {
+      setRooms(lobby.adapter.listRooms());
+    }, ROOM_LIST_REFRESH_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [lobby]);
 
   const onTierSelect = useCallback((value: QualityTier) => {
     hostRef.current?.setQualityTier(value);
@@ -412,6 +523,65 @@ export function App(): ReactElement {
     })().catch(abandon);
   }, [portals]);
 
+  /**
+   * Takes the room the player picked and opens the shop in it.
+   *
+   * The relay session is already held, so this is the room half of the old
+   * join: the choice is made against the live registry, and only once a seat is
+   * actually taken does the shop start unpacking. A refusal costs nothing and
+   * leaves the player in the browser with a reason.
+   */
+  const onEnterRoom = useCallback(
+    (choose: (round: PortalsRound) => RoomEntryResult) => {
+      const host = hostRef.current;
+      const opened = lobbyRef.current;
+      if (host === null || opened === null || roundRef.current !== null || loadingRef.current) {
+        return;
+      }
+
+      const entered = choose(opened);
+      if (!entered.ok) {
+        setRoundError(ROOM_FAILURE_COPY[entered.reason]);
+        return;
+      }
+
+      setRoundError(null);
+      loadingRef.current = true;
+      setLoading({ label: "the shop", fraction: 0 });
+
+      void (async () => {
+        try {
+          const session = await host.enterRoundMode(
+            opened.adapter,
+            opened.director,
+            opened.spatial,
+            setLoading,
+          );
+          if (session === null) {
+            opened.adapter.leaveRoom();
+            loadingRef.current = false;
+            setLoading(null);
+            return;
+          }
+          const active: ActiveRound = { round: opened, session };
+          roundRef.current = active;
+          loadingRef.current = false;
+          setRound(active);
+          setLoading(null);
+        } catch (error) {
+          console.error("[round] could not open the shop", error);
+          opened.adapter.leaveRoom();
+          roundRef.current = null;
+          loadingRef.current = false;
+          host.exitRoundMode();
+          setLoading(null);
+          setRoundError(joinFailureCopy(opened.adapter.getConnection().detail, error));
+        }
+      })();
+    },
+    [],
+  );
+
   const onLeaveRound = useCallback(() => {
     const active = roundRef.current;
     if (active === null) {
@@ -422,8 +592,35 @@ export function App(): ReactElement {
     // Order matters: the host disposes the session, which is what unhooks the
     // engine from an adapter that is still delivering events.
     hostRef.current?.exitRoundMode();
-    active.round.dispose();
-  }, []);
+
+    if (active.round !== lobbyRef.current) {
+      active.round.dispose();
+      return;
+    }
+    // A round played in a Portals room is torn down whole and the session
+    // rejoined, rather than the seat alone being given up. The director carries
+    // a round's worth of accumulated feeds — the accusations, the missed-finds
+    // board, the votes — and it resets those on entering a lobby, which a
+    // client that walks into a room ALREADY in its lobby never sees. Reusing it
+    // for the next room would show that room the last one's evidence.
+    lobbyRef.current = null;
+    setLobby(null);
+    // Held busy across the whole handover. Without it the menu falls back to
+    // the plain play button for as long as the rejoin takes, and pressing it
+    // would build a second transport while this one is still letting go of the
+    // session the SDK only has one of.
+    setLobbyBusy(true);
+    const previous = active.round;
+    void (async () => {
+      try {
+        await previous.adapter.disconnect();
+      } catch (error) {
+        console.warn("[rooms] leaving the session was not clean", error);
+      }
+      previous.dispose();
+      if (portals !== null) await openSession(portals);
+    })();
+  }, [portals, openSession]);
 
   // A device loss outranks the boot state: the renderer came up, so `boot` still
   // reads "ready" while nothing can actually be drawn.
@@ -484,14 +681,35 @@ export function App(): ReactElement {
     return <LoadingScreen progress={loading} />;
   }
 
+  // Offered only while a relay session is actually held. Without one there is
+  // nothing to browse, and the menu shows the single play button it always did.
+  const browser: RoomBrowserProps | null =
+    lobby === null
+      ? null
+      : {
+          rooms,
+          currentCode: lobby.adapter.getRoomCode(),
+          busy: lobbyBusy,
+          onJoin: (code) => {
+            onEnterRoom((opened) => opened.adapter.enterRoom(code));
+          },
+          onCreate: (name) => {
+            onEnterRoom((opened) => opened.adapter.createRoom(name));
+          },
+          onQuickJoin: () => {
+            onEnterRoom((opened) => opened.adapter.quickJoin());
+          },
+        };
+
   return (
     <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
       <MainMenu
         onPlayRound={onPlayRound}
         onForgePractice={onEnterForge}
-        starting={false}
+        starting={lobbyBusy}
         multiplayer={portals !== null}
         notice={roundError}
+        browser={browser}
       />
       <div style={panelStyle} role="group" aria-label="Quality">
         <div style={{ ...labelStyle, marginBottom: 7 }}>Quality</div>

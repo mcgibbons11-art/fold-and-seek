@@ -146,6 +146,33 @@ class Session {
     return peer;
   }
 
+  /**
+   * Joins the channel without entering a room, which is the state a player
+   * reading the room browser is in. The caller decides which room it enters.
+   */
+  async addBrowsingPeer(id: string, displayName: string): Promise<Peer> {
+    const adapter = new PortalsNetAdapter(this.relay.createPeer({ id, displayName }), {
+      settings: this.settings,
+      seed: 5,
+      now: () => this.clock,
+      joinRetryDelayMs: 0,
+      ...this.botOptions,
+    });
+    const events: SimEvent[] = [];
+    const privateEvents: PrivateSimEvent[] = [];
+    const rejections: CommandRejection[] = [];
+    const statuses: ConnectionState[] = [];
+    adapter.onEvent((event) => events.push(event));
+    adapter.onPrivateEvent((event) => privateEvents.push(event));
+    adapter.onRejection((rejection) => rejections.push(rejection));
+    adapter.onStatus((state) => statuses.push(state));
+    await adapter.connect();
+    await adapter.joinSession(CHANNEL, displayName);
+    const peer: Peer = { id, adapter, events, privateEvents, rejections, statuses };
+    this.peers.push(peer);
+    return peer;
+  }
+
   /** Seats a peer that is expected to be refused, without recording it. */
   async addRefusedPeer(id: string, displayName: string): Promise<void> {
     const adapter = new PortalsNetAdapter(this.relay.createPeer({ id, displayName }), {
@@ -600,14 +627,21 @@ describe("PortalsNetAdapter inbound limits", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const session = new Session({ maxPlayers: 2 });
     await session.addPeer("a", "Ada");
-    await session.addPeer("b", "Bex");
-    // No advance: the snapshot still shows one seat taken, so the joiner's own
-    // check passes and only the host can refuse it.
-    const latecomer = await session.addPeer("c", "Cora");
+    // Two clients enter the last seat in the same instant. Both read the same
+    // advertisement, both see a seat free, and both are right when they look:
+    // only the host can settle which of them takes it, so the other has to be
+    // told rather than left sitting in a room that never seats it.
+    const first = await session.addBrowsingPeer("b", "Bex");
+    const second = await session.addBrowsingPeer("c", "Cora");
+    session.advance(2);
+    const code = session.peer("a").adapter.getRoomCode() as string;
+
+    expect(first.adapter.enterRoom(code).ok).toBe(true);
+    expect(second.adapter.enterRoom(code).ok).toBe(true);
     session.advance(4);
 
-    expect(latecomer.adapter.getConnection().status).toBe("error");
-    expect(latecomer.adapter.getConnection().detail).toBe("room_full");
+    expect(second.adapter.getConnection().status).toBe("error");
+    expect(second.adapter.getConnection().detail).toBe("room_full");
     expect(session.peer("a").adapter.getSync().publicState?.players).toHaveLength(2);
 
     warn.mockRestore();
@@ -1949,7 +1983,13 @@ describe("PortalsNetAdapter bot seats", () => {
 });
 
 /** Publishes a raw envelope as this peer, bypassing the adapter's own send path. */
-function rawSend(peer: Peer, payload: unknown): void {
+/**
+ * Sends an envelope straight down a peer's relay connection, bypassing the
+ * adapter's own outbound path. The sender's room is stamped on the way, exactly
+ * as `rawSend` does inside the adapter, so a hand-written envelope reaches the
+ * host rather than being dropped as another room's traffic.
+ */
+function rawSend(peer: Peer, payload: Record<string, unknown>): void {
   const net = (peer.adapter as unknown as { net: { send(data: unknown): void } }).net;
-  net.send(payload);
+  net.send({ ...payload, r: peer.adapter.getRoomCode() });
 }

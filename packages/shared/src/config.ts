@@ -126,9 +126,32 @@ const CLOSE_PASS_BODY_HEIGHTS = 2;
 /** Proximity that earns a close pass, in world metres. */
 export const CLOSE_PASS_DISTANCE_M = PLAYER_HEIGHT_M * CLOSE_PASS_BODY_HEIGHTS;
 
+/**
+ * Most seekers a host may ask for. Two hunters is the ceiling the round is
+ * balanced around: a third would leave a small room with more seekers than
+ * hiders, and the warrant economy is written per seeker, so every extra hunter
+ * multiplies the ammunition in the shop.
+ */
+export const MAX_SEEKER_COUNT = 2;
+
+/**
+ * Seats a room needs before a second seeker may be dealt. Two seekers and two
+ * hiders is the smallest round that still plays as hide and seek; below it the
+ * hunters would outnumber the hidden. Bot seats count, because a bot fills a
+ * seat exactly as a person does.
+ */
+export const DUAL_SEEKER_MIN_SEATS = 4;
+
 export const DEFAULT_MATCH_SETTINGS = {
   minPlayers: 2,
   maxPlayers: 12,
+  /**
+   * Seekers the host asks for, one or two. It is a floor rather than the final
+   * count: a roster too small to support a second seeker gets one anyway, and
+   * the roster rule of §5.5 still deals two hunters to a room of nine or more
+   * however this is set.
+   */
+  seekerCount: 1,
   mapIntroMs: 5_000,
   roleRevealMs: 4_000,
   baselineScanMs: 12_000,

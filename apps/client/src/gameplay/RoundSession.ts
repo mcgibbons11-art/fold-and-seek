@@ -2,6 +2,7 @@ import type { MatchCommand, SimEvent } from "@foldseek/game-sim";
 import { DEFAULT_MATCH_SETTINGS, MatchPhase, type MatchSettings } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
 
+import { getMusicEngine, musicSceneForPhase } from "../audio/music";
 import { AudioPlayer } from "../forge/AudioPlayer";
 import { ForgeController } from "../forge/ForgeController";
 import { SHOP_FORGE_WORKSPACE } from "../world/ShopWorld";
@@ -12,6 +13,7 @@ import {
   type InspectableProxy,
   type InspectorSystem,
 } from "../inspector";
+import { DEFAULT_LOOK_SENSITIVITY } from "../inspector/InspectorInput";
 import type { AABB } from "../inspector/navData";
 import { MIMIC_NAV_DATA, NAV_DATA } from "../world/maps/nav";
 import { OFFICE_DOOR_NAME } from "../world/maps/props";
@@ -91,6 +93,15 @@ const SURVEY_RADIUS_M = 4.6;
 const SURVEY_HEIGHT_M = 2.35;
 const SURVEY_RAD_PER_SECOND = 0.06;
 const SURVEY_FOV_DEG = 55;
+/**
+ * The survey is DRIVABLE: holding the left button swings it, at the same
+ * sensitivity every other camera turns at. USER DIRECTIVE (2026-08-02): "i
+ * can't turn my camera as a hider once the round starts" — the memorize sweep
+ * ran a fixed orbit for its whole minute, and a camera the player cannot turn
+ * reads as a camera that is broken, whatever the cinematic intent was. The
+ * sweep resumes on its own once the pointer has been still a moment.
+ */
+const SURVEY_RESUME_MS = 2500;
 
 /**
  * Where the Inspector waits out the fold: inside the Security Office, on the
@@ -191,6 +202,8 @@ export class RoundSession {
   private readonly options: RoundSessionOptions;
   private readonly audio = new AudioPlayer();
   private readonly ambience = new AmbienceController(domBedVoices());
+  /** Shared with the menu, so a round and a menu never play two scores at once. */
+  private readonly music = getMusicEngine();
   private readonly footsteps = new FootstepDriver(this.audio);
   private readonly theatre: DisguiseTheatre;
   private readonly reactions: ReactionTheatre;
@@ -208,6 +221,11 @@ export class RoundSession {
   private inspectablesRevision = -1;
 
   private surveyAngle = 0.6;
+  /** Pointer id steering the survey, or null while it sweeps on its own. */
+  private surveyPointerId: number | null = null;
+  private surveyLastX = 0;
+  /** Milliseconds since the player last steered; gates the auto-sweep. */
+  private surveyIdleMs = Infinity;
   /** The office door leaf, resolved from the map once and cached. */
   private officeDoor: THREE.Object3D | null = null;
   private officeDoorSearched = false;
@@ -263,6 +281,10 @@ export class RoundSession {
       }),
     );
     this.options.canvas.addEventListener("click", this.onCanvasClick);
+    this.options.canvas.addEventListener("pointerdown", this.onSurveyPointerDown);
+    this.options.canvas.addEventListener("pointermove", this.onSurveyPointerMove);
+    this.options.canvas.addEventListener("pointerup", this.onSurveyPointerUp);
+    this.options.canvas.addEventListener("pointercancel", this.onSurveyPointerUp);
     // Browsers refuse playback until the page has seen a gesture, and the beds
     // are the one thing that would otherwise try to start without one. Both a
     // press and a key count, because a hider who joins a round and walks off on
@@ -332,6 +354,11 @@ export class RoundSession {
    * The room's own voice. The listener is wherever the camera is, which is the
    * Inspector's eye during the hunt and the Mimic's orbit point in the Forge, so
    * both roles hear the zone they are actually standing in.
+   *
+   * The score reads the same two numbers and is asked for its scene every frame
+   * rather than on the phase change, because the watched meter moves inside the
+   * hunt and the lift that answers it is a scene of its own. Asking for what is
+   * already playing costs a comparison.
    */
   private stepAmbience(dtMs: number, state: RoundViewState): void {
     const listener = this.camera.position;
@@ -341,6 +368,17 @@ export class RoundSession {
       listenerX: listener.x,
       listenerZ: listener.z,
     });
+    this.music.setScene(musicSceneForPhase(state.phase, state.self.watchedLevel));
+  }
+
+  /**
+   * Pushes the room and the score down so an event sits on top of them. The
+   * beds and the music duck together because they are one mix: a stinger that
+   * only cleared the beds would still arrive over a chord.
+   */
+  private duckUnderStinger(): void {
+    this.ambience.duckUnderStinger();
+    this.music.duck(1);
   }
 
   /** One tick a second through the final countdown, harder at the very end. */
@@ -402,6 +440,10 @@ export class RoundSession {
 
   dispose(): void {
     this.options.canvas.removeEventListener("click", this.onCanvasClick);
+    this.options.canvas.removeEventListener("pointerdown", this.onSurveyPointerDown);
+    this.options.canvas.removeEventListener("pointermove", this.onSurveyPointerMove);
+    this.options.canvas.removeEventListener("pointerup", this.onSurveyPointerUp);
+    this.options.canvas.removeEventListener("pointercancel", this.onSurveyPointerUp);
     for (const event of GESTURE_EVENTS) window.removeEventListener(event, this.onFirstGesture);
     for (const unsubscribe of this.subscriptions) unsubscribe();
     this.subscriptions.length = 0;
@@ -410,6 +452,9 @@ export class RoundSession {
     this.theatre.dispose();
     this.reactions.dispose();
     this.ambience.dispose();
+    // The score is deliberately left alone. It outlives the round — the menu
+    // shares the one engine — and the shell decides what plays once there is no
+    // round to ask, which is the only way a single writer owns it at a time.
     this.audio.dispose();
     this.options.spatial.setDisguiseBounds(() => null);
     this.changed.clear();
@@ -455,7 +500,7 @@ export class RoundSession {
 
       case "accusation_resolved":
         this.audio.play(event.correct ? CATCH_SOUND : WRONG_ACCUSATION_SOUND);
-        this.ambience.duckUnderStinger();
+        this.duckUnderStinger();
         // The recoil and the reticle belong to the Inspector who fired.
         if (event.inspectorPublicId === this.state().self.publicPlayerId) {
           this.inspector?.handleAccusationResolved(event.correct);
@@ -465,7 +510,7 @@ export class RoundSession {
       case "close_pass":
         if (this.ownsDisguise(event.publicObjectId)) {
           this.audio.play(CLOSE_PASS_SOUND);
-          this.ambience.duckUnderStinger();
+          this.duckUnderStinger();
         }
         break;
 
@@ -480,7 +525,7 @@ export class RoundSession {
         if (role === "mimic" || role === "inspector") {
           const won = event.winner === (role === "mimic" ? "mimics" : "inspectors");
           this.audio.play(won ? WIN_SOUND : LOSE_SOUND);
-          this.ambience.duckUnderStinger();
+          this.duckUnderStinger();
         }
         break;
       }
@@ -556,7 +601,7 @@ export class RoundSession {
       for (const sound of opening) this.audio.play(sound);
       // A phase change is the loudest thing that happens all round; the beds
       // step back under it and come up again behind whatever it announced.
-      this.ambience.duckUnderStinger();
+      this.duckUnderStinger();
     }
     if (phase === MatchPhase.InspectionIntro && this.forge !== null && this.forge.snapshot().locked) {
       // The disguise is already the room's; the editor goes back to editable so
@@ -682,6 +727,7 @@ export class RoundSession {
       inspectables: this.buildInspectables(),
       settings,
       domElement: this.options.canvas,
+      castShadow: this.options.quality.dynamicShadows,
       sendCommand: this.sendInspectorCommand,
       onFocusChange: (focus) => {
         this.focus = focus;
@@ -752,7 +798,9 @@ export class RoundSession {
    */
   private loadWarrants(inspector: InspectorSystem, state: RoundViewState): void {
     const remaining = state.self.warrantsRemaining ?? state.warrantsRemaining ?? 0;
-    inspector.setAmmo(remaining, state.warrantsTotal ?? remaining);
+    // This seeker's own allowance: with two hunters the room's total is twice
+    // the drum, and building the gun from it would chamber a partner's rounds.
+    inspector.setAmmo(remaining, state.warrantsPerInspector ?? state.warrantsTotal ?? remaining);
   }
 
   /**
@@ -770,7 +818,7 @@ export class RoundSession {
     if (state === "aiming" && previous === "idle") this.audio.play("gun_aim");
     if (state === "pending") {
       this.audio.play("gun_fire");
-      this.ambience.duckUnderStinger();
+      this.duckUnderStinger();
     }
   }
 
@@ -810,6 +858,38 @@ export class RoundSession {
     if (this.mode === "inspect" && !this.pointerLocked) this.inspector?.requestPointerLock();
   };
 
+  /**
+   * Steering for the survey and the vigil. Only the left button, and only in
+   * survey mode: the Forge and the Inspector rigs route their own pointers,
+   * and a press that lands while one of them owns the camera is theirs.
+   */
+  private readonly onSurveyPointerDown = (event: PointerEvent): void => {
+    if (this.mode !== "survey" || event.button !== 0) return;
+    this.surveyPointerId = event.pointerId;
+    this.surveyLastX = event.clientX;
+    this.surveyIdleMs = 0;
+    this.options.canvas.setPointerCapture?.(event.pointerId);
+  };
+
+  private readonly onSurveyPointerMove = (event: PointerEvent): void => {
+    if (this.surveyPointerId !== event.pointerId) return;
+    if (this.mode !== "survey") {
+      this.surveyPointerId = null;
+      return;
+    }
+    // The same radians-per-pixel every other camera turns at, negated because
+    // dragging right should swing the view right (the orbit runs the other way).
+    this.surveyAngle -= (event.clientX - this.surveyLastX) * DEFAULT_LOOK_SENSITIVITY;
+    this.surveyLastX = event.clientX;
+    this.surveyIdleMs = 0;
+  };
+
+  private readonly onSurveyPointerUp = (event: PointerEvent): void => {
+    if (this.surveyPointerId !== event.pointerId) return;
+    this.surveyPointerId = null;
+    this.surveyIdleMs = 0;
+  };
+
   /** The gesture the beds have been waiting for. Unbinds itself once it lands. */
   private readonly onFirstGesture = (): void => {
     this.ambience.start();
@@ -838,7 +918,13 @@ export class RoundSession {
     const radius = vigil ? OFFICE_VIGIL_RADIUS_M : SURVEY_RADIUS_M;
     const height = vigil ? OFFICE_VIGIL_HEIGHT_M : SURVEY_HEIGHT_M;
 
-    this.surveyAngle += (dtMs / 1000) * SURVEY_RAD_PER_SECOND;
+    // The sweep yields to the player's hand and takes over again once the
+    // pointer has been still a moment, so the camera is never uncontrollable
+    // and never needs controlling.
+    this.surveyIdleMs += dtMs;
+    if (this.surveyPointerId === null && this.surveyIdleMs >= SURVEY_RESUME_MS) {
+      this.surveyAngle += (dtMs / 1000) * SURVEY_RAD_PER_SECOND;
+    }
     this.viewCamera.position.set(
       centre.x + Math.sin(this.surveyAngle) * radius,
       height,

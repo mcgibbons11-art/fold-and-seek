@@ -326,6 +326,11 @@ export interface RoundViewState {
   readonly warrantsRemaining: number | null;
   /** Warrants the round started with, so the HUD can draw the spent ones. */
   readonly warrantsTotal: number | null;
+  /**
+   * One seeker's allowance. `warrantsTotal` counts the room's, which is twice
+   * this in a two-seeker round, so the magazine is drawn from this instead.
+   */
+  readonly warrantsPerInspector: number | null;
   readonly mimicsRemaining: number;
   /** Most recent first, capped by the director's feed limit. */
   readonly accusations: readonly AccusationFeedEntry[];

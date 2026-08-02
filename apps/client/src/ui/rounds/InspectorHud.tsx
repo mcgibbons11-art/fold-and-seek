@@ -102,6 +102,15 @@ export function warrantsRemainingOf(state: RoundViewState): number {
 }
 
 /**
+ * The magazine one Inspector was issued. Warrants are held per seeker, so in a
+ * two-seeker round the room's total is twice what this player can fire and
+ * drawing it would show a partner's rounds as their own.
+ */
+export function warrantAllowanceOf(state: RoundViewState): number {
+  return state.warrantsPerInspector ?? state.warrantsTotal ?? 0;
+}
+
+/**
  * One warrant round: a brass-capped shell that empties as it is spent, so the
  * magazine can be read without counting digits.
  */
@@ -141,7 +150,7 @@ export function InspectorStatusCard({ state }: InspectorStatusCardProps): ReactE
   const warrantsRemaining = warrantsRemainingOf(state);
   // The magazine keeps its length as rounds are spent, so spent casings stay
   // visible next to the live ones.
-  const warrantTotal = Math.max(warrantsRemaining, state.warrantsTotal ?? warrantsRemaining);
+  const warrantTotal = Math.max(warrantsRemaining, warrantAllowanceOf(state));
   const outOfAmmo = warrantsRemaining <= 0;
   const accent = state.timer.finalTen ? ALARM : BRASS;
 
