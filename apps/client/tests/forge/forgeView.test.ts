@@ -2,8 +2,11 @@ import { PLAYER_HEIGHT_M } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ForgeController } from "../../src/forge/ForgeController";
-import { WORLD_SCALE } from "../../src/inspector/navData";
+import { ForgeController, type ForgeWorkspace } from "../../src/forge/ForgeController";
+import { humanMimicSpawn } from "../../src/gameplay/botDisguises";
+import { WORLD_SCALE, type NavData } from "../../src/inspector/navData";
+import { NAV_DATA } from "../../src/world/maps/nav";
+import { SHOP_FORGE_WORKSPACE } from "../../src/world/ShopWorld";
 import { applyDisguiseStateToPose, createStarterArrangement } from "../../src/mimic/disguiseState";
 import { createPoseState } from "../../src/mimic/ikSolver";
 import { boneIndex } from "../../src/mimic/rig";
@@ -22,16 +25,22 @@ import { qualitySettingsFor } from "../../src/rendering/quality";
 
 const VIEWPORT = { width: 800, height: 600 };
 
+interface HarnessOptions {
+  readonly origin?: THREE.Vector3;
+  readonly navData?: NavData;
+  readonly workspace?: ForgeWorkspace;
+}
+
 class Harness {
   readonly controller: ForgeController;
   readonly scene = new THREE.Scene();
-  readonly origin = new THREE.Vector3(-1.55, 0.075, -1.05);
+  readonly origin: THREE.Vector3;
   readonly canvas: unknown;
 
   private readonly listeners = new Map<string, ((event: never) => void)[]>();
   private readonly previousWindow: unknown;
 
-  constructor() {
+  constructor(options: HarnessOptions = {}) {
     const add = (type: string, listener: (event: never) => void): void => {
       this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
     };
@@ -52,13 +61,31 @@ class Harness {
       removeEventListener: () => undefined,
     };
 
+    this.origin = options.origin ?? new THREE.Vector3(-1.55, 0.075, -1.05);
     this.controller = new ForgeController({
       scene: this.scene,
       canvas: canvas as unknown as HTMLCanvasElement,
       quality: qualitySettingsFor("medium"),
       origin: this.origin,
+      ...(options.navData === undefined ? {} : { navData: options.navData }),
+      ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
     });
     this.controller.setViewport(VIEWPORT.width, VIEWPORT.height);
+  }
+
+  /** One key event through the same window listener the browser would use. */
+  key(type: "keydown" | "keyup", key: string): void {
+    const event = {
+      key,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      target: this.canvas,
+      preventDefault: () => undefined,
+    };
+    for (const listener of [...(this.listeners.get(type) ?? [])]) {
+      (listener as (event: unknown) => void)(event);
+    }
   }
 
   pointer(type: string, fields: Record<string, unknown> = {}): void {
@@ -236,5 +263,279 @@ describe("the pose handles", () => {
     const material = (ring as THREE.Mesh | undefined)?.material;
     expect(material).toBeInstanceOf(THREE.MeshBasicMaterial);
     expect((material as THREE.MeshBasicMaterial).opacity).toBeLessThan(0.5);
+  });
+});
+
+/**
+ * Locomotion inside the Forge. The rules of how the body moves are proved
+ * headlessly in `hiderLocomotion.test.ts`; what is at stake here is the seam —
+ * that walking writes the same root a handle drag writes, and therefore travels
+ * the same publication path, and that a whole walk is one undo entry rather
+ * than one per frame.
+ */
+describe("running the Mimic about the room", () => {
+  let walker: Harness;
+  const SPAWN = humanMimicSpawn().position;
+  const FRAME_MS = 1000 / 60;
+
+  function walk(frames: number): void {
+    for (let frame = 0; frame < frames; frame += 1) walker.controller.update(FRAME_MS);
+  }
+
+  beforeEach(() => {
+    walker = new Harness({
+      origin: new THREE.Vector3(SPAWN.x, SPAWN.y, SPAWN.z),
+      navData: NAV_DATA,
+      workspace: SHOP_FORGE_WORKSPACE,
+    });
+  });
+
+  afterEach(() => {
+    walker.dispose();
+  });
+
+  it("moves the root on the walk keys and advances the revision that publishes", () => {
+    const before = walker.controller.disguise;
+
+    walker.key("keydown", "w");
+    walk(30);
+    const during = walker.controller.disguise;
+
+    const travelled = Math.hypot(
+      (during.root.position[0] ?? 0) - (before.root.position[0] ?? 0),
+      (during.root.position[2] ?? 0) - (before.root.position[2] ?? 0),
+    );
+    expect(travelled).toBeGreaterThan(PLAYER_HEIGHT_M);
+    expect(during.revision).toBeGreaterThan(before.revision);
+  });
+
+  it("stops where the keys were let go and stays there", () => {
+    walker.key("keydown", "w");
+    walk(30);
+    walker.key("keyup", "w");
+    walk(30);
+    const settled = walker.controller.disguise.root.position;
+
+    walk(60);
+    expect(walker.controller.disguise.root.position).toEqual(settled);
+  });
+
+  it("takes the whole walk back in one undo", () => {
+    const start = [...walker.controller.disguise.root.position];
+    expect(walker.controller.snapshot().canUndo).toBe(false);
+
+    walker.key("keydown", "w");
+    walk(30);
+    walker.key("keyup", "w");
+    walk(10);
+
+    expect(walker.controller.snapshot().undoLabel).toBe("walk");
+    walker.controller.undo();
+    const returned = walker.controller.disguise.root.position;
+    for (let axis = 0; axis < 3; axis += 1) {
+      expect(returned[axis]).toBeCloseTo(start[axis] ?? 0, 6);
+    }
+    expect(walker.controller.snapshot().canUndo).toBe(false);
+  });
+
+  it("carries the camera with the body rather than leaving it behind", () => {
+    walker.layout();
+    const before = walker.controller.camera.position.clone();
+    const framing = before.distanceTo(walker.origin);
+
+    walker.key("keydown", "w");
+    walk(30);
+    walker.key("keyup", "w");
+    // The shot chases the body rather than being welded to it, so it arrives a
+    // beat after the body stops. A settle of half a second is several times the
+    // authored catch-up time, and the framing below is what it settles to.
+    walk(30);
+
+    const root = walker.controller.disguise.root.position;
+    const after = walker.controller.camera.position;
+    expect(after.distanceTo(before)).toBeGreaterThan(PLAYER_HEIGHT_M);
+    // Same shot, somewhere else: the orbit travelled with the body and the
+    // player's own angle and zoom were left alone.
+    expect(
+      after.distanceTo(new THREE.Vector3(root[0], root[1], root[2])),
+    ).toBeCloseTo(framing, 3);
+  });
+
+  it("lets the shot trail the body while it runs, and catches up when it stops", () => {
+    walker.layout();
+    const framing = walker.controller.camera.position.distanceTo(walker.origin);
+
+    walker.key("keydown", "w");
+    walk(30);
+    const root = walker.controller.disguise.root.position;
+    const running = walker.controller.camera.position.distanceTo(
+      new THREE.Vector3(root[0], root[1], root[2]),
+    );
+    // Mid-run the camera is behind where a rigid rig would put it, by enough to
+    // be felt and far less than the body's own height.
+    expect(running).toBeGreaterThan(framing + PLAYER_HEIGHT_M / 100);
+    expect(running).toBeLessThan(framing + PLAYER_HEIGHT_M);
+
+    walker.key("keyup", "w");
+    walk(30);
+    const settled = walker.controller.disguise.root.position;
+    expect(
+      walker.controller.camera.position.distanceTo(
+        new THREE.Vector3(settled[0], settled[1], settled[2]),
+      ),
+    ).toBeCloseTo(framing, 3);
+  });
+
+  it("leaves the body alone once the disguise is locked", () => {
+    walker.controller.lock();
+    const locked = walker.controller.disguise.root.position;
+
+    walker.key("keydown", "w");
+    walk(30);
+    expect(walker.controller.disguise.root.position).toEqual(locked);
+  });
+});
+
+describe("walking a body that has already been posed", () => {
+  let walker: Harness;
+  const SPAWN = humanMimicSpawn().position;
+
+  beforeEach(() => {
+    walker = new Harness({
+      origin: new THREE.Vector3(SPAWN.x, SPAWN.y, SPAWN.z),
+      navData: NAV_DATA,
+      workspace: SHOP_FORGE_WORKSPACE,
+    });
+  });
+
+  afterEach(() => {
+    walker.dispose();
+  });
+
+  it("carries the pose with it rather than being solved back to it", () => {
+    // Pose the head, which pins its IK target at a world position.
+    walker.layout();
+    const grip = walker.screenPointOf("head");
+    walker.pointer("pointerdown", grip);
+    walker.pointer("pointermove", { ...grip, clientX: grip.clientX + 30 });
+    walker.pointer("pointerup", { ...grip, clientX: grip.clientX + 30 });
+
+    expect(walker.controller.snapshot().canUndo).toBe(true);
+    const before = walker.controller.disguise;
+    const posedHead = headOffsetFromRoot(walker);
+
+    walker.key("keydown", "w");
+    for (let frame = 0; frame < 60; frame += 1) walker.controller.update(1000 / 60);
+    walker.key("keyup", "w");
+    walker.controller.update(1000 / 60);
+
+    const after = walker.controller.disguise;
+    const travelled = Math.hypot(
+      (after.root.position[0] ?? 0) - (before.root.position[0] ?? 0),
+      (after.root.position[2] ?? 0) - (before.root.position[2] ?? 0),
+    );
+    // A pinned target left behind would have hauled the root back toward it.
+    expect(travelled).toBeGreaterThan(PLAYER_HEIGHT_M * 2);
+
+    // And the pose the player authored is still the pose it is wearing: the
+    // head stands in the same place relative to the body it belongs to.
+    const walkedHead = headOffsetFromRoot(walker);
+    expect(walkedHead.distanceTo(posedHead)).toBeLessThan(PLAYER_HEIGHT_M / 100);
+  });
+});
+
+/**
+ * Where the head sits relative to the root, which is what a stale IK target
+ * corrupts: the target is a world position, so a body that walked away from one
+ * has its neck solved back toward where it was standing.
+ */
+function headOffsetFromRoot(harnessed: Harness): THREE.Vector3 {
+  const state = harnessed.controller.disguise;
+  const pose = createPoseState();
+  applyDisguiseStateToPose(state, pose);
+  const head = pose.worldPositions[boneIndex("head")];
+  if (head === undefined) throw new Error("no head bone");
+  const [x = 0, y = 0, z = 0] = state.root.position;
+  return new THREE.Vector3(head.x - x, head.y - y, head.z - z);
+}
+
+/**
+ * The control scheme of CLAUDE.md override 5, checked with locomotion live:
+ * WASD moves the body and a left-click hold turns the camera, with no mode
+ * between them. The left button doing two jobs is the part that could have been
+ * broken by adding a second way to move, so it is asserted here rather than
+ * assumed from the gesture's own test in the default harness.
+ */
+describe("moving and looking at the same time", () => {
+  let walker: Harness;
+  const SPAWN = humanMimicSpawn().position;
+
+  beforeEach(() => {
+    walker = new Harness({
+      origin: new THREE.Vector3(SPAWN.x, SPAWN.y, SPAWN.z),
+      navData: NAV_DATA,
+      workspace: SHOP_FORGE_WORKSPACE,
+    });
+  });
+
+  afterEach(() => {
+    walker.dispose();
+  });
+
+  it("turns the camera on a left hold over empty space, and leaves the body alone", () => {
+    walker.layout();
+    const before = walker.controller.camera.position.clone();
+    const standing = [...walker.controller.disguise.root.position];
+
+    // Top right corner: no part of the Mimic is under it.
+    walker.pointer("pointerdown", { clientX: 780, clientY: 30 });
+    walker.pointer("pointermove", { clientX: 620, clientY: 90 });
+    walker.pointer("pointerup", { clientX: 620, clientY: 90 });
+    walker.controller.update(1000 / 60);
+
+    expect(walker.controller.camera.position.distanceTo(before)).toBeGreaterThan(0.05);
+    expect(walker.controller.disguise.root.position).toEqual(standing);
+    expect(walker.controller.snapshot().canUndo).toBe(false);
+  });
+
+  it("keeps walking while the camera is being turned", () => {
+    walker.key("keydown", "w");
+    for (let frame = 0; frame < 10; frame += 1) walker.controller.update(1000 / 60);
+    const beforeDrag = [...walker.controller.disguise.root.position];
+
+    walker.pointer("pointerdown", { clientX: 780, clientY: 30 });
+    for (let frame = 0; frame < 10; frame += 1) {
+      walker.pointer("pointermove", { clientX: 780 - frame * 8, clientY: 30 });
+      walker.controller.update(1000 / 60);
+    }
+    walker.pointer("pointerup", { clientX: 700, clientY: 30 });
+
+    const afterDrag = walker.controller.disguise.root.position;
+    expect(afterDrag).not.toEqual(beforeDrag);
+  });
+
+  it("steers by the camera, so turning it turns where the walk keys go", () => {
+    walker.key("keydown", "w");
+    for (let frame = 0; frame < 20; frame += 1) walker.controller.update(1000 / 60);
+    const first = walker.controller.disguise.root.position;
+    const firstHeading = Math.atan2(
+      (first[0] ?? 0) - SPAWN.x,
+      (first[2] ?? 0) - SPAWN.z,
+    );
+
+    // A long left-hold drag turns the orbit a good way round.
+    walker.pointer("pointerdown", { clientX: 780, clientY: 300 });
+    walker.pointer("pointermove", { clientX: 380, clientY: 300 });
+    walker.pointer("pointerup", { clientX: 380, clientY: 300 });
+
+    const pivot = walker.controller.disguise.root.position;
+    for (let frame = 0; frame < 20; frame += 1) walker.controller.update(1000 / 60);
+    const second = walker.controller.disguise.root.position;
+    const secondHeading = Math.atan2(
+      (second[0] ?? 0) - (pivot[0] ?? 0),
+      (second[2] ?? 0) - (pivot[2] ?? 0),
+    );
+
+    expect(Math.abs(secondHeading - firstHeading)).toBeGreaterThan(0.3);
   });
 });

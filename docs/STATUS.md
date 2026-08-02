@@ -1,5 +1,907 @@
 # STATUS
 
+## Movement has weight: acceleration, a jump arc, and a body that carries itself (2026-08-02)
+
+**The gap this closes.** Every mechanic was already in place — run, creep, climb,
+hop, the shared `CharacterController` both roles walk with — and all of it moved
+like a cursor. Velocity was set from the keys each frame, so the body reached
+full speed on frame one and stopped dead on the frame the key came up. The jump
+was a symmetric parabola with no hang and no impact. The creature itself never
+reacted to any of it: the shell was carried along rigidly, and the Forge camera
+was welded to the root.
+
+**Acceleration lives under the caps, never through them.** One rule in
+`moveHorizontally` steers the horizontal velocity toward what the keys ask for at
+`cap / GROUND_ACCELERATION_SECONDS` (0.18 s up, 0.09 s back to rest, both quoted
+as times rather than accelerations so a creep ramps as gently as it moves). The
+same rule is the turn smoothing, because a change of direction is a change of
+velocity: reversing now passes through a standstill instead of teleporting the
+sign. **The cap semantics are unchanged** — the velocity is clamped to the
+`speedFor` result every frame, so it only ever moves *slower* than the number the
+authority validates against, and `hiderCreep.test.ts` still passes untouched.
+Air control is `AIR_CONTROL_SCALE` 0.6 of the ground rate with **no air braking
+at all**, so a hop holds the momentum it left with.
+
+**The jump arc got a hang and a landing, and the apex did not move.** Gravity is
+scaled 0.9 rising and 1.15 falling. `JUMP_SPEED` is derived from the *rising*
+scale, so the body still tops out at exactly `JUMP_HEIGHT_M` and the invariant
+`jump.test.ts` guards — that a hop reaches nothing in the Curiosity Shop that can
+be stood on, the steel rack's bottom board at 0.26 m included — is untouched;
+what changed is the time spent up there. Coyote time (80 ms) answers a jump
+pressed just after the feet leave an edge, and a 100 ms buffer answers one made
+just before they touch down. Consuming a jump spends both, so neither stacks into
+a second launch. The controller now reports `justLanded` and `landingSpeed`, and
+those are the seam the compression and the camera dip hang off.
+
+**Body language is a transform, never an edit.** `forge/BodyLanguage.ts` is a
+deterministic set of critically damped springs producing three numbers — lean
+into travel, bank into a turn plus a gait sway, and a dip — which `ForgeController`
+lays over the authored pose by rotating `MimicVisual.root` **about the body's own
+root**. Nothing touches `this.pose` or `this.state`, so `disguise` is
+byte-identical for a body mid-stride and a body standing still at the same root.
+`movementFeel.test.ts` asserts exactly that, and asserts the rendered transform is
+genuinely non-identity at the same moment, so the test cannot pass by the
+cosmetic having quietly stopped working.
+
+Three details in that layer are load-bearing rather than decorative:
+
+- **Rotation about the root moves no part of the root.** Of the three channels
+  only the dip changes where the creature stands, and the dip is snapped onto its
+  rest value once the spring has arrived, so "returns to exactly the authored
+  height" is a claim a test can make with `toBe(0)` rather than `toBeCloseTo`.
+- **A locked disguise gets none of it.** An anonymized object that breathes on
+  the shelf tells an Inspector which of the six vases is a player, which is a
+  worse giveaway than any pose mistake the Forge could make. The same suppression
+  covers a body being authored, so a handle is always dragged against the pose.
+- **Only the Mimic carries the transform, not the handle group.** That group
+  holds three different coordinate spaces at once: pose grips on the body, seal
+  markers on the *map surfaces* a disguise is anchored to, and panel tips already
+  read through the Mimic's own matrix. Transforming the group leaned the seals
+  off their shelves and double-applied the lean to the tips. `layoutHandles` now
+  carries the posture onto the pose grips one at a time instead, and the test
+  asserts the head's grip sits exactly on the head.
+
+**The Forge camera chases rather than being welded.** A `cameraTarget` closes all
+but a twentieth of its gap to the orbit point in 0.16 s and snaps once inside a
+tenth of a millimetre, so a settled shot is exactly the shot the player left. The
+orbit *angle* and zoom are still instant — only the point being orbited lags. The
+walk bob reuses `InspectorCamera`'s own `BOB_AMPLITUDE_M` and `BOB_RATE_RAD_PER_M`
+rather than restating them, and the landing dip echoes the body's own compression
+at 0.55 of it. The Inspector's rig got the landing dip too, on the **boom pivot
+and not the eye**: every gameplay distance is measured from the eye, and camera
+feel may never change what the Inspector can reach (§8.5).
+
+**The footstep seam was left alone deliberately.** `gameplay/footsteps.ts`
+(builder-audio's) already switches on grounded/creeping/climbing and counts
+footfalls by distance, which is exactly right under a ramping speed — the cadence
+now eases in for free. Three tests were added against it rather than any change
+to it, so the signature builder-audio is wiring stays stable.
+
+**One bug fixed that was not on the list.** `HiderLocomotion` ended the walk on
+the first frame after the keys came up, which under the new deceleration would
+have cut the stop off and dropped the body on the spot. It now holds the walk
+open until the controller has actually reached zero.
+
+**Tests changed, and why.** Five existing assertions encoded instant velocity and
+had to move: three measured a distance over a fixed window from a standing start
+(now measured after the ramp, which is what "the cap" means), and two asserted
+the body stops on the release frame (now: it coasts under a body length and then
+stays put, with the no-drift claim intact). `forgeView`'s camera-framing test now
+settles the shot before measuring it, and gained a sibling asserting the trail
+exists mid-run. All are the same claims re-expressed; none were weakened to pass.
+
+**Addendum: a host who was a Mimic could not be shot.** Found by the Portals-net
+builder and fixed here because it lands in the same files. `RoundSession` omits
+the viewer's own disguise from `DisguiseTheatre` while the Forge draws it, and
+override 2 keeps a hider's Forge open for the whole hunt. `DisguiseTheatre.sync`
+*deletes* an omitted actor, so `boundsOf` returned null for the local player's
+own body, and `SpatialValidatorImpl` refuses a target with no bounds as
+`target_bounds_unknown`. The owner was the one player in the room who could not
+be hit — and on Portals the authority runs on an elected client, so a host who
+drew Mimic was immune for as long as they held it.
+
+`RoundSpatialBridge` now takes a second disguise source, `setOwnDisguiseBounds`,
+fed from `ForgeController.bodyBounds`. The two sources are **exact complements
+rather than alternatives**: `RoundSession` derives the theatre's `omit` and the
+bridge's answer from one stored `omittedObjectId`, so at most one of them ever
+knows about a given disguise and there is no body neither describes.
+
+`bodyBounds` is measured with the body language switched off and cached against
+the disguise revision — the same isolation rule as the wire pose, for the same
+reason. A box that leaned with the run would make its owner shootable somewhere
+no other client believes they are, which is the wire-pose failure in a place no
+wire format would catch. Two tests: `gameplay/ownDisguiseBounds.test.ts` drives a
+real round where the seed deals the local player a Mimic, reproduces the old
+failure in the same test (a theatre told to omit returns null), asserts the
+bridge answers anyway with a box matching what a remote theatre computes from the
+published pose, and asserts `canAccuse` now returns `{ ok: true }` for an
+Inspector standing over it. `forge/movementFeel.test.ts` asserts a leaning body's
+bounds equal a peer's box for the disguise it is currently wearing. **Both were
+confirmed to fail with the second source removed**, so they are not passing by
+accident.
+
+**Not done.** Peers and bots see no body language at all — it lives in
+`ForgeController`, which owns the player's own body, and `DisguiseTheatre`'s
+bodies are the authored pose by design. Giving peers a lean would mean deriving
+it from accepted root deltas on the receiving side, which is a separate piece of
+work and is the honest place to put it.
+
+**Verified.** `pnpm -r typecheck` clean across five projects; `pnpm -r test`
+green (client 60 files / 634 tests, shared 46, game-sim 161, server 23);
+`vite build` green at 242 modules, 1.69 MB / 479 KB gzip. Worth knowing for the
+next session: the first build attempt died with `EPERM` clearing
+`apps/client/dist/assets`, which is Dropbox holding the folder open on this
+machine rather than anything in the bundle. It cleared on its own; a scratch
+`--outDir` gets past it if it does not.
+
+## The shop has a voice: full soundscape, twelve beds and forty-eight one-shots (2026-08-02)
+
+**The gap this closes.** The game shipped eighteen SFX and no ambience at all.
+Every footfall in the shop was the same wood sample, nothing played between
+events, and the seven `ambienceId` beds already authored on the map zones in
+`world/maps/zones.ts` had never had a file behind them. The bundle now carries
+**48 one-shots and 12 seamless ambience beds, 3.3 MB of a 4.9 MB build**, and
+the room is audible whether or not anything is happening in it.
+
+**The beds are generated as real loops, not faded clips.** ElevenLabs
+`eleven_text_to_sound_v2` takes a `loop` flag that makes the material meet
+itself at the seam; the older model does not. Beds are cut at `mp3_44100_64`
+and one-shots stay at 128, which is why twelve thirty-second loops cost less
+than a megabyte more than the whole SFX set. The generator is still
+`packages/content-tools`, now with `--kind=` and `--only=` filters so a single
+prompt can be re-rolled without spending the whole set again.
+
+**An MP3 cannot be looped by `HTMLMediaElement` without a hole in it.** The
+files are seamless but the container is not: encoder padding at both ends puts
+a short gap in a room tone every thirty seconds, which is exactly the kind of
+fault a player hears without being able to name. `ElementBedVoice` runs two
+elements of the same file half a second apart and crossfades the join, so
+something is always mid-file and the seam never arrives. WebAudio would be the
+usual answer and was rejected deliberately: it needs `fetch` plus
+`decodeAudioData`, the Portals sandbox blocks fetch, and `new Audio(url)` is
+the one asset path this bundle has already proven works.
+
+**Four channels, not one mix.** `AmbienceController` holds the base shop tone,
+the zone bed, the phase bed and the tension bed at once, and each crossfades
+within itself, so walking from the clock wall to the reading nook exchanges one
+zone bed without disturbing the heartbeat. Zone routing reads `ambienceId`
+straight off the map rather than restating it, and a zone naming a bed that was
+never generated throws at load instead of falling silent in one corner of the
+shop. Stingers duck all four channels, which recover over 900 ms. The
+heartbeat follows `RoundViewState.self.watchedLevel` and is forced off outside
+the hunt, so a watched level left over from the round just ended cannot beat
+under the results screen.
+
+**Footsteps know what they are standing on.** `FootstepDriver` picks from four
+materials with three variations each, by distance travelled rather than by
+clock, so the cadence follows the speed without anything having to be told the
+speed. The map publishes no material field, so the few surfaces that are not
+wood are named in `footsteps.ts` and everything else falls through to wood: the
+nook floor and its upholstery are rug, the workshop rack boards are metal, and
+the glazed cabinet and marble counter are glass. Both roles drive it. The
+Inspector walks; a hider under the hunt's creep cap scrapes instead of
+striding, because a disguise audibly crossing the shop would give itself away
+for a reason its owner never chose.
+
+**Known, and deliberate.** `wallstick_attach` and `wallstick_release` are
+generated and unwired: wall-stick exists in the CLAUDE.md overrides and nowhere
+in the code, so the clips are ready for the mechanic rather than pretending it
+is done. `setMasterVolume` is exported and called by nothing but tests; it is
+the seam a volume control plugs into, and `getMasterVolume` is genuinely
+consumed by every channel every frame. The reading-nook rug is a zone-wide
+approximation of a prop-sized rug.
+
+**Verified.** 33 new tests: bundle-to-union parity in both directions behind a
+compile-time mirror of the `SoundId` union, the four-channel fade state machine
+driven frame by frame with a stub voice, and footstep cadence and material
+lookup. `pnpm -r typecheck` clean, 615 client / 161 game-sim / 46 shared / 23
+server tests green, `vite build` green, and all 60 files present in `dist`.
+
+## A disguise costs four draw calls, not forty (2026-08-02)
+
+**The gap this closes.** The hunt collapsed to 0-1 fps when four disguise
+bodies joined the scene. Shader compiles were refuted as the cause, and the
+measured load was draw calls: a Mimic is about forty drawn meshes, so four
+bodies added 160 to a shop already submitting around 293. `MergedMimicBody`
+collapses each theatre body to **one mesh per material, which is four**:
+porcelain shells, casting bellows, the non-casting eye shutter, and the eyes.
+Four bodies are now 16 draws rather than 160. A **painted** body is the larger
+win and was worse than the brief assumed: unmerged, paint gives every part a
+clone of its material carrying a view of that part's atlas tile, so a painted
+disguise was 27 materials and 27 draws. Merged it is four of each.
+
+**Only the theatre's bodies are merged.** The player's own Forge body is
+untouched: it is picked per part, recoloured per part, and dragged by handles.
+A disguise is none of those things. It is shot through its focus proxy's bounds
+and the reticle picks analytically against a box (`FocusSystem.pick`,
+`RoundSpatialBridge.boundsOf`), never against a mesh, so its parts only have to
+be drawn, and they can be drawn together.
+
+**The parts stay in the graph, hidden, rather than being taken out of it.**
+They are what the pose is applied to, what the merge reads, and what
+`Box3.setFromObject` measures. `Box3` ignores visibility while the renderer
+skips a hidden subtree in one test (`Renderer._projectObject` returns on
+`visible === false`), so a merged disguise publishes a focus box that is
+*identical*, not approximate, to an unmerged one. That box is the accusation
+hitbox, so identical is the requirement; `mergedBody.test.ts` asserts it with
+`Box3.equals` against a freshly built `MimicVisual` across four arrangements
+and again with a panel deployed.
+
+**Every part of a Mimic moves with its bone**, so there is no static half to
+bake once and articulating half to leave live. The merge bakes each part's
+pose-space transform into vertices and re-bakes whenever the pose changes,
+writing into buffers that are reallocated only when the *set* of parts changes:
+a panel deploying, a swatch changing, a shadow setting changing. A move never
+reallocates and never allocates at all. Re-baking one body's ~12,900 vertices
+measures **p50 0.29 ms, p90 0.65 ms** headless once V8 has warmed (the first
+four passes are 3-14 ms and are warmup, not the cost the hunt pays). Four
+hiders creeping at the 500 ms publish interval is about 2.4 ms a second.
+
+**Paint needed the atlas tile moved out of the material and into the
+vertices.** Every part publishes the same 0..1 UV square, so the atlas gives
+each its own tile and the unmerged path reaches it through the tile view's
+`offset` and `repeat`, which three folds into the sampled coordinate as
+`u * repeat + offset`. The merge folds exactly that into the coordinates
+instead, so one merged mesh wears the whole atlas and samples the same texels.
+A group is keyed on paintability as well as material, so a merged mesh can
+never mix a part that owns a tile with one that does not.
+
+**A hidden part is still raycast**, which was a real regression caught in
+review rather than by a test that existed. `Raycaster` tests layers and ignores
+visibility, the Forge's eyedropper reads the room, and a peer's disguise is a
+fair thing to copy a colour from. A part and the merged mesh drawn over it are
+the same surface at the same distance, so the dropper would have taken the
+swatch from under the paint about half the time. The parts therefore move to a
+layer nothing renders or picks on, and a test aims a ray down a merged
+triangle's own normal and asserts every hit belongs to the merge.
+
+**Noticed, not fixed, and outside this change:** `ForgeController` captures
+`roomObjects` as the scene's children at construction, which is after the
+theatre has parked its prewarmed bodies, so `indexAnchorSurfaces` indexes Mimic
+part names (`mimic_torso_upper` and the rest) as anchorable surfaces. A saved
+anchor naming one would resolve against a parked body. Merging does not change
+this either way.
+
+### Verified
+
+`pnpm -r typecheck` green, `npx vite build` green, and 199 tests across
+`tests/gameplay`, `tests/mimic` and `tests/paint` pass, including twelve new
+ones in `tests/gameplay/mergedBody.test.ts` and the existing theatre, hunt
+presentation and paint cases unchanged. **`pnpm -r test` is not green at the
+time of writing:** six tests fail in `tests/forge/hiderLocomotion.test.ts`,
+`tests/forge/forgeView.test.ts` and `tests/inspector/controller.test.ts`, all
+of them downstream of `src/inspector/CharacterController.ts`, which the
+concurrent movement work was editing. None of them touch the theatre, the
+merge, the Mimic visual or paint.
+
+New tests: draw count at or under six against a part count of forty with the
+triangle count preserved exactly; the merged surface's precise vertex box
+against the parts'; the focus box against an unmerged reference; a deploying
+panel entering both the merge and the box; a creep moving the drawn geometry by
+the distance it travelled; a taunt carrying the merged meshes; paint drawn
+without a call per part; every merged UV inside a tile the body owns with all
+21 painted parts represented; paint coming off cleanly; a picking ray answered
+by the merge alone; and sixty re-poses that reuse the same geometry and
+material objects.
+
+## The game is playable with other people (2026-08-02)
+
+**The gap this closes.** `PortalsNetAdapter` was finished, tested at 37 cases, and
+mounted by nothing: `App.tsx` only ever called `createLocalRound`, so every round
+the shipping build could open was this tab against three bots. The headline
+feature was code nobody could reach.
+
+### Detecting where the game is running
+
+`networking/portalsBoot.ts` answers one question at boot: is this page inside a
+Portals room. It reads `window.Portals` first, because a hosted bundle is served
+with the SDK tag already injected, and falls back to importing
+`_portals/sdk.js` from wherever the document itself lives — `@vite-ignore` and a
+`document.baseURI` URL, so the build never tries to resolve a path that exists on
+no developer's disk. Everything that can fail there means the same thing, so it
+all resolves to null and the game plays offline: no file, a 404 page served as a
+module, a `Portals` global belonging to something else, a `ready()` that rejects,
+and a `ready()` that never settles at all, which is capped at
+`PORTALS_READY_TIMEOUT_MS`. The probe runs beside the WebGL backend probe rather
+than after it, so it costs the boot nothing.
+
+`context === "room"` takes the multiplayer path. **A standalone game page takes
+the offline one**, even though `Portals.net` is reachable there, because on the
+game's own page there is nobody in particular to be joined to.
+
+### The round is the same round
+
+`gameplay/portalsRound.ts` is `localRound.ts`'s sibling and assembles the same
+three pieces, because `GameHost.enterRoundMode`, `RoundDirector` and
+`RoundSession` all read `NetworkAdapter` and nothing narrower. That was checked
+rather than assumed: `createLocalRound` was the only reference to
+`LocalLoopbackAdapter` outside the adapter itself. What differs is only where the
+simulation runs, and the shell's own branch is four lines choosing a round, a
+channel and a name before a shared path takes over.
+
+The relay's **default bucket** is used rather than a named channel: a Portals
+room already is the session, and naming a channel inside one would split the
+people in a single room into sub-lobbies that cannot see each other.
+
+### Three things the host was missing
+
+The adapter elects a host to run the simulation, and that host needs the same
+inputs the loopback's simulation gets. It was being given one of them.
+
+**The map.** `PortalsAdapterOptions` had no `objectRegistry`, so an elected host
+built `MatchSimulation` on its five-prop test fixture. Every warrant an Inspector
+spent on any of the Curiosity Shop's 104 accusable props would have come back
+`target_unknown` (`MatchSimulation.commandAccuse`). It is now passed on
+construction **and** through `MatchSimulation.restore`, where it matters twice
+over: a snapshot records the map it belongs to and restore refuses one whose
+registry disagrees, so without it a migration would either resume a round about a
+different room or fail outright.
+
+**The Inspector's eye.** `RoundSession` writes the camera into the local spatial
+bridge every frame, which is sufficient on the loopback because there the
+Inspector *is* the authority. Over the relay the Inspector is usually not the
+host, and the host's validator had never heard of them, so
+`SpatialValidatorImpl.check` refused every shot with `inspector_position_unknown`.
+**There was no envelope in the protocol that could carry it**, so one was added:
+`t: "eye"`, addressed to the host, nullable so an Inspector who stops being one is
+forgotten rather than remembered where they last stood. It is client-reported,
+which is the authority model Portals gives us; the host still decides what may be
+shot from it. `RoundSpatialBridge` gained an observer on its local writes and a
+separate `acceptInspectorEye` for what arrives from the wire, so a host applying a
+remote report cannot relay it onward under its own name. Cost is capped at one
+message per 100 ms flush and skipped entirely while the eye has moved less than
+`EYE_REPORT_EPSILON_M`, so an Inspector standing still sends **one** message for
+the whole second (measured). A change of host clears the record of what was
+already sent, because the new one has never heard it.
+
+**Disguise bounds** were already right: `RoundSession` wires `setDisguiseBounds`
+from its own `DisguiseTheatre` in its constructor, and every client runs a
+theatre, so whoever is promoted is already holding them.
+
+### Verified
+
+`pnpm -r typecheck` clean, `npx vite build` green, `pnpm -r test` green
+(571 client, 161 sim, 46 shared, 23 server) — excepting
+`tests/gameplay/mergedBody.test.ts`, which was being rewritten by the draw-call
+merge work while this ran and passes on its own.
+
+Eleven new tests. `tests/gameplay/portalsRound.test.ts` drives two clients
+through the shipping `createPortalsRound` over the fake relay: both seated with
+one host elected, only the host offered the start control, the phase machine
+reaching the Forge for both, a locked disguise arriving at the far client **with
+its geometry**, and an accusation fired from the non-host machine catching the
+Mimic. Its companion writes the eye straight into the local validator, which is
+exactly what the round did before this pass, and asserts the same shot resolves
+nothing at all — so the first test is proving a live channel rather than a dead
+one. The fixture throws if the deal ever puts the gun on the host seat, because
+these cases would then pass while proving nothing.
+`tests/networking/portalsBoot.test.ts` covers the six ways the probe can end, of
+which five are the offline fallback.
+
+**Not verified: none of this was run inside Portals.** No real SDK was loaded, no
+real relay carried a message, and whether Portals injects the SDK tag or expects
+the game to import the file is a question only the editor can answer — the probe
+handles both, which is why it is written that way.
+
+### Two findings this pass did not fix
+
+**A host who is a Mimic cannot be shot.** `RoundSession.update` omits the
+viewer's own disguise from its theatre while the Forge is drawing it, and per
+override 2 a hider's Forge stays open for the whole hunt. `DisguiseTheatre.sync`
+deletes an omitted actor, so `boundsOf` returns null for it, so that client's
+validator answers `target_bounds_unknown`. On the loopback the authority is always
+the local player, so this is the same hole and it has simply never been
+reachable: a solo round's Inspector is a bot shooting bot disguises. On Portals it
+means whichever client is elected host is immune for as long as it holds
+authority. The fix belongs where the Forge's own body is: the bridge needs a
+second bounds source for the viewer's own disguise rather than falling through to
+the theatre that deliberately does not have it.
+
+**Bots cannot fill a Portals room.** `LocalLoopbackOptions` has `botPose` and
+`botBrain`; `PortalsAdapterOptions` has no equivalent and the host's simulation
+has no hook to add one, so a room below `minPlayers` (2) simply cannot start.
+Nothing was forced here. Adding it means seating bots as real players in the
+host's simulation and driving them from the host's tick, which is a change to the
+adapter's seat bookkeeping rather than a wiring job.
+
+## Jump is in, and the left button is the camera (2026-08-02)
+
+Two user directives, one of them a reversal. CLAUDE.md overrides 5 and 6 carry
+them: **space jumps**, which retires the "no jump, ever" rule the whole movement
+layer was written under, and **WASD moves while a left-click hold turns the
+camera**. The walking work in the section below landed hours earlier under the
+old rule, so parts of it are amended here rather than left standing.
+
+### The hop, and why it is small
+
+`JUMP_HEIGHT_M` in `packages/shared/src/config.ts` is 0.45 body heights, 0.158 m,
+beside the run and creep speeds. `CharacterController` derives the takeoff speed
+from it and the room's own gravity, so the authored number is the height and the
+physics delivers it. Both roles jump: it is one shared controller, so the
+Inspector got it for the price of adding `Space` to `InspectorInput`.
+
+**The ceiling on that number is not the one it looks like.** The intent is that a
+hop clears clutter and gaps while the authored climb links keep their monopoly on
+getting up onto things, so the hop must not reach the lowest thing in the shop
+that can be stood on. That is not the 0.34 m window deck but the **bottom board
+of the steel rack at 0.26 m**, which the first attempt at 0.55 body heights would
+have mounted: it reached 0.2625 m with the step lip added, against a 0.26 m
+board. Nine twentieths reaches 0.228 m and leaves 3 cm. `jump.test.ts` derives
+the bound from `WALKABLE_SURFACES` rather than from that sentence, so retuning
+either the hop or the map fails loudly.
+
+Worth knowing: **no blocker in the Curiosity Shop is currently low enough to hop
+over.** The furniture all stands taller than a hop's reach, so in this map the
+jump is feel and gap-crossing rather than a route past anything. The test that
+proves a hop clears an obstacle a walk cannot builds its own kerb for that
+reason, and says so.
+
+The discrete arc undershoots the analytic one, because the controller decrements
+velocity before it integrates: at 60 Hz the apex lands about 1.5 cm short of the
+authored height, and always short rather than sometimes over. That is the safe
+direction, since the "cannot mount" bound is computed from the authored height.
+
+### Making a hop legal during the hunt
+
+A hop is root motion and the authority measures root motion in three dimensions
+against `hiderCreepSpeed`, which buys 8.75 cm over a publication interval against
+an apex of 15.8 cm. Two things keep it accepted, and both are load-bearing:
+
+1. **A surface-locked hop lands on the height it took off from**, not on whatever
+   `surfaceAt` reports underneath. A locked disguise sits where the Forge posed
+   it, which is rarely exactly a surface top, so landing "on the ground" would
+   spend creep budget the hop never earned. `resolveHop` is that rule.
+2. **The round does not publish a pose while the body is off the ground.**
+   `ForgeController.bodyAirborne` reports it and `RoundSession.publishPose`
+   holds, letting the interval keep running so the pose goes out on landing. An
+   airborne pose is a moment rather than a place.
+
+Both are covered by a test that does the opposite and asserts the refusal, so
+neither is decorative. Writing the second of those found a flaw in the test
+fixture rather than in the code: at the 100 ms frames the creep tests were
+stepping, a hop's arc is so under-sampled that its apex fits inside the creep
+budget by accident and the mid-air publication was accepted. The fixture runs at
+50 Hz now, which is the rate the claim is actually about.
+
+### Space had a job already
+
+The Forge held the §7.5 Inspector-eyeline preview on space. A key cannot be both
+a movement verb and a camera hold, so **the eyeline preview moved to E** — next
+to the walk keys, and the letter its own name starts with. This is a user-visible
+rebinding the directives did not ask for and the jump forced; it is called out
+here and on the control strip rather than left for a player to discover.
+
+### The left button
+
+Already the behaviour, as it turns out: `beginLeftPress` reports whether the
+active tool consumed the press and an unconsumed one goes to the camera, so a
+hold on a handle poses and a hold anywhere else orbits. What was wrong was the
+HUD, which advertised the left button as "Drag a handle" and put orbit on the
+right. The strip now prints the left button twice, once as "Look around" and once
+as "On a handle: pose", because that is what it does. Right-drag orbit and
+shift-drag pan are untouched.
+
+**It is asserted rather than assumed.** Adding a second way to move the body is
+exactly the change that could have quietly taken the left button away from the
+camera, so `forgeView.test.ts` now drives the gesture with locomotion live: a
+left hold over empty space turns the camera and leaves both the body and the
+undo stack alone, a walk carries on through a camera drag rather than being
+interrupted by it, and turning the camera turns where the walk keys go, which is
+the one behaviour that makes a single non-modal control scheme work.
+
+**Space appears on the control strip, not on the action rail.** The rail is one
+chip per verb and the strip is what the role steers with, which is why WASD is on
+the strip; a jump is locomotion and belongs beside it. Putting it on the rail
+would have crossed the separation those two components were built around.
+
+### Verified
+
+`pnpm -r typecheck`, `pnpm -r test` (582 client, 161 sim, 46 shared, 23 server —
+the client total includes other agents' work landing the same night) and
+`pnpm -r build` all green. Eighteen new tests in `forge/jump.test.ts`,
+`forge/forgeView.test.ts` and
+`gameplay/hiderCreep.test.ts`: the apex against the authored height at 60 Hz, a
+kerb cleared that stops a walk, the map-derived bound that no walkable surface is
+within a hop's reach, a concrete failed attempt on the steel rack's bottom board,
+no second launch in mid-air, a surface-locked hop returning to its exact takeoff
+height, the creep cap holding with the hop included, and a real round in which a
+hider hops repeatedly through the hunt with nothing refused — plus its companion
+that publishes mid-air and gets `moved_too_fast` back.
+
+**Not verified: still nothing in a browser.** Nobody has pressed space and
+watched the creature hop, and the feel of the hop height is exactly the kind of
+judgement only playing it can make. `JUMP_BODY_HEIGHTS` is the one knob, and the
+map-derived ceiling on it is 0.19 m.
+
+## A Mimic can walk (2026-08-02)
+
+**Amended by the section above.** This section was written under the "no jump,
+ever" rule, which the user reversed the same day. Where it says a Mimic has no
+jump, read: a Mimic hops on space, and the climb links are still the only way up
+onto furniture. The control strip's key list has also changed.
+
+**The gap this closes**, caught by the user: "how am I supposed to move as the
+character to go hide?" The design promises a hider free run and climb during the
+Forge and the same abilities creep-capped through the hunt, which is the MECCHA
+loop — run about as the creature, find a spot, settle, disguise. What was built
+was drag-only. The body was repositioned by hauling its root handle across the
+room with the pointer, and `huntControls.ts` said in so many words that a hider
+has no walk key.
+
+### One body, two speeds
+
+Everything about how a body moves came out of `InspectorController` into
+`inspector/CharacterController.ts` unchanged: the capsule against axis-aligned
+nav geometry, the axis-fallback slide, the ground snap and the fall, the
+authored climb links, and the absence of a jump. `InspectorController` is now
+four lines that hand it `inspectorMoveSpeed` with the §8.1 brisk walk on shift,
+so its sixteen tests pass untouched, and `forge/HiderLocomotion.ts` hands it the
+Mimic's speed instead. A hider is therefore stopped by the furniture the
+Inspector is stopped by, gets up onto the same shelf by the same authored link,
+and has no more jump than the Inspector does.
+
+**The Forge run is derived, not written out.** `HIDER_FORGE_RUN_SPEED` in
+`packages/shared/src/config.ts` is 3 body lengths a second, 1.05 m/s, beside the
+Inspector's 2.6 and 0.91. The Inspector's figure is the Froude number at which a
+walker breaks into a run, so it is the top of a walk; a Mimic crossing the shop
+to hide is running, carries no gun and is searching for nothing, so it goes a
+little faster. It is deliberately **not** a `MatchSettings` field: no authority
+reads it, because the Forge phase has no speed rule, and putting it on the wire
+would offer a host a number the simulation never checks.
+
+**The hunt cap is applied twice on purpose.** `MatchSimulation.validateCreep`
+measures a straight line in three dimensions from the last pose it accepted
+against the time since, and refuses anything over `hiderCreepSpeed`.
+`RoundSession.driveForge` now tells the Forge the same number for the inspection
+phases and null before them, and `HiderLocomotion` caps each frame at it. Capping
+per frame is sufficient for the authority's test, since a straight line is never
+longer than the path that drew it. This closes the rubber-band this file listed
+under "stubbed, unverified or broken": the client used to predict motion the
+authority would refuse, and the two copies of the body disagreed until the next
+accepted pose.
+
+**A creep keeps its height.** `CharacterController.surfaceLocked` stops gravity,
+takes the climb links away, and refuses a step that leaves the surface the body
+settled on. That is not a flourish: one frame of falling, or a single snap up a
+0.07 m lip, covers more ground than a whole second of creeping is allowed, so a
+creep that could change height could not stay inside the cap. A disguise with
+nothing underfoot — hanging, or bracketed to a wall — simply does not creep,
+rather than being dropped to the floor by its own walk key.
+
+### What walking does to a disguise
+
+Locomotion writes the same root a handle drag writes, and goes out through the
+same `recordForgeSnapshot` on the same 500 ms coalescing interval, so the
+authority cannot tell a Mimic that walked from a Mimic that was dragged.
+
+**The pose travels with the body**, which was a real bug found by writing the
+test for it. The Forge's IK targets are world positions, so a body that walked
+away from a posed hand was solved back toward where it had been standing: with
+the translation removed, walking 0.7 m moves the head 6.9 cm out of place on a
+0.35 m body, and `forgeView.test.ts` fails by exactly that much.
+
+**Walking breaks every seal**, for the same reason. The anchor pass in
+`solveAndRefresh` walks the root toward its anchors, so a sealed body that tried
+to walk would be hauled straight back to the surface it left. A whole walk is one
+undo entry labelled "walk", carrying both where the body went and what it let go
+of, and `commitEdits` closes a walk in progress so an undo, a lock or a new
+starter arrangement cannot fold a half-finished walk into whatever follows.
+
+**The camera is not a mode.** The Forge's orbit point travels with the body and
+its angle, pitch and zoom are left exactly where the player put them, so the
+same view both poses and drives: the body moves whenever a walk key is down and
+is posed whenever a handle is dragged, with nothing to toggle between them. Keys
+steer relative to the camera, and the body is then turned to face where it is
+actually travelling, which is what lets a climb link activate when it is walked
+into sideways as well as head on.
+
+**The play volume's floor bound is not applied to a walk.** `minY` is 0.02 on
+this map, a guard against the pointer shoving a body down through the boards,
+and the shop floor is at 0. Clamping a walking body to it lifted the Mimic 2 cm
+off the ground and then fought the controller for it every frame, which is what
+the first version did: the body took exactly one step and stopped. X, Z and the
+ceiling are still clamped, and a walk that hits one of those stops, because a
+walkable surface outside the room's own faces would mean the map disagrees with
+itself.
+
+`ForgeControllerOptions.navData` is optional and Forge practice passes none, so
+the practice room — which publishes no nav data to walk on — is unchanged.
+
+### The HUD
+
+`HIDER_CONTROL_HINTS` leads with W A S D, labelled "Creep", because the strip is
+drawn during the hunt. Shift is absent: a creep has one speed. The assertion in
+`huntControls.test.ts` that a hider is offered no walk key was the HUD correctly
+describing the old behaviour, and it is now the opposite assertion plus a check
+that the only key a player might mistake for a jump, Space, still holds the
+Inspector-eyeline preview.
+
+### Verified
+
+`pnpm -r typecheck`, `pnpm -r test` (541 client, 161 sim, 46 shared, 23 server)
+and `pnpm -r build` all green. Nineteen new tests:
+
+- `forge/hiderLocomotion.test.ts` measures the run against the derived constant,
+  climbs the fixture's mantle, runs off the workbench and lands, sweeps eight
+  headings from every floor-level Mimic spawn asserting the body is never inside
+  a `NAV_BLOCKER` and never off the floors (and that something did stop it, so
+  the sweep is not just proving the shop is empty), and holds the creep cap both
+  over two seconds and frame by frame in every direction.
+- `gameplay/hiderCreep.test.ts` drives a real `LocalLoopbackAdapter` round: the
+  local player locks a disguise, creeps for ten seconds publishing at the round's
+  own interval, and **nothing is refused**; the room's copy of the body ends
+  where the player's is, to the wire's precision. Its companion drives the same
+  creep at the Forge run speed and asserts `moved_too_fast` comes back, so the
+  first test is proving a live rule rather than a dead one.
+- `forge/forgeView.test.ts` covers the seam: the root moves and the revision
+  advances, the body stops where the keys were released, one walk is one undo
+  that returns it, the camera keeps its framing while following, a locked
+  disguise ignores the keys, and the posed-head case above.
+
+**Not verified: none of this was driven in a browser.** The rules are proved
+headlessly and the seam is proved through the real `ForgeController` under a
+stubbed window, but nobody has held W and watched a Mimic run across the shop.
+
+**Known, and not this change's to fix:** `CharacterController` checks blockers
+along a step but not along a fall, so a body that runs off the window deck can
+land inside furniture. That is the Inspector's behaviour too and predates this
+work; the locomotion sweep test scopes itself to the floor-level spawns and says
+so rather than papering over it.
+
+## The round opens across frames, and the hunt's bodies are built before it (2026-08-02)
+
+Answers the round-4 critic findings that "Play a round" freezes the tab for about
+a minute with no feedback, and that the hunt collapses to 0-1 fps on both
+backends. The first is fixed. The second is **not** fixed here, and the section
+below says why the diagnosis it was given does not hold up.
+
+### Clicking "Play a round" no longer stops the tab
+
+`GameHost.enterRoundMode` is asynchronous and reports progress.
+`CuriosityShop.buildSteps` is a generator that yields ten times — the shell, one
+step per zone, and the batcher's `finalize`, which is where the merged geometry
+is actually built — and `ShopWorld.createIncremental` hands each yield to a
+callback that paints the loading screen and waits a frame. `ui/LoadingScreen.tsx`
+draws the real fraction and names the piece that was just put in.
+
+**The zones are cut out of the authored order rather than grouped into it.**
+Build order is the mesh numbering (§24.6) and a saved disguise resolves its
+anchor surface by the name the build gave it, so regrouping the props to make
+tidier chunks would rename every hero mesh in the shop. `SHOP_PLACEMENTS` is
+already written as one contiguous run per zone, so cutting it wherever the zone
+changes gives ten labelled steps and touches nothing.
+`tests/world/shopBuild.test.ts` re-flattens the runs and asserts the result is
+the authored list by identity, which is what fails if anyone sorts it.
+
+**The menu room stays up for the whole load.** It used to be disposed first,
+which is why the freeze had nothing behind it. The shop is now built into its own
+scene while the menu goes on rendering, and the swap happens once the shop is
+ready. Two rooms are alive at once for the length of the load, which the small
+menu room can afford.
+
+**The load ends with one real frame drawn under the loading screen.**
+`renderer.compileAsync` walks the beauty pass only: shadow pipelines come from
+the shadow camera and the post chain from its own passes, and both are otherwise
+built by the first frame of play. Paying for one frame while the loading screen
+is still up moves that cost somewhere the player is expecting to wait.
+
+`ShopWorld.precompile` turns frustum culling off across the map for the length of
+the call. A precompile builds the same render list a frame does, culling
+included, so without that only the props in front of the camera would be covered.
+
+A round abandoned while it is opening is caught by a token that `exitRoundMode`
+and `dispose` both bump: the build releases the shop it has instead of installing
+one nobody asked for, and `enterRoundMode` resolves null.
+
+### The hunt's bodies are built during the load
+
+`DisguiseTheatre.prewarm(4, compile)` builds four Mimic bodies posed with the
+fallback arrangement, parks them 20 m below the boards with culling off and every
+panel plate forced visible, hands them to the precompile, and then hides them in
+a reserve. `createActor` takes from that reserve, so the transition into the hunt
+re-poses an existing body instead of building one. A disguise that leaves hands
+its body back rather than destroying it, which also covers a rematch.
+
+One of the four wears a paint layer during the compile, because a painted part
+swaps in a cloned material carrying the atlas; the clones are handed back before
+the body is parked.
+
+Measured in `tests/gameplay/disguiseTheatre.test.ts`: at compile time the scene
+holds four visible bodies with no hidden drawable part and nothing frustum
+culled, and syncing four real disguises afterwards adds **zero** scene children
+and **zero** materials.
+
+Four bodies share one `MimicMaterialPool` instead of one each, which takes the
+materials hanging on the cast from 16 to 4 (measured). The eyes became two
+materials, lit and shut, swapped by reference, because a shared material cannot
+be dark for one body and lit for another.
+
+### The compile-storm diagnosis does not survive reading three 0.185
+
+The critic's hypothesis was that four theatre bodies with unpooled per-part
+materials mean a shader compile storm at the transition. **Three does not work
+that way.** `RenderObject.getMaterialCacheKey()` (three.webgpu.js:30342) builds
+its key from the material's property *values* and explicitly skips `uuid`,
+`name` and `version`, and `Pipelines._getProgramStages` caches compiled stages by
+the generated shader *source*. Two structurally identical `MeshPhysicalMaterial`s
+therefore share one `nodeBuilderState` and one GPU program on both backends. The
+sixteen materials were never sixteen compiles, and the porcelain and graphite a
+theatre body wears are the same shaders the player's own Forge body already
+built.
+
+So the pooling above is worth having — it is 4x fewer material objects, uniform
+buffers and bind groups, and 4x less per-material work every frame — but it is
+**not** a compile saving, and nobody should expect the hunt's frame rate to move
+because of it.
+
+**The number that does look like the cause: four bodies are 160 drawn meshes.**
+A Mimic is 19 shells, 17 bellows, up to 8 panel plates, two eyes and a shutter,
+each an individual un-batched mesh with its own draw call, and four of them stand
+up at the transition against a shop already running about 293. That is a 55%
+draw-call increase arriving in one frame, on the backend and the tier where the
+shop alone was already the problem. It is measured (224 meshes, 160 drawn, 96
+geometries for a four-body cast) and it is untouched by this pass. Merging a
+body's parts into one mesh per material, which the shop's own props already do
+through `PropBatcher`, is the obvious next move and is a change to `MimicVisual`
+that the Forge's picking and the paint atlas both constrain.
+
+### Verified, and what is not
+
+`pnpm -r typecheck` clean, `pnpm -r test` green (540 client, 161 sim, 46 shared,
+23 server), `pnpm -r build` green. New tests: `tests/world/shopBuild.test.ts`
+(the chunking preserves the authored order, one run per zone, the step count),
+`tests/ui/loadingScreen.test.tsx` (the bar is the real fraction, clamped at both
+ends, announced), and four cases in `disguiseTheatre.test.ts` for the pool, the
+prewarm, the painted warm body and the once-only guard.
+
+**Not verified: none of this was measured in a browser.** Whether the hunt still
+collapses, and by how much the load actually shortened, is a timing question this
+pass cannot answer headlessly. Two specific unknowns for whoever measures it:
+
+- The load's shader step leans on `KHR_parallel_shader_compile`. With it, three's
+  WebGL 2 backend links in parallel and polls on rAF, so the main thread stays
+  free and the loading screen animates. Without it, `createRenderPipeline`
+  completes synchronously and that step blocks — the block moves out of play but
+  does not disappear.
+- The warm frame is drawn from wherever the survey camera happens to be, so it
+  covers the shadow and post pipelines for what that one frame draws, not for the
+  whole map.
+
+## WebGL 2 stability, and bots that survive a stalled thread (2026-08-02)
+
+Answers two round-4 critic findings measured on a frozen production build on an
+Intel integrated GPU. Half of all rounds died with "graphics device was lost" on
+the **default** WebGL 2 backend, and the bot Inspector that catches 17 hiders in
+19 headless rounds caught nobody at all in real play.
+
+### The light budget is now capped on WebGL 2 as well
+
+`qualitySettingsFor(tier, backend)` capped `maxPracticalLights` on WebGPU only,
+so WebGL 2 at the medium tier was running all seventeen authored practicals plus
+two fill directionals, a hemisphere and a shadowed spot. The two backends now
+have their own tables in `rendering/quality.ts`.
+
+| tier | preset | WebGL 2 | WebGPU |
+|---|---|---|---|
+| ultra | 20 | 10 | 6 |
+| high | 17 | 9 | 6 |
+| medium | 10 | 7 | 5 |
+| low | 7 | 6 | 4 |
+| light | 5 | 4 | 3 |
+
+The two backends are capped for different reasons. WebGPU pays in frame rate.
+WebGL 2 pays in program size, because three unrolls the punctual light loop, so
+every live point light is another inlined block of lighting code in the fragment
+program. The chain into every device loss is the same, roughly ten `Shader Error
+1282 VALIDATE_STATUS false` link failures whose driver info logs are empty, then
+`uniformBlockBinding: program not linked`, then the context dies. An empty log on
+a failed link is what a driver reports when a program runs past a resource limit
+rather than when its GLSL is wrong.
+
+**These numbers are a hypothesis, not a measured driver limit, and nothing here
+proves the light count is the cause.** The one-shot A/B that survived at the
+light tier moves lights, shadows, bloom, GTAO and render scale together. The
+table is a single constant and the lead's A/B re-runs against it. Nothing about
+the shop's dressing changed, because a lamp that loses its light keeps its pool:
+at the WebGL 2 high budget, nine lamps stay lit, eight become unlit fixtures and
+four of those get drawn pools, the other four being wall sconces, which never do.
+
+The memo behind `qualitySettingsFor` had to change with it. It was keyed by tier
+alone, which was correct while one backend capped and would have handed the
+first caller's budget to the other backend now that both do. `GameHost` compares
+settings by identity to decide whether a tier change is worth re-applying down
+the whole world, so this is load-bearing, and `dressing.test.ts` pins it.
+
+### A link failure now costs a tier instead of the session
+
+`RendererManager` takes `renderer.debug.onShaderError`, which the WebGL 2 backend
+calls for every program the driver refuses, and publishes it through
+`onShaderLinkFailure`. This is the last point at which anything can be done,
+since three carries on and binds the unlinked program regardless. Taking the hook
+replaces three's own console report, so the driver's logs are written out here
+instead, together with the fragment source length, which is the number that would
+confirm or kill the program-size hypothesis above.
+
+`ShaderFailurePolicy` decides what a failure costs, and `GameHost` does as it is
+told. A storm arrives as one burst, so the burst rather than the individual
+failure is the unit of decision, and a 1.5 second window collapses the tail of
+one storm into a single response. The first burst demotes one tier. Further
+bursts keep demoting. Once the ladder is spent, the second burst at the floor
+tier reports a device fault, which reaches the panel `App.tsx` already shows for
+a lost device. That panel is the honest end state, since nothing further can be
+traded away, and the context dies within a few draw calls in any case.
+
+Two decisions worth knowing. A link failure **overrides a manual tier lock**,
+because the player's choice was about how the game should look and this is about
+whether it can be drawn at all. And the tier that failed is **closed for the
+session**, which the adversarial pass caught as a hole rather than the critic:
+`AdaptiveQuality` raises the tier when frames are fast, and a tier that draws
+nothing because its programs never linked is a fast tier, so without a ceiling
+the session would have climbed straight back into the failure it was pulled out
+of, on a loop. `stepQualityTier` in `quality.ts` carries the ceiling.
+
+`tests/engine/shaderFailure.test.ts` drives the policy against the real
+`QUALITY_TIER_ORDER`, covering the single demote, ten failures in one frame
+costing one tier rather than ten, the walk down the ladder, the floor being
+reached without faulting at once, the fault on the second floor burst, a session
+whose failures stop never faulting, and the closed tier refusing a raise while
+still allowing the demote below it.
+
+**Not verified: none of this was seen firing in a browser.** The detection hook
+is typed against three 0.185.1 and reads the same `debug.onShaderError` contract
+`WebGLBackend._logProgramError` calls, but no test drives a real failed link,
+because a headless renderer cannot produce one. What is tested is the policy.
+
+### Bot Inspectors advance on match time, not on callbacks
+
+The bot walked `min(120 ms, elapsed)` per turn and threw the rest away. Its turns
+come from a `setInterval` the browser coalesces, so a main thread frozen for
+seconds delivered one turn and the bot walked eleven centimetres of it. `update`
+now integrates the whole elapsed interval in steps of at most `MAX_STEP_MS`,
+replanning between them exactly as a run of ordinary turns would, capped at six
+seconds of catch-up. Time past that cap is dropped rather than owed, since a bot
+carrying a debt walks at a visibly wrong speed for whole seconds afterwards.
+
+Measured over a five second stall in `botRound.test.ts`, against a control round
+from the same seed ticked every 100 ms throughout:
+
+| | |
+|---|---|
+| Control bot, ground covered in 5 s | 4.45 m |
+| Speed ceiling for 5 s | 4.55 m |
+| Stalled bot, single published hop | 2.90 m |
+| Gap between the two bots afterwards | 3e-15 m |
+
+The hop is shorter than the control's path because it is a straight line between
+two points and the route turns corners. **The no-teleport property survives**,
+and the test states it against elapsed time rather than against a tick. Under the
+old clamp the same hop measures 0.109 m, which is `inspectorMoveSpeed * 120 ms`,
+and the assertion was falsified by hand against it.
+
+A second bug came out of this and would have been invisible before: `stage` left
+`hunter.nowMs` at the moment the bot was created, so the whole of
+InspectionIntro read as elapsed walking time and the hunt would have opened with
+the bot several metres into the shop. Staging now keeps the clock current.
+
+`LocalLoopbackAdapter.step` also takes one clock reading and drives both the
+simulation tick and the bots from it. A bot measures how much match it has to
+make up against the clock the phase machine was just advanced to, and a bot's
+creep is now recorded at the moment the brain decided on it, which is the
+interval the authority measures creep speed over.
+
+**What this does not fix.** A single stall longer than six seconds still costs
+the bot the remainder. The critic's 187 seconds of freeze per round, if it is one
+block rather than the sum of many, is beyond anything a catch-up can answer, and
+the real answer to that is the compile storm work in the pass above. Sensing
+still happens once per turn, from where the bot stood when the turn began, so a
+stalled client's Inspector is looking at a five second old room for one turn.
+
+**Verified:** `pnpm -r typecheck`, `pnpm -r build`, and `pnpm -r test` green over
+these changes at the time of writing (client 535, sim 161, shared 46, server 23).
+A later run picked up two failures in `tests/forge/forgeView.test.ts` from the
+hider-locomotion work landing in `ForgeController.ts` while this ran. Those are
+not from this pass, which touches no forge file.
+
 ## Bot Inspectors hunt, and bot hiders hide (2026-08-02)
 
 **The gap this closes.** A solo round had no stakes, because nobody was ever
@@ -330,7 +1232,9 @@ their absolute offsets.
   absent because we do not have them.
 - *Bottom centre* — `ControlStrip`: keycaps for what this role steers with. A
   hider's has no WASD, because per CLAUDE.md override 4 a hider creeps by being
-  dragged. For an Inspector without pointer lock the strip is replaced by the
+  dragged. OVERTAKEN 2026-08-02: a hider walks and hops, so the strip carries
+  WASD and space; see "Jump is in" at the top of this file. For an Inspector
+  without pointer lock the strip is replaced by the
   click prompt, since until the room has the mouse none of those controls do
   anything.
 - *Bottom right* — `ModeNote`: the mode and its two lines, per role.
@@ -360,8 +1264,9 @@ timer's own note.
 - `huntControls.test.ts` proves no key is bound twice on either rail, that every
   action appears exactly once, that the taunt key differs from the pose key, that
   a cooling taunt is shown disabled rather than hidden, that an unsupported taunt
-  is dropped, that the mouse verbs are not clickable chips, and that a hider is
-  offered no walk key.
+  is dropped, and that the mouse verbs are not clickable chips. Its assertion
+  that a hider is offered no walk key was overtaken twice on 2026-08-02, first by
+  the walk and then by the jump; it now asserts the opposite.
 - `huntHud.test.tsx` renders both roles in jsdom, asserts each region is claimed
   at most once, that **nothing renders outside a region**, that the claimed set is
   disjoint at both resolutions, that "FORGE ·" appears nowhere, that each tool
@@ -837,7 +1742,11 @@ shop's own pictures hang, whatever size the Mimic is.
   not seen running.
 - A hider's creep is capped by the authority but not by the client: dragging the pelvis
   faster than `hiderCreepSpeed` is refused as `moved_too_fast` and the local body and the
-  room's copy disagree until the next accepted pose.
+  room's copy disagree until the next accepted pose. NARROWED 2026-08-02: the walk keys
+  now cap themselves at exactly the number the authority checks (see "A Mimic can walk"),
+  so the ordinary way of moving during the hunt no longer rubber-bands. The **pointer**
+  path is untouched: a pelvis drag is still limited only by how fast the player moves the
+  mouse, and still rubber-bands when it outruns the cap.
 - ~~The Forge tool HUD and `HiderHud` overlap during the hunt, and the Forge's own header
   still reads "FORGE · POSE" there.~~ Fixed by the region layout above.
 - ~~Bots ready up and lock a disguise and do nothing else.~~ CLOSED 2026-08-02: see

@@ -82,8 +82,27 @@ const MOVE_MEMORY_MS = 12_000;
 /** Waypoint reached, in shares of the body. */
 const WAYPOINT_ARRIVAL_M = PLAYER_HEIGHT_M * 1.2;
 
-/** Longest step integrated in one go, so a slow tick cannot walk through a wall. */
-const MAX_STEP_MS = 120;
+/**
+ * Longest step integrated in one go. Arriving somewhere is what advances the
+ * patrol and what replans the route, both of which are tested once per step, so
+ * a long step would walk to the end of whatever was planned and stop there.
+ */
+export const MAX_STEP_MS = 120;
+
+/**
+ * Most simulated time one turn may make up. Bots are driven from an interval the
+ * browser coalesces, so a main thread that stalls for seconds delivers one turn
+ * carrying all of it; walking only the last tick's worth is what produced an
+ * Inspector that patrolled a few metres per round and caught nobody, against 17
+ * catches in 19 headless rounds at a steady tick.
+ *
+ * Time past this ceiling is dropped rather than owed, because the alternatives
+ * are both worse: a bot that keeps a debt walks at a visibly wrong speed for
+ * whole seconds afterwards, and an uncapped burst plans a route per step for as
+ * long as the stall lasted, on the thread that was already the problem. Six
+ * seconds is fifty steps, which is a few metres of shop.
+ */
+const MAX_CATCH_UP_MS = 6_000;
 
 /**
  * Floor grid the walk is planned on, a body's width to a cell. The shop is a
@@ -193,8 +212,10 @@ function planRoute(grid: FloorGrid, from: Vec3Like, goal: Vec3Like): Vec3Like[] 
       if (parent[next] !== -2) continue;
       const feetY = grid.feetY[next];
       if (feetY === null || feetY === undefined) continue;
-      // No jump, and no falling off a ledge either: a step between cells has to
-      // be one a walker could take (§ InspectorController, "there is no jump").
+      // A step between cells has to be one a walk could take: no falling off a
+      // ledge, and no hopping either. A human Inspector's hop reaches nothing
+      // that can be stood on, so a planner that ignores it plans the same
+      // routes; what the bot cannot do is climb.
       if (Math.abs(feetY - (grid.feetY[index] as number)) > WORLD_SCALE.stepHeight) continue;
       parent[next] = index;
       queue.push(next);
@@ -436,14 +457,21 @@ export class BotInspector {
     }
 
     const hunter = this.hunterFor(turn);
-    const dtMs = Math.min(MAX_STEP_MS, Math.max(0, turn.nowMs - hunter.nowMs));
+    // What the bot walks is the time the match says has passed, not one turn's
+    // worth: the tick it rides is a browser interval, and a busy main thread
+    // delivers ten ticks' worth of match in a single callback.
+    const elapsedMs = Math.max(0, turn.nowMs - hunter.nowMs);
     hunter.nowMs = turn.nowMs;
 
+    // Sensing happens once, from where the bot was standing when the turn began.
+    // Looking at the room per step of a catch-up would cost a visibility test
+    // against every object in it per step, on the thread that was already the
+    // problem; a stalled client's Inspector is a step behind for one turn.
     const visible = this.look(hunter, turn);
     const commands: MatchCommand[] = [];
 
     this.chooseTarget(hunter, turn, visible);
-    this.walk(hunter, turn, dtMs);
+    this.catchUp(hunter, turn, Math.min(elapsedMs, MAX_CATCH_UP_MS));
     this.deps.setEye(turn.playerId, this.eyeOf(hunter));
 
     // Look at the nearest thing in reach. It costs nothing, it is what an
@@ -463,6 +491,10 @@ export class BotInspector {
   /** Stands the bot at its spawn and tells the authority where that is. */
   private stage(turn: BotInspectorTurn): void {
     const hunter = this.hunterFor(turn);
+    // Staging is standing still, so the clock is kept current here too. Left
+    // behind, the whole of InspectionIntro would read as elapsed walking time
+    // and the hunt would open with the bot several metres into the shop.
+    hunter.nowMs = turn.nowMs;
     this.deps.setEye(turn.playerId, this.eyeOf(hunter));
   }
 
@@ -569,6 +601,26 @@ export class BotInspector {
   }
 
   /**
+   * Walks `advanceMs` of match time in steps of at most `MAX_STEP_MS`, replanning
+   * between them exactly as a run of ordinary turns would. A burst is therefore
+   * a run of ordinary steps taken back to back, and cannot outpace one: each
+   * consumes at most `inspectorMoveSpeed * stepMs` of the planned route, and the
+   * route is a polyline over standable cells, so covering it faster than the
+   * walk allows is not expressible here.
+   *
+   * At most one step is taken when no time has passed, which is what keeps a
+   * route planned for a bot that has only just arrived in the room.
+   */
+  private catchUp(hunter: Hunter, turn: BotInspectorTurn, advanceMs: number): void {
+    let remainingMs = advanceMs;
+    do {
+      const stepMs = Math.min(MAX_STEP_MS, remainingMs);
+      this.walk(hunter, turn, stepMs);
+      remainingMs -= stepMs;
+    } while (remainingMs > 0);
+  }
+
+  /**
    * Follows the planned route, cell by cell, at the room's own walking speed.
    * Whether the route leads to a suspect object or to the next patrol point is
    * settled in `plan`; from here it is the same walk either way.
@@ -641,7 +693,8 @@ export class BotInspector {
     const route = planRoute(this.grid, here, scratchGoal);
     // Stop the walk where the gun reaches rather than trying to stand inside the
     // thing. What no part of the floor can get near enough to shoot is out of
-    // this bot's reach for good: there is no jump, and it does not climb.
+    // this bot's reach for good: it does not climb, and a hop reaches nothing
+    // that can be stood on.
     const approach = this.trimToReach(route, targetBounds, reach);
     if (approach === null) {
       hunter.settled.add(hunter.target as string);

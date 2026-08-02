@@ -58,6 +58,13 @@ export interface MainMenuProps {
   readonly onForgePractice: () => void;
   /** Set while the shop is being unpacked, so the round is not started twice. */
   readonly starting?: boolean;
+  /**
+   * True inside a Portals room, where the round is played with whoever else is
+   * there rather than against this tab's bots.
+   */
+  readonly multiplayer?: boolean;
+  /** Why the last attempt did not open a round. Null hides the line. */
+  readonly notice?: string | null;
 }
 
 export function MainMenu({
@@ -65,6 +72,8 @@ export function MainMenu({
   onPlayRound,
   onForgePractice,
   starting = false,
+  multiplayer = false,
+  notice = null,
 }: MainMenuProps): ReactElement {
   return (
     <div style={overlayStyle}>
@@ -79,13 +88,16 @@ export function MainMenu({
           onClick={onPlayRound}
           disabled={starting}
         >
-          {starting ? "Opening the shop…" : "Play a round"}
+          {starting ? "Opening the shop…" : multiplayer ? "Join the room" : "Play a round"}
         </button>
         <button type="button" style={buttonStyle} onClick={onForgePractice} disabled={starting}>
           Forge Practice
         </button>
+        {notice === null ? null : (
+          <div style={{ color: "#e6a06a", fontSize: 12, marginTop: 14 }}>{notice}</div>
+        )}
         <div style={{ opacity: 0.5, fontSize: 11, marginTop: 18 }}>
-          backend {backend} · ` for diagnostics
+          {multiplayer ? "portals room" : "solo"} · backend {backend} · ` for diagnostics
         </div>
       </div>
     </div>

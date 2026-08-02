@@ -1,8 +1,15 @@
 import { AdaptiveQuality } from "../rendering/AdaptiveQuality";
 import { ForgeController } from "../forge/ForgeController";
 import { DiagnosticsOverlay, type DiagnosticsSnapshot } from "../rendering/DiagnosticsOverlay";
-import { FrameTimeProbe, pickDefaultTier, QUALITY_TIER_ORDER, qualitySettingsFor, type QualitySettings, type QualityTier } from "../rendering/quality";
-import { RendererManager, type DeviceEvent, type RenderBackend } from "../rendering/RendererManager";
+import { FrameTimeProbe, pickDefaultTier, QUALITY_TIER_ORDER, qualitySettingsFor, stepQualityTier, type QualitySettings, type QualityTier } from "../rendering/quality";
+import {
+  RendererManager,
+  ShaderFailurePolicy,
+  type DeviceEvent,
+  type RenderBackend,
+  type ShaderLinkFailure,
+} from "../rendering/RendererManager";
+import { PREWARM_BODY_COUNT } from "../gameplay/disguiseTheatre";
 import { RoundSession } from "../gameplay/RoundSession";
 import type { RoundDirector } from "../gameplay/RoundDirector";
 import type { RoundSpatialBridge } from "../gameplay/roundSpatial";
@@ -24,6 +31,38 @@ export const FIXED_STEP = 1 / 60;
 export const MAX_STEPS_PER_FRAME = 6;
 export const MAX_FRAME_DELTA = FIXED_STEP * MAX_STEPS_PER_FRAME;
 const BOOT_TIER: QualityTier = "high";
+
+/**
+ * Work the round still has after the map is built: the hunt's bodies, and the
+ * shader pass over the finished scene. Counted so the progress a player is shown
+ * does not sit at 100% through the longest wait of the load.
+ */
+const LOAD_TAIL_STEPS = 2;
+
+/** What a loading screen is told while a round opens. */
+export interface RoundLoadProgress {
+  /** Names what was just finished, in the player's language. */
+  readonly label: string;
+  /** 0 to 1. */
+  readonly fraction: number;
+}
+
+/**
+ * Hands the frame back to the browser. Everything the round build does is main
+ * thread work, so without this the tab is frozen from the click to the first
+ * frame of the shop, whatever a loading screen has been asked to show.
+ */
+function nextFrame(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === "function") {
+      requestAnimationFrame(() => {
+        resolve();
+      });
+      return;
+    }
+    setTimeout(resolve, 0);
+  });
+}
 
 export interface GameHostCallbacks {
   onTierChange?: (tier: QualityTier, automatic: boolean) => void;
@@ -47,6 +86,7 @@ export class GameHost {
   private readonly callbacks: GameHostCallbacks;
   private readonly bag = new DisposalBag();
   private readonly probe = new FrameTimeProbe();
+  private readonly shaderFailures = new ShaderFailurePolicy();
 
   private world: TestRoom | null = null;
   private shop: ShopWorld | null = null;
@@ -56,12 +96,16 @@ export class GameHost {
   private settings: QualitySettings = qualitySettingsFor(BOOT_TIER);
   private readonly adaptive: AdaptiveQuality;
   private tierLockedByUser = false;
+  /** Highest tier index automatic changes may reach; lowered by link failures. */
+  private tierCeiling = QUALITY_TIER_ORDER.length - 1;
   private probeApplied = false;
   private running = false;
   private hidden = false;
   private disposed = false;
   private lastTimeMs = 0;
   private accumulator = 0;
+  /** Identifies the round currently opening, so a stale build can stand down. */
+  private roundToken = 0;
 
   constructor(canvas: HTMLCanvasElement, callbacks: GameHostCallbacks = {}, options: GameHostOptions = {}) {
     this.canvas = canvas;
@@ -90,8 +134,12 @@ export class GameHost {
 
     this.bag.addFn(
       this.renderer.onDeviceEvent((event) => {
-        this.callbacks.onDeviceEvent?.(event);
-        this.callbacks.onRendererMessage?.(`${event.api}: ${event.message}`);
+        this.reportDeviceEvent(event);
+      }),
+    );
+    this.bag.addFn(
+      this.renderer.onShaderLinkFailure((failure) => {
+        this.handleShaderLinkFailure(failure);
       }),
     );
 
@@ -153,26 +201,46 @@ export class GameHost {
    * Swaps the menu room for The Curiosity Shop and hands the round its engine.
    * The session decides what the player is holding from phase to phase; this
    * only owns the scene it happens in and the frame that drives it.
+   *
+   * Everything here used to run inside the click that started the round, which
+   * on a weak device meant the tab stopped for a minute with nothing to say why.
+   * It now builds the shop a zone at a time, yielding between them, warms the
+   * hunt's bodies and every shader the scene needs, and only then takes the menu
+   * room down. The menu keeps drawing behind the loading screen until that swap,
+   * so there is no point at which the player is looking at a dead frame.
+   *
+   * Resolves null when the round was abandoned while it was still opening, which
+   * `exitRoundMode` and `dispose` both do.
    */
-  enterRoundMode(
+  async enterRoundMode(
     adapter: NetworkAdapter,
     director: RoundDirector,
     spatial: RoundSpatialBridge,
-  ): RoundSession {
+    onProgress: (progress: RoundLoadProgress) => void = () => undefined,
+  ): Promise<RoundSession | null> {
     if (this.session !== null) return this.session;
 
     this.exitForgeMode();
-    this.world?.dispose();
-    this.world = null;
+    const token = (this.roundToken += 1);
+    const abandoned = (): boolean => this.disposed || this.roundToken !== token;
 
-    const shop = new ShopWorld(this.renderer.renderer, this.settings);
-    this.shop = shop;
-    this.bag.addFn(() => {
-      this.shop?.dispose();
-      this.shop = null;
-    });
+    let tail = LOAD_TAIL_STEPS;
+    const shop = await ShopWorld.createIncremental(
+      this.renderer.renderer,
+      this.settings,
+      async (step) => {
+        if (abandoned()) return;
+        tail = step.total + LOAD_TAIL_STEPS;
+        onProgress({ label: step.label, fraction: step.done / tail });
+        await nextFrame();
+      },
+    );
+    if (abandoned()) {
+      shop.dispose();
+      return null;
+    }
 
-    this.session = new RoundSession({
+    const session = new RoundSession({
       scene: shop.scene,
       canvas: this.canvas,
       adapter,
@@ -180,12 +248,54 @@ export class GameHost {
       spatial,
       quality: this.settings,
     });
+
+    try {
+      onProgress({ label: "the mimics", fraction: (tail - 1) / tail });
+      await session.prewarmDisguises(PREWARM_BODY_COUNT, async () => {
+        onProgress({ label: "the shaders", fraction: (tail - 0.5) / tail });
+        await nextFrame();
+        await shop.precompile(this.renderer.renderer, session.camera);
+      });
+    } catch (error) {
+      // Neither is installed yet, so nothing else will ever release them: a
+      // shop lost here is the whole map's worth of GPU memory.
+      session.dispose();
+      shop.dispose();
+      throw error;
+    }
+
+    if (abandoned()) {
+      session.dispose();
+      shop.dispose();
+      return null;
+    }
+
+    // Last, so the menu is on screen for the whole load and the first frame of
+    // the shop is a frame whose shaders already exist.
+    this.world?.dispose();
+    this.world = null;
+    this.shop = shop;
+    this.session = session;
+    this.bag.addFn(() => {
+      this.shop?.dispose();
+      this.shop = null;
+    });
     this.syncSize();
-    return this.session;
+    // One real frame while the loading screen is still up. `compileAsync` walks
+    // the beauty pass only: the shadow pipelines come from the shadow camera and
+    // the post chain from its own passes, and both are built by the first frame
+    // that needs them. Paying for that frame here means the player is looking at
+    // a loading screen for it rather than at a stalled first second of play.
+    this.renderer.render(shop.scene, session.camera);
+    onProgress({ label: "the shop", fraction: 1 });
+    return session;
   }
 
   /** Ends the round and puts the menu room back behind the main menu. */
   exitRoundMode(): void {
+    // Bumping the token abandons a round that is still opening, so its build
+    // releases what it has instead of installing a shop nobody asked for.
+    this.roundToken += 1;
     this.session?.dispose();
     this.session = null;
     this.shop?.dispose();
@@ -289,11 +399,58 @@ export class GameHost {
     if (this.tierLockedByUser) {
       return;
     }
-    const index = QUALITY_TIER_ORDER.indexOf(this.settings.tier);
-    const next = QUALITY_TIER_ORDER[index + (direction === "raise" ? 1 : -1)];
-    if (next !== undefined) {
-      this.applyTier(next, true);
+    this.stepTier(direction);
+  }
+
+  /** One rung of the tier ladder. False when there is no rung that way. */
+  private stepTier(direction: "raise" | "lower"): boolean {
+    const next = stepQualityTier(this.settings.tier, direction, this.tierCeiling);
+    if (next === null) {
+      return false;
     }
+    this.applyTier(next, true);
+    return true;
+  }
+
+  /**
+   * A program the driver refused to link is the first event in the chain that
+   * takes the WebGL 2 context down, and the tier is the only lever that shortens
+   * a fragment program from here, so it is spent before the device dies rather
+   * than after. Unlike a frame-budget suggestion this ignores a manual tier
+   * lock: the player's choice was about how the game should look, and this is
+   * about whether it can be drawn at all.
+   *
+   * Once the ladder is spent, `ShaderFailurePolicy` calls it, and the player is
+   * shown the device-fault panel. That panel is the honest end state, since
+   * nothing further can be traded away, so the fatal report is delivered as a
+   * device loss, which is what it becomes within a few draw calls in any case.
+   */
+  private handleShaderLinkFailure(failure: ShaderLinkFailure): void {
+    const index = QUALITY_TIER_ORDER.indexOf(this.settings.tier);
+    // A tier whose programs the driver refused is closed for the session, so a
+    // stretch of fast frames cannot climb back into it. It is set from the
+    // failing tier before the demote, so a later raise cannot undo it.
+    this.tierCeiling = Math.max(0, Math.min(this.tierCeiling, index - 1));
+    const response = this.shaderFailures.record(performance.now(), index > 0);
+    if (response === "demote") {
+      this.stepTier("lower");
+      this.callbacks.onRendererMessage?.(
+        `${failure.api}: a shader failed to link, dropping to the ${this.settings.tier} quality tier`,
+      );
+      return;
+    }
+    if (response === "fault") {
+      this.reportDeviceEvent({
+        kind: "device-lost",
+        api: failure.api,
+        message: `Shader programs are failing to link at the lowest quality setting (${failure.message}). This device cannot draw the scene.`,
+      });
+    }
+  }
+
+  private reportDeviceEvent(event: DeviceEvent): void {
+    this.callbacks.onDeviceEvent?.(event);
+    this.callbacks.onRendererMessage?.(`${event.api}: ${event.message}`);
   }
 
   private readonly frame = (timeMs: number): void => {

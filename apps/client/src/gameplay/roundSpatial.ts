@@ -28,7 +28,9 @@ const PROP_BOUNDS = new Map<string, AABB>(
 
 export class RoundSpatialBridge implements SpatialValidator {
   private readonly eyes = new Map<string, Vec3Like>();
+  private observer: ((inspectorId: string, eye: Vec3Like | null) => void) | null = null;
   private disguiseBounds: (publicObjectId: string) => AABB | null = () => null;
+  private ownDisguiseBounds: (publicObjectId: string) => AABB | null = () => null;
   private accusationDistance: number;
   private focusDistance: number;
   private impl: SpatialValidatorImpl;
@@ -72,7 +74,34 @@ export class RoundSpatialBridge implements SpatialValidator {
     this.impl = this.build();
   }
 
+  /**
+   * Where an Inspector on this machine is looking from. The round's own camera
+   * writes here every frame, and the observer below is how a transport whose
+   * authority lives on another machine gets to hear about it.
+   */
   setInspectorEye(inspectorId: string, eye: Vec3Like | null): void {
+    this.writeEye(inspectorId, eye);
+    this.observer?.(inspectorId, eye);
+  }
+
+  /**
+   * The same, for an eye that arrived from another client. It deliberately does
+   * not run the observer: this is the far end of that report, and echoing it
+   * would send another client's position back out under this one's name.
+   */
+  acceptInspectorEye(inspectorId: string, eye: Vec3Like | null): void {
+    this.writeEye(inspectorId, eye);
+  }
+
+  /**
+   * Watches every local write. Only one observer is kept, because there is only
+   * one transport under a round.
+   */
+  observeInspectorEye(observer: (inspectorId: string, eye: Vec3Like | null) => void): void {
+    this.observer = observer;
+  }
+
+  private writeEye(inspectorId: string, eye: Vec3Like | null): void {
     if (eye === null) {
       this.eyes.delete(inspectorId);
       return;
@@ -87,12 +116,33 @@ export class RoundSpatialBridge implements SpatialValidator {
   }
 
   /**
-   * Where the round believes an object is. A prop and a disguise answer through
-   * the same lookup, in that order, so neither is easier to reach than the other
-   * (§8.5) and nothing reading this can tell one from the other.
+   * The viewer's own disguise, which the theatre does not draw while the Forge
+   * is holding it (override 2 keeps a hider's Forge open for the whole hunt).
+   * A disguise nothing is drawing has no bounds, and an object with no bounds is
+   * refused as `target_bounds_unknown` — so without this source the owner is the
+   * one player in the room who cannot be shot, and under Portals the elected host
+   * is a player. That is a fairness hole rather than a rendering detail.
+   *
+   * The two disguise sources are exact complements, not alternatives: this one
+   * answers precisely when the theatre has been told to omit the body, so at
+   * most one of them ever knows about a given disguise.
+   */
+  setOwnDisguiseBounds(lookup: (publicObjectId: string) => AABB | null): void {
+    this.ownDisguiseBounds = lookup;
+  }
+
+  /**
+   * Where the round believes an object is. A prop, a disguise the theatre is
+   * drawing, and the viewer's own disguise answer through the same lookup, in
+   * that order, so none is easier to reach than another (§8.5) and nothing
+   * reading this can tell one from another.
    */
   boundsOf(objectId: string): AABB | null {
-    return PROP_BOUNDS.get(objectId) ?? this.disguiseBounds(objectId);
+    return (
+      PROP_BOUNDS.get(objectId) ??
+      this.disguiseBounds(objectId) ??
+      this.ownDisguiseBounds(objectId)
+    );
   }
 
   private build(): SpatialValidatorImpl {

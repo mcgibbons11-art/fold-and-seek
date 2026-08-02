@@ -39,6 +39,57 @@ const INSPECTOR_BODY_LENGTHS_PER_SECOND = 2.6;
 const HIDER_CREEP_BODY_LENGTHS_PER_SECOND = 0.5;
 
 /**
+ * Hider running speed during the Forge, in body lengths per second.
+ *
+ * `INSPECTOR_BODY_LENGTHS_PER_SECOND` is the Froude number at which a walker
+ * breaks into a run, so 2.6 is the top of a walk rather than a run. A Mimic
+ * crossing the shop to find somewhere to hide is running, and it carries no gun
+ * and is searching for nothing, so it goes a little faster. Three body lengths a
+ * second is 1.05 m/s against the Inspector's 0.91: quick enough that covering
+ * the fifteen metre shop during the fold is comfortable, close enough that an
+ * Inspector who catches a Mimic still on its feet can run it down.
+ */
+const HIDER_FORGE_BODY_LENGTHS_PER_SECOND = 3;
+
+/**
+ * How fast a Mimic runs while the Forge is open, in metres per second.
+ *
+ * This is deliberately not a `MatchSettings` field. No authority reads it: root
+ * motion is validated only once the disguise has manifested, against
+ * `hiderCreepSpeed`, and the Forge phase has no speed rule of its own. Putting
+ * it on the wire would offer a host a number the simulation never checks.
+ */
+export const HIDER_FORGE_RUN_SPEED = PLAYER_HEIGHT_M * HIDER_FORGE_BODY_LENGTHS_PER_SECOND;
+
+/**
+ * How high a body hops on the jump key, as a share of its own standing height.
+ *
+ * Jump is for hops, gaps and feel. It is deliberately not a way up onto things:
+ * the giant-scale rule that the map decides where a body can get up still
+ * governs every real climb, and the authored climb links remain the only route
+ * onto a shelf or a counter.
+ *
+ * The band is narrow and both edges are real. Below `WORLD_SCALE.stepHeight`,
+ * which is a fifth of body height, a hop would clear nothing a walk does not
+ * already cross and would read as a stumble. At or above the lowest ledge the
+ * map publishes, minus that same step height, a hop starts mounting furniture
+ * and takes the climb links' job.
+ *
+ * The upper edge is closer than it looks. The lowest thing in the Curiosity
+ * Shop that can be stood on is not a table at all but the bottom board of the
+ * steel rack, 0.26 m up, so the ceiling on this number is 0.19 m and not the
+ * 0.34 m window deck. Nine twentieths of body height is 0.158 m, which reaches
+ * 0.228 m with the step lip added: two and a quarter times the lip a walk
+ * already crosses, and a comfortable 3 cm under that bottom board.
+ * `jump.test.ts` measures both edges against the map's own surfaces rather than
+ * trusting this paragraph, so retuning either number fails loudly.
+ */
+const JUMP_BODY_HEIGHTS = 0.45;
+
+/** Apex of a hop above the surface it left, in world metres. */
+export const JUMP_HEIGHT_M = PLAYER_HEIGHT_M * JUMP_BODY_HEIGHTS;
+
+/**
  * Reticle reach and gun reach, in body heights, measured from the eye to the
  * nearest point of the target's bounds.
  *

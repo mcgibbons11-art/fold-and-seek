@@ -37,7 +37,14 @@ import {
   type PanelProfileId,
   type PanelState,
 } from "../mimic/panels";
-import { WORLD_SCALE } from "../inspector/navData";
+import type { CharacterController } from "../inspector/CharacterController";
+import {
+  BOB_AMPLITUDE_M as CAMERA_BOB_AMPLITUDE_M,
+  BOB_RATE_RAD_PER_M as CAMERA_BOB_RATE_RAD_PER_M,
+} from "../inspector/InspectorCamera";
+import { WORLD_SCALE, type AABB, type NavData, type Vec3Like } from "../inspector/navData";
+import { BodyLanguage, type BodyPosture } from "./BodyLanguage";
+import { HiderLocomotion } from "./HiderLocomotion";
 import {
   boneIndex,
   clampBoneRotation,
@@ -200,6 +207,13 @@ export interface ForgeControllerOptions {
   readonly origin?: THREE.Vector3;
   /** The active map's playable volume. Defaults to the practice room's. */
   readonly workspace?: ForgeWorkspace;
+  /**
+   * The map's walkable geometry. With it the player runs the Mimic around the
+   * room on the walk keys; without it the body is only ever moved by dragging a
+   * handle. Forge practice is staged in the test room, which publishes no nav
+   * data, so it is optional rather than required.
+   */
+  readonly navData?: NavData;
 }
 
 interface HandleDef {
@@ -265,6 +279,28 @@ const CAMERA_MAX_PITCH = 1.45;
  * and leaves the head clear of the top edge.
  */
 const ORBIT_TARGET_BODY_SHARE = 0.55;
+
+/**
+ * How long the shot takes to catch up with a body that moved, and the rate that
+ * delivers it: the camera closes all but a twentieth of the gap in that time.
+ * The orbit point is the player's, so this is a lag rather than a spring — it
+ * never overshoots the body and never oscillates around it, which would turn a
+ * walk across the shop into a slow wobble.
+ *
+ * Under the snap distance the chase is over and the camera is placed exactly on
+ * the orbit point, so a settled shot is the shot the player left, to the metre.
+ */
+const CAMERA_FOLLOW_SETTLE_SECONDS = 0.16;
+const CAMERA_FOLLOW_RATE = Math.log(20) / CAMERA_FOLLOW_SETTLE_SECONDS;
+const CAMERA_FOLLOW_SNAP_M = WORLD_SCALE.playerHeight * 1e-4;
+
+/**
+ * Share of the body's own landing compression the camera echoes. Half of it is
+ * enough to feel the impact through the frame; the whole of it reads as the
+ * camera having been dropped too.
+ */
+const CAMERA_LANDING_ECHO_SHARE = 0.55;
+
 const ORBIT_PER_PIXEL = 0.007;
 const PITCH_PER_PIXEL = 0.005;
 const ZOOM_PER_NOTCH = 0.0016;
@@ -474,6 +510,8 @@ export class ForgeController {
   private readonly handleMeshes: readonly THREE.Mesh[];
   private readonly roomObjects: readonly THREE.Object3D[];
   private readonly workspace: ForgeWorkspace;
+  /** Null when the map published no walkable geometry to run the body over. */
+  private readonly locomotion: HiderLocomotion | null;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointerNdc = new THREE.Vector2();
   private readonly commands = new ForgeCommandStack();
@@ -538,6 +576,28 @@ export class ForgeController {
   private lastPointerX = 0;
   private lastPointerY = 0;
   private poseEditBefore: PoseSnapshot | null = null;
+  /** Where the body stood when the current walk began, for one undo per walk. */
+  private walkBefore: PoseSnapshot | null = null;
+  /** The seals that walk broke, so undoing it puts them back. */
+  private walkAnchors: readonly AnchorState[] = [];
+  private readonly walkPosition = { x: 0, y: 0, z: 0 };
+  private readonly bodyLanguage = new BodyLanguage();
+  private readonly postureRotation = new THREE.Quaternion();
+  private readonly postureAxis = new THREE.Vector3();
+  private readonly postureRoot = new THREE.Vector3();
+  private postureDip = 0;
+  private readonly bodyBox = new THREE.Box3();
+  private readonly boundsPosition = new THREE.Vector3();
+  private readonly boundsRotation = new THREE.Quaternion();
+  /** Revision `bodyBox` was measured for, so a carried body does not re-measure. */
+  private boundsRevision = -1;
+  /**
+   * The point the camera actually looks at, which chases `orbitTarget` rather
+   * than being it. A body that moves drags the frame after it with a little
+   * weight instead of welding the shot to the root.
+   */
+  private readonly cameraTarget = new THREE.Vector3();
+  private cameraBobPhase = 0;
   private segmentEdit: SegmentEdit | null = null;
   private panelEditBefore: PanelState | null = null;
   private panelEditSocket: PanelSocketName | null = null;
@@ -567,6 +627,8 @@ export class ForgeController {
     this.canvas = options.canvas;
     this.roomObjects = [...options.scene.children];
     this.workspace = options.workspace ?? TEST_ROOM_WORKSPACE;
+    this.locomotion =
+      options.navData === undefined ? null : new HiderLocomotion(options.navData);
 
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.05, 60);
 
@@ -608,6 +670,9 @@ export class ForgeController {
       origin.y + WORLD_SCALE.playerHeight * ORBIT_TARGET_BODY_SHARE,
       origin.z,
     );
+    // The shot starts where the body is rather than chasing it in from the last
+    // one: an opening frame has nothing to catch up with.
+    this.cameraTarget.copy(this.orbitTarget);
     this.updateCamera();
     this.applyQuality(options.quality);
     this.captureTargets();
@@ -659,11 +724,320 @@ export class ForgeController {
 
   // --- Frame ---------------------------------------------------------------
 
-  update(): void {
+  update(dtMs = 0): void {
+    this.stepLocomotion(dtMs);
+    this.stepBodyLanguage(dtMs / 1_000);
+    this.stepCameraFollow(dtMs / 1_000);
     this.layoutHandles();
     // Cheap when nothing was painted: a reference check per part and an upload
     // only while the atlas is dirty.
     this.paintTool.update();
+  }
+
+  /**
+   * Caps the body at the hunt's creep speed, or hands it back the Forge run with
+   * null. The authority validates every root move against `hiderCreepSpeed`
+   * once a disguise has manifested, and a client that predicted faster than that
+   * would show its owner a body the room does not agree is there until the next
+   * accepted pose, so the same cap is applied here.
+   */
+  setCreepLimit(metresPerSecond: number | null): void {
+    this.locomotion?.setCreepLimit(metresPerSecond);
+  }
+
+  /**
+   * True while the body is off the ground, mid-hop or mid-fall. The round holds
+   * its pose publication until it lands: an airborne pose is a moment rather
+   * than a place, and during the hunt the apex of a hop sits further from the
+   * last accepted pose than the creep cap allows.
+   */
+  get bodyAirborne(): boolean {
+    return this.locomotion?.airborne ?? false;
+  }
+
+  /**
+   * How the body is travelling, for the footstep driver. Null in a Forge built
+   * without nav data, which is the practice room: there are no surfaces there to
+   * have a sound.
+   */
+  get bodyMotion(): CharacterController | null {
+    return this.locomotion?.motion ?? null;
+  }
+
+  /**
+   * World bounds of the body as posed, which is the box the authority shoots at.
+   *
+   * The round needs this because the theatre does not draw the viewer's own
+   * disguise while the Forge is holding it, and a disguise nothing is drawing has
+   * no bounds to be accused of occupying. Without it the owner is the one player
+   * in the room who cannot be hit, and on Portals the elected host is a player
+   * holding the authority that refuses the shot.
+   *
+   * It is measured with the body language switched off, for the same reason the
+   * body language never reaches the wire: every other client computes this box
+   * from the published pose, and a box that leaned with the run would be one only
+   * its owner agreed with. The result is cached against the disguise revision, so
+   * a body that is merely carrying itself does not re-measure, and a body that
+   * was actually re-posed does.
+   */
+  get bodyBounds(): AABB | null {
+    if (this.boundsRevision !== this.state.revision) {
+      this.boundsRevision = this.state.revision;
+      this.measureBodyBounds();
+    }
+    return this.bodyBox.isEmpty() ? null : this.bodyBox;
+  }
+
+  private measureBodyBounds(): void {
+    const root = this.mimic.root;
+    this.boundsRotation.copy(root.quaternion);
+    this.boundsPosition.copy(root.position);
+    root.quaternion.identity();
+    root.position.set(0, 0, 0);
+    this.bodyBox.setFromObject(root);
+    root.quaternion.copy(this.boundsRotation);
+    root.position.copy(this.boundsPosition);
+    // `setFromObject` left every part's world matrix computed against the
+    // identity it was measured under. Put them back, or the frame that asked for
+    // the bounds draws and picks an unleaning body.
+    root.updateWorldMatrix(false, true);
+  }
+
+  /**
+   * Runs the walk keys. Locomotion writes the same root a handle drag writes and
+   * goes out through the same pose snapshot, so the authority cannot tell a
+   * Mimic that walked from a Mimic that was dragged.
+   *
+   * The camera keeps whatever angle and distance the player left it at and its
+   * orbit point simply travels with the body, so posing and moving are the same
+   * view rather than two modes: whenever a walk key is down the body moves, and
+   * whenever a handle is dragged the body is posed.
+   */
+  private stepLocomotion(dtMs: number): void {
+    const locomotion = this.locomotion;
+    if (locomotion === null || this.locked) return;
+
+    const wasWalking = locomotion.moving;
+    this.walkPosition.x = this.pose.rootPosition.x;
+    this.walkPosition.y = this.pose.rootPosition.y;
+    this.walkPosition.z = this.pose.rootPosition.z;
+    const moved = locomotion.update(dtMs / 1_000, this.yaw, this.walkPosition);
+
+    if (!moved) {
+      if (wasWalking && !locomotion.moving) this.endWalk();
+      return;
+    }
+    if (this.walkBefore === null) this.beginWalk();
+
+    const x = clamp(this.walkPosition.x, this.workspace.minX, this.workspace.maxX);
+    const z = clamp(this.walkPosition.z, this.workspace.minZ, this.workspace.maxZ);
+    // The play volume's floor bound is a guard for the pointer, which can shove
+    // a body down through the boards; a body that walked is standing on a
+    // surface the map published, so the map decides its height. Applying the
+    // bound here would lift a walking body off the floor by the guard's own
+    // margin and then fight the controller for it every frame.
+    const y = Math.min(this.walkPosition.y, this.workspace.maxY);
+    if (x !== this.walkPosition.x || y !== this.walkPosition.y || z !== this.walkPosition.z) {
+      // Every walkable surface lies inside the room's own faces, so this is the
+      // map contradicting itself. Stop the walk at the boundary rather than
+      // letting the body and the controller steering it drift apart.
+      locomotion.releaseAll();
+    }
+
+    const dx = x - this.pose.rootPosition.x;
+    const dy = y - this.pose.rootPosition.y;
+    const dz = z - this.pose.rootPosition.z;
+
+    // The IK targets are world positions, so a body that walked away from them
+    // would be solved back toward where it was standing: a hand posed onto a
+    // shelf would stretch across the shop after it, and a pinned pelvis would
+    // simply undo the step. The pose travels with the body.
+    for (const target of this.targets.values()) {
+      target.set(target.x + dx, target.y + dy, target.z + dz);
+    }
+    this.orbitTarget.x += dx;
+    this.orbitTarget.y += dy;
+    this.orbitTarget.z += dz;
+    this.pose.rootPosition.set(x, y, z);
+    // The camera is not placed here. `stepCameraFollow` runs later in the same
+    // frame and moves the shot toward this new orbit point with some weight,
+    // rather than the shot being welded to the body every step it takes.
+    // Re-solves and re-captures the disguise, which is what advances the
+    // revision the round publishes.
+    this.solveAndRefresh();
+  }
+
+  /**
+   * Lays the creature's body language over the authored pose: the lean into a
+   * run, the bank into a turn, the crouch of a creep, the reach of a climb, and
+   * the compression of a landing.
+   *
+   * It is applied as a transform on the two groups the body hangs off rather
+   * than as an edit to the pose, which is what keeps it cosmetic. `this.pose`
+   * and `this.state` never see it, so `disguise` — the thing the round publishes
+   * — is identical for a body mid-stride and a body standing still at the same
+   * root. `movementFeel.test.ts` asserts exactly that.
+   *
+   * Rotating about the body's own root leaves the root where the player
+   * authored it, so of the three channels only the dip moves the creature at
+   * all, and the dip returns to exactly zero.
+   *
+   * A locked disguise gets none of it. An anonymized object that breathes on the
+   * shelf tells an Inspector which of the six vases is a player, which is a
+   * worse giveaway than any pose mistake the Forge could make.
+   */
+  private stepBodyLanguage(dtSeconds: number): void {
+    const locomotion = this.locomotion;
+    if (locomotion === null) return;
+    // A locked disguise, and a body being authored, both stand exactly as posed:
+    // a handle is dragged to a place on the body, so the body has to be at the
+    // place the pose says it is while the player is reaching for it.
+    if (this.locked || this.authoring()) {
+      if (!this.bodyLanguage.neutral) {
+        this.bodyLanguage.reset();
+        this.applyPosture(this.bodyLanguage.posture);
+      }
+      return;
+    }
+    this.applyPosture(this.bodyLanguage.update(dtSeconds, locomotion.sample));
+  }
+
+  /** True while the pointer is on the body rather than steering it. */
+  private authoring(): boolean {
+    return (
+      this.hoveredHandle !== null ||
+      this.draggedHandle !== null ||
+      this.draggedPanelSocket !== null ||
+      this.heldPanelAnchors.length > 0
+    );
+  }
+
+  /**
+   * Writes the posture onto the Mimic. Its parts are placed at world positions,
+   * so the transform has to rotate about the body's own root rather than about
+   * the origin, which is what keeps the creature's feet where the pose put them.
+   *
+   * Only the Mimic carries it. The handle group holds three different kinds of
+   * thing — pose grips on the body, seal markers on the map surfaces a disguise
+   * is anchored to, and panel tips already read through the Mimic's own
+   * transform — and only the first of those should lean with the creature.
+   * `layoutHandles` applies the posture to those one at a time instead.
+   */
+  private applyPosture(posture: BodyPosture): void {
+    const yaw = this.locomotion?.sample.travelYaw ?? 0;
+    // Travel direction on three's convention, and the horizontal axis square to
+    // it: tipping about the second one leans the body along the first.
+    const travelX = -Math.sin(yaw);
+    const travelZ = -Math.cos(yaw);
+    this.postureRotation
+      .setFromAxisAngle(this.postureAxis.set(travelZ, 0, -travelX), posture.leanRad)
+      .multiply(
+        this.scratchQuaternion.setFromAxisAngle(
+          this.postureAxis.set(travelX, 0, travelZ),
+          posture.bankRad,
+        ),
+      );
+    this.postureDip = posture.dipM;
+
+    const root = this.pose.rootPosition;
+    this.postureRoot.set(root.x, root.y, root.z);
+    this.mimic.root.quaternion.copy(this.postureRotation);
+    this.mimic.root.position
+      .copy(this.postureRoot)
+      .sub(this.scratchVector.copy(this.postureRoot).applyQuaternion(this.postureRotation));
+    this.mimic.root.position.y -= this.postureDip;
+  }
+
+  /** Carries an authored point onto the body as it is actually being held. */
+  private toPosturedWorld(point: Vec3Like, out: THREE.Vector3): THREE.Vector3 {
+    out
+      .set(point.x, point.y, point.z)
+      .sub(this.postureRoot)
+      .applyQuaternion(this.postureRotation)
+      .add(this.postureRoot);
+    out.y -= this.postureDip;
+    return out;
+  }
+
+  /**
+   * Moves the shot toward the orbit point, adds the walk bob, and lets the
+   * camera feel the landing the body just took. The bob is quoted against body
+   * height with the same constants the Inspector's own rig uses, so the two
+   * cameras breathe at one rate rather than at two.
+   */
+  private stepCameraFollow(dtSeconds: number): void {
+    if (this.preview !== "none") {
+      this.cameraTarget.copy(this.orbitTarget);
+      this.updateCamera();
+      return;
+    }
+    if (dtSeconds > 0) {
+      const gap = this.cameraTarget.distanceTo(this.orbitTarget);
+      if (gap <= CAMERA_FOLLOW_SNAP_M) {
+        this.cameraTarget.copy(this.orbitTarget);
+      } else {
+        this.cameraTarget.lerp(this.orbitTarget, 1 - Math.exp(-CAMERA_FOLLOW_RATE * dtSeconds));
+      }
+      const speed = this.locomotion?.motion.speed ?? 0;
+      this.cameraBobPhase += speed * dtSeconds * CAMERA_BOB_RATE_RAD_PER_M;
+    }
+    this.updateCamera();
+  }
+
+  /** Vertical offset the shot carries this frame: the walk bob and the landing. */
+  private cameraSway(): number {
+    if (this.locomotion === null) return 0;
+    const moving = this.locomotion.moving && !this.locomotion.airborne;
+    const bob = moving ? Math.sin(this.cameraBobPhase) * CAMERA_BOB_AMPLITUDE_M : 0;
+    return bob - this.bodyLanguage.posture.dipM * CAMERA_LANDING_ECHO_SHARE;
+  }
+
+  /**
+   * Opens a walk. Walking away breaks every seal the body had: left in place,
+   * the anchor pass in `solveAndRefresh` would haul the root straight back to
+   * the surface the player just walked off.
+   */
+  private beginWalk(): void {
+    this.commitEdits();
+    this.walkBefore = capturePoseSnapshot(this.state);
+    this.walkAnchors = this.state.anchors;
+    if (this.state.anchors.length === 0) return;
+
+    for (const anchor of this.state.anchors) {
+      if (isAnchorableBone(anchor.bone)) this.pinned.delete(anchorTargetName(anchor.bone));
+    }
+    this.state.anchors = [];
+    this.emit();
+  }
+
+  /** Closes a walk as one undo entry: where the body went, and what it let go. */
+  private endWalk(): void {
+    const before = this.walkBefore;
+    const released = this.walkAnchors;
+    this.walkBefore = null;
+    this.walkAnchors = [];
+    if (before === null) return;
+
+    capturePoseToDisguiseState(this.pose, this.state);
+    const after = capturePoseSnapshot(this.state);
+    const issuedAt = performance.now();
+    const parts: ForgeCommand[] = [];
+    if (!poseSnapshotsEqual(before, after)) {
+      parts.push(createPoseCommand(before, after, issuedAt, "walk"));
+    }
+    for (const anchor of released) {
+      parts.push(createAnchorCommand(anchor.bone, anchor, null, issuedAt));
+    }
+
+    const only = parts.length === 1 ? parts[0] : null;
+    if (only !== undefined && only !== null) {
+      this.commands.push(only, this.state);
+    } else if (parts.length > 1) {
+      this.commands.push(createCompositeCommand("walk", parts, issuedAt), this.state);
+    } else {
+      return;
+    }
+    this.emit();
   }
 
   setViewport(width: number, height: number): void {
@@ -906,6 +1280,10 @@ export class ForgeController {
 
   /** Closes any open continuous edit and records it as one undoable command. */
   commitEdits(): void {
+    // A walk in progress is an edit like any other, so an undo, a lock or a new
+    // arrangement closes it first rather than folding it into whatever follows.
+    this.endWalk();
+
     const edit = this.segmentEdit;
     if (edit !== null) {
       this.segmentEdit = null;
@@ -1148,6 +1526,9 @@ export class ForgeController {
       root[1] + WORLD_SCALE.playerHeight * ORBIT_TARGET_BODY_SHARE,
       root[2],
     );
+    // Switching arrangement is a cut, not a move, so the shot goes with it
+    // rather than sliding across the shop after a body that teleported.
+    this.cameraTarget.copy(this.orbitTarget);
     this.updateCamera();
   }
 
@@ -2067,7 +2448,10 @@ export class ForgeController {
     for (const handle of this.handles) {
       const world = this.pose.worldPositions[handle.boneIndex];
       if (world === undefined) continue;
-      handle.group.position.set(world.x, world.y, world.z);
+      // On the joint as the body is carrying it, not as the pose authored it:
+      // a grip a few millimetres off the shoulder it belongs to is a grip the
+      // player reaches for and misses.
+      this.toPosturedWorld(world, handle.group.position);
       const distance = this.camera.position.distanceTo(handle.group.position);
       const radius = clamp(
         distance * HANDLE_SCREEN_RADIUS,
@@ -2222,11 +2606,22 @@ export class ForgeController {
     };
 
     const onKeyUp = (event: KeyboardEvent): void => {
-      if (event.key === " " && this.preview === "inspector") {
+      // A release is never filtered by where it landed. A walk key pressed over
+      // the canvas and let go over a HUD field would otherwise stay down and
+      // the body would keep walking with nothing holding it.
+      const key = event.key.toLowerCase();
+      this.locomotion?.release(key);
+      if (key === "e" && this.preview === "inspector") {
         this.setPreview("none");
       }
     };
 
+    /** A window that loses focus never delivers the keyup. */
+    const onBlur = (): void => {
+      this.locomotion?.releaseAll();
+    };
+
+    window.addEventListener("blur", onBlur);
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("pointermove", onPointerMove, true);
     window.addEventListener("pointerup", onPointerUp, true);
@@ -2237,6 +2632,7 @@ export class ForgeController {
     window.addEventListener("keyup", onKeyUp);
 
     this.bag.addFn(() => {
+      window.removeEventListener("blur", onBlur);
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("pointermove", onPointerMove, true);
       window.removeEventListener("pointerup", onPointerUp, true);
@@ -2290,6 +2686,14 @@ export class ForgeController {
       return;
     }
 
+    // The walk keys are held rather than pressed, so they are taken before the
+    // switch: the browser repeats a held key and every repeat would otherwise
+    // fall through to the default and be handed back to the page.
+    if (!this.locked && this.locomotion?.press(key) === true) {
+      event.preventDefault();
+      return;
+    }
+
     switch (key) {
       case "1":
         this.setToolMode("pose");
@@ -2306,8 +2710,11 @@ export class ForgeController {
       case "5":
         this.setToolMode("paint");
         break;
-      case " ":
-        // Held, not toggled: §7.5 lists Space as "hold Inspector preview".
+      case "e":
+        // Held, not toggled: §7.5 lists this as "hold Inspector preview", on
+        // Space. Space is the jump now (CLAUDE.md override 6), and a key cannot
+        // be both a movement verb and a camera hold, so the preview moved to
+        // the letter its own name starts with, next to the walk keys.
         this.setPreview("inspector");
         break;
       case "v":
@@ -2648,13 +3055,17 @@ export class ForgeController {
       this.placePreviewCamera();
       return;
     }
+    // The orbit angle and distance are the player's and answer at once; only the
+    // point being orbited lags, and the sway rides on top of wherever it got to.
     const horizontal = Math.cos(this.pitch) * this.radius;
+    const targetY = this.cameraTarget.y + this.cameraSway();
     this.camera.position.set(
-      this.orbitTarget.x + Math.sin(this.yaw) * horizontal,
-      this.orbitTarget.y + Math.sin(this.pitch) * this.radius,
-      this.orbitTarget.z + Math.cos(this.yaw) * horizontal,
+      this.cameraTarget.x + Math.sin(this.yaw) * horizontal,
+      targetY + Math.sin(this.pitch) * this.radius,
+      this.cameraTarget.z + Math.cos(this.yaw) * horizontal,
     );
-    this.camera.lookAt(this.orbitTarget);
+    this.scratchVector.set(this.cameraTarget.x, targetY, this.cameraTarget.z);
+    this.camera.lookAt(this.scratchVector);
   }
 
   /**
@@ -2705,7 +3116,7 @@ export class ForgeController {
 }
 
 const TOOL_HINTS: Readonly<Record<ForgeToolMode, string>> = {
-  pose: "Drag the handles. Right-drag orbits, shift-drag pans, wheel zooms.",
+  pose: "WASD walks, space hops. Drag a handle to pose, drag anywhere else to look.",
   shape: "Click a body part, then stretch it with the sliders.",
   panels: "Click a brass stud to fold a panel out, then shape it.",
   material: "Point at the room and press F to sample, then click a part to paint it.",

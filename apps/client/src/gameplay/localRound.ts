@@ -11,6 +11,7 @@ import { buildObjectRegistry } from "../world/maps/registry";
 import { NAV_DATA } from "../world/maps/nav";
 import { BotCreep, createBotDisguisePayload } from "./botDisguises";
 import { BotInspector } from "./botInspector";
+import { dealSeed, type GameRound } from "./round";
 import { RoundDirector } from "./RoundDirector";
 import { RoundSpatialBridge } from "./roundSpatial";
 
@@ -30,11 +31,8 @@ import { RoundSpatialBridge } from "./roundSpatial";
 export const LOCAL_ROUND_BOTS = 3;
 export const LOCAL_ROUND_NAME = "practice";
 
-export interface LocalRound {
+export interface LocalRound extends GameRound {
   readonly adapter: LocalLoopbackAdapter;
-  readonly director: RoundDirector;
-  readonly spatial: RoundSpatialBridge;
-  dispose(): void;
 }
 
 export interface LocalRoundOptions {
@@ -45,14 +43,6 @@ export interface LocalRoundOptions {
   readonly settings?: MatchSettingsPatch;
   /** Clock source. Defaults to the loopback's, which is performance.now(). */
   readonly now?: () => number;
-}
-
-/**
- * Roles come off a seeded shuffle, so a fixed seed would hand the same player
- * the same role every single time. A practice round therefore draws its own.
- */
-function dealSeed(): number {
-  return (Math.random() * 0x7fffffff) >>> 0;
 }
 
 /**

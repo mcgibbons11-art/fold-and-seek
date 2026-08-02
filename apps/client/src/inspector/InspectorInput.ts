@@ -6,7 +6,7 @@ import type { InspectorMoveInput } from "./InspectorController";
  * way of losing it, Escape, the browser menu, tab focus loss, ends with the same
  * cleared state rather than a key stuck down or a trigger stuck pressed (§25.2).
  *
- * Left mouse fires the gun and right mouse aims down the sights.
+ * Left mouse fires the gun, right mouse aims down the sights, and space hops.
  */
 
 export interface InspectorInputOptions {
@@ -23,6 +23,7 @@ const BACK_KEYS = new Set(["KeyS", "ArrowDown"]);
 const LEFT_KEYS = new Set(["KeyA", "ArrowLeft"]);
 const RIGHT_KEYS = new Set(["KeyD", "ArrowRight"]);
 const BRISK_KEYS = new Set(["ShiftLeft", "ShiftRight"]);
+const JUMP_KEYS = new Set(["Space"]);
 
 const MOUSE_BUTTON_FIRE = 0;
 const MOUSE_BUTTON_AIM = 2;
@@ -104,11 +105,13 @@ export class InspectorInput {
       out.lookYawDelta = 0;
       out.lookPitchDelta = 0;
       out.brisk = false;
+      out.jump = false;
       return;
     }
     out.forward = axis(this.held, FORWARD_KEYS, BACK_KEYS);
     out.strafe = axis(this.held, RIGHT_KEYS, LEFT_KEYS);
     out.brisk = hasAny(this.held, BRISK_KEYS);
+    out.jump = hasAny(this.held, JUMP_KEYS);
     out.lookYawDelta = this.pendingYaw;
     out.lookPitchDelta = this.pendingPitch;
     this.pendingYaw = 0;

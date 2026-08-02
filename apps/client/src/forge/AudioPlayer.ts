@@ -22,7 +22,6 @@ export type SoundId =
   | "lock_seal"
   // Hunt
   | "door_open"
-  | "footstep_wood"
   | "unfold_reveal"
   | "caught_sting"
   | "wrong_horn"
@@ -30,12 +29,67 @@ export type SoundId =
   | "chair_squeak"
   | "vase_dust_puff"
   | "clock_chime"
-  | "kettle_whistle";
+  | "kettle_whistle"
+  // Footfalls, three variations per surface (see `FOOTSTEP_VARIATIONS`)
+  | "footstep_wood"
+  | "footstep_wood_2"
+  | "footstep_wood_3"
+  | "footstep_rug"
+  | "footstep_rug_2"
+  | "footstep_rug_3"
+  | "footstep_metal"
+  | "footstep_metal_2"
+  | "footstep_metal_3"
+  | "footstep_glass"
+  | "footstep_glass_2"
+  | "footstep_glass_3"
+  // Movement
+  | "jump_takeoff"
+  | "land_soft"
+  | "land_hard"
+  | "climb_grab"
+  | "climb_grab_2"
+  | "wallstick_attach"
+  | "wallstick_release"
+  | "creep_slide"
+  // Warrant gun (override 1)
+  | "gun_aim"
+  | "gun_fire"
+  | "gun_dry_click"
+  // Phase transitions
+  | "hunt_riser"
+  | "reveal_swell"
+  | "results_resolve"
+  | "rematch_tick"
+  // Interface
+  | "ui_deny"
+  | "countdown_tick"
+  | "countdown_tick_final"
+  | "score_tick";
 
 interface Voices {
   readonly elements: HTMLAudioElement[];
   next: number;
   lastPlayedMs: number;
+}
+
+/**
+ * One gain over everything the game plays. There is more than one `AudioPlayer`
+ * alive at once (the Forge keeps its own, the round keeps another) and the
+ * ambience beds are a third voice again, so a single setting has to reach all of
+ * them rather than living on any one. Every live player registers here and is
+ * told when the number changes.
+ */
+let masterVolume = 1;
+const livePlayers = new Set<AudioPlayer>();
+
+export function setMasterVolume(volume: number): void {
+  masterVolume = Math.min(Math.max(volume, 0), 1);
+  for (const player of livePlayers) player.applyVolume();
+}
+
+export function getMasterVolume(): number {
+  return masterVolume;
 }
 
 export class AudioPlayer {
@@ -47,13 +101,20 @@ export class AudioPlayer {
   constructor(baseUrl: string = import.meta.env.BASE_URL, volume = 0.6) {
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
     this.volume = volume;
+    livePlayers.add(this);
   }
 
   setVolume(volume: number): void {
     this.volume = Math.min(Math.max(volume, 0), 1);
+    this.applyVolume();
+  }
+
+  /** Pushes this player's volume, scaled by the master, onto every element. */
+  applyVolume(): void {
+    const effective = this.volume * masterVolume;
     for (const clip of this.clips.values()) {
       for (const element of clip.elements) {
-        element.volume = this.volume;
+        element.volume = effective;
       }
     }
   }
@@ -89,6 +150,7 @@ export class AudioPlayer {
   }
 
   dispose(): void {
+    livePlayers.delete(this);
     for (const clip of this.clips.values()) {
       for (const element of clip.elements) {
         element.pause();
@@ -107,7 +169,7 @@ export class AudioPlayer {
     for (let i = 0; i < VOICES_PER_CLIP; i++) {
       const element = new Audio(`${this.baseUrl}assets/audio/sfx/${id}.mp3`);
       element.preload = "auto";
-      element.volume = this.volume;
+      element.volume = this.volume * masterVolume;
       elements.push(element);
     }
     const clip: Voices = { elements, next: 0, lastPlayedMs: 0 };

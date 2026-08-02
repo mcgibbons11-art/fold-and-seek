@@ -171,17 +171,27 @@ describe("Curiosity Shop practical light budget", () => {
     }
   });
 
-  it("leaves the WebGL 2 path exactly as it was authored", () => {
-    // The backend that was already fast keeps every lamp. A cap that cost both
-    // backends would be trading art for a problem only one of them has.
+  it("holds the WebGL 2 path under the program size that was losing the device", () => {
+    // WebGL 2 has the room's frame rate and pays for the lights in program size
+    // instead: three unrolls the light loop, and an Intel driver was refusing to
+    // link the result and taking the context with it. The budget is therefore
+    // looser than WebGPU's and still well under the seventeen lamps that failed.
     for (const tier of QUALITY_TIER_ORDER) {
-      expect(qualitySettingsFor(tier, "webgl2").maxPracticalLights, tier).toBe(
+      const settings = qualitySettingsFor(tier, "webgl2");
+      const webgpu = qualitySettingsFor(tier, "webgpu");
+      expect(settings.maxPracticalLights, tier).toBeLessThanOrEqual(10);
+      expect(settings.maxPracticalLights, tier).toBeGreaterThanOrEqual(webgpu.maxPracticalLights);
+      expect(settings.maxPracticalLights, tier).toBeLessThanOrEqual(
         QUALITY_PRESETS[tier].maxPracticalLights,
       );
     }
+
+    // The lamps that lose their light keep their pools on this backend too,
+    // which is the part that decides whether the shop still reads as lit.
     const high = planPracticalLights(qualitySettingsFor("high", "webgl2").maxPracticalLights);
-    expect(high.live).toBe(PRACTICALS_BY_RANK.length);
-    expect(high.pools).toBe(0);
+    expect(high.live).toBeLessThan(PRACTICALS_BY_RANK.length);
+    expect(high.live + high.unlit).toBe(PRACTICALS_BY_RANK.length);
+    expect(high.pools).toBeGreaterThan(0);
   });
 
   it("stands a pool in for every lamp that loses its light, bar the sconces", () => {
@@ -258,10 +268,17 @@ describe("Curiosity Shop practical light budget", () => {
   it("returns one settings object per tier and backend", () => {
     // GameHost decides whether a tier change is worth re-applying down the
     // whole world by comparing settings by identity, so a capped settings
-    // object built fresh on every call would re-apply quality forever.
-    expect(qualitySettingsFor("high", "webgpu")).toBe(qualitySettingsFor("high", "webgpu"));
-    expect(qualitySettingsFor("high", "webgl2")).toBe(QUALITY_PRESETS.high);
-    expect(qualitySettingsFor("high", "webgpu")).not.toBe(qualitySettingsFor("high", "webgl2"));
+    // object built fresh on every call would re-apply quality forever. Both
+    // backends cap now, so the memo has to be keyed by both: keyed by tier
+    // alone, whichever backend asked first would answer for the other.
+    for (const tier of QUALITY_TIER_ORDER) {
+      expect(qualitySettingsFor(tier, "webgpu"), tier).toBe(qualitySettingsFor(tier, "webgpu"));
+      expect(qualitySettingsFor(tier, "webgl2"), tier).toBe(qualitySettingsFor(tier, "webgl2"));
+      expect(qualitySettingsFor(tier, "webgpu"), tier).not.toBe(qualitySettingsFor(tier, "webgl2"));
+      expect(qualitySettingsFor(tier, "webgpu").maxPracticalLights, tier).toBeLessThan(
+        qualitySettingsFor(tier, "webgl2").maxPracticalLights,
+      );
+    }
   });
 });
 

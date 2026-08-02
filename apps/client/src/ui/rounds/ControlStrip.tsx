@@ -11,8 +11,8 @@ import { BRASS, CREAM, EDGE, INK } from "./theme";
  * the corner with a line about what winning it means.
  *
  * The strip lists controls, never verbs. Whatever the player *does* is on the
- * action rail; what they steer with is here, which is why a hider's strip has no
- * walk key and an Inspector's has no taunt.
+ * action rail; what they steer with is here, which is why both roles have walk
+ * keys and only the hider's strip has the handle drag.
  */
 
 const stripStyle: CSSProperties = {

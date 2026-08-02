@@ -241,4 +241,66 @@ export class SwatchMaterialCache {
     }
     this.materials.clear();
   }
+
+  /** How many swatch materials exist, for counting what a scene compiles. */
+  get size(): number {
+    return this.materials.size;
+  }
+}
+
+/**
+ * Every material a Mimic body wears, in one place so several bodies can share
+ * them.
+ *
+ * Four bodies standing in the room is four of everything below unless they are
+ * handed the same pool, and each distinct material is a shader the backend has
+ * to build before the first frame that draws it. Identical unpainted parts have
+ * no reason to be built four times, so the theatre gives its whole cast one
+ * pool and the bodies differ only in geometry.
+ *
+ * The eyes are two materials rather than one with a mutable intensity: a locked
+ * disguise closes its shutters, and a shared material cannot be dark for one
+ * body and lit for another. Swapping the reference costs nothing and both
+ * variants are built once.
+ */
+export class MimicMaterialPool {
+  readonly swatches = new SwatchMaterialCache();
+  readonly graphite: THREE.MeshPhysicalMaterial;
+  readonly brass: THREE.MeshPhysicalMaterial;
+  readonly eyeLit: THREE.MeshStandardMaterial;
+  readonly eyeShut: THREE.MeshStandardMaterial;
+
+  constructor() {
+    this.graphite = new THREE.MeshPhysicalMaterial({
+      color: GRAPHITE_COLOR,
+      roughness: 0.72,
+      metalness: 0.15,
+    });
+    this.graphite.name = "mimic_graphite";
+    this.brass = new THREE.MeshPhysicalMaterial({ color: 0xb08a4a, roughness: 0.38, metalness: 0.9 });
+    this.brass.name = "mimic_socket_brass";
+    this.eyeLit = new THREE.MeshStandardMaterial({
+      color: 0x120c05,
+      roughness: 0.2,
+      emissive: new THREE.Color(0xffc47a),
+      emissiveIntensity: 5,
+    });
+    this.eyeLit.name = "mimic_eye_lit";
+    this.eyeShut = this.eyeLit.clone();
+    this.eyeShut.name = "mimic_eye_shut";
+    this.eyeShut.emissiveIntensity = 0;
+  }
+
+  /** Distinct materials built so far, which is what a compile pass has to cover. */
+  get size(): number {
+    return this.swatches.size + 4;
+  }
+
+  dispose(): void {
+    this.swatches.dispose();
+    this.graphite.dispose();
+    this.brass.dispose();
+    this.eyeLit.dispose();
+    this.eyeShut.dispose();
+  }
 }

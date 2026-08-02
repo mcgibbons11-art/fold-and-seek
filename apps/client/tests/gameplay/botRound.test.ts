@@ -4,6 +4,7 @@ import * as THREE from "three/webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BOT_HIDE_PLANS, botCreeps, createBotDisguise } from "../../src/gameplay/botDisguises";
+import { MAX_STEP_MS } from "../../src/gameplay/botInspector";
 import { DisguiseTheatre } from "../../src/gameplay/disguiseTheatre";
 import { createLocalRound, LOCAL_ROUND_NAME, type LocalRound } from "../../src/gameplay/localRound";
 import { RoundSpatialBridge } from "../../src/gameplay/roundSpatial";
@@ -42,6 +43,13 @@ const STEP_MS = 100;
 const BOT_COUNT = 3;
 
 /**
+ * A main thread taken away for five seconds, which is the scale of the compile
+ * stalls measured on the WebGL 2 backend. The browser coalesces the interval the
+ * bots ride, so the whole five arrives as one tick.
+ */
+const STALL_MS = 5_000;
+
+/**
  * Deals the Inspector's role to a bot rather than to the local player, which is
  * what this whole file is about. Roles come off a seeded shuffle, so the seed is
  * the only way to ask for it, and fixing it is also what makes a round repeat.
@@ -54,6 +62,8 @@ interface Fixture {
   /** Every eye position the round was told about, in order, with its tick. */
   readonly trail: { readonly playerId: string; readonly eye: Vec3Like }[];
   advance(steps: number): void;
+  /** One tick carrying an arbitrary amount of match time, for a stalled thread. */
+  advanceBy(stepMs: number): void;
   runTo(phase: MatchPhase, maxSteps?: number): void;
   dispose(): void;
 }
@@ -87,10 +97,13 @@ async function soloRound(seed: number): Promise<Fixture> {
     trail,
     advance(steps: number) {
       for (let index = 0; index < steps; index += 1) {
-        clock += STEP_MS;
-        round.adapter.step();
-        theatre.sync(round.adapter.getSync().publicState?.disguises ?? [], null);
+        fixture.advanceBy(STEP_MS);
       }
+    },
+    advanceBy(stepMs: number) {
+      clock += stepMs;
+      round.adapter.step();
+      theatre.sync(round.adapter.getSync().publicState?.disguises ?? [], null);
     },
     runTo(phase: MatchPhase, maxSteps = 1_500) {
       for (let index = 0; index < maxSteps; index += 1) {
@@ -319,5 +332,74 @@ describe("a solo round with a bot Inspector", () => {
     expect(spanZ).toBeGreaterThan(4);
 
     fixture.dispose();
+  });
+
+  it("walks a stalled main thread's missing seconds rather than losing them", async () => {
+    vi.useFakeTimers();
+
+    // Two rounds from one seed, identical up to the stall. One is ticked every
+    // 100 ms throughout; the other has its main thread taken away for five
+    // seconds, which is what a shader compile storm does to this tab, and gets
+    // the whole five back in a single tick.
+    const healthy = await soloRound(BOT_INSPECTOR_SEED);
+    const stalled = await soloRound(BOT_INSPECTOR_SEED);
+    for (const fixture of [healthy, stalled]) {
+      fixture.runTo(MatchPhase.Inspection);
+      // Out of the Security Office and walking before the thread goes away.
+      fixture.advance(30);
+    }
+
+    const inspectorId = (stalled.trail[stalled.trail.length - 1] as { playerId: string }).playerId;
+    const eyes = (fixture: Fixture): readonly Vec3Like[] =>
+      fixture.trail.filter((entry) => entry.playerId === inspectorId).map((entry) => entry.eye);
+    const startedAt = (eyes(stalled).at(-1) as Vec3Like);
+
+    healthy.advance(STALL_MS / STEP_MS);
+    stalled.advanceBy(STALL_MS);
+
+    const control = eyes(healthy);
+    const burst = eyes(stalled);
+    const groundCovered = (walk: readonly Vec3Like[], from: number): number => {
+      let total = 0;
+      for (let index = from + 1; index < walk.length; index += 1) {
+        const a = walk[index - 1] as Vec3Like;
+        const b = walk[index] as Vec3Like;
+        total += Math.hypot(b.x - a.x, b.z - a.z);
+      }
+      return total;
+    };
+
+    // The control has to be walking, or the rest of this measures nothing. It
+    // covers the ground of an unstalled bot over the same five seconds.
+    const controlWalk = groundCovered(control, control.length - 1 - STALL_MS / STEP_MS);
+    expect(controlWalk, "the control bot stood still; stall the round elsewhere").toBeGreaterThan(1);
+
+    // The whole stall arrives as one published position, so this single hop is
+    // the catch-up. It may not outrun the room's walking speed over the time it
+    // is making up. A bot that teleported onto its target would satisfy every
+    // authority check and still be cheating.
+    const arrivedAt = burst.at(-1) as Vec3Like;
+    const hop = Math.hypot(arrivedAt.x - startedAt.x, arrivedAt.z - startedAt.z);
+    expect(hop).toBeLessThanOrEqual(
+      (DEFAULT_MATCH_SETTINGS.inspectorMoveSpeed * STALL_MS) / 1_000 + 1e-6,
+    );
+
+    // And it did catch up, rather than take one callback's step and drop the
+    // other 4.9 seconds, which is what the old clamp did: its ceiling was
+    // `inspectorMoveSpeed * MAX_STEP_MS`, 0.11 m. The hop measures 2.90 m
+    // against 4.45 m of control path, the difference being the corners the
+    // route turns, which a straight line between two points does not.
+    expect(hop, "the stall cost the bot its walk").toBeGreaterThan(controlWalk * 0.5);
+    expect(hop).toBeGreaterThan((DEFAULT_MATCH_SETTINGS.inspectorMoveSpeed * MAX_STEP_MS) / 1_000);
+
+    // It also lands where the unstalled bot did, because the catch-up follows
+    // the same planned route at the same speed over the same five seconds. The
+    // two agree to 3e-15 m, so this is equality with room for a rounding
+    // difference rather than a tolerance covering real divergence.
+    const healthyAt = control.at(-1) as Vec3Like;
+    expect(Math.hypot(arrivedAt.x - healthyAt.x, arrivedAt.z - healthyAt.z)).toBeLessThan(0.001);
+
+    healthy.dispose();
+    stalled.dispose();
   });
 });

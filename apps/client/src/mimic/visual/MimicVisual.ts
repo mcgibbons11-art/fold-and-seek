@@ -29,11 +29,7 @@ import {
   createSegmentShellGeometry,
   writeSegmentShell,
 } from "./mimicGeometry";
-import {
-  GRAPHITE_COLOR,
-  PORCELAIN_SWATCH_ID,
-  SwatchMaterialCache,
-} from "./materialSwatches";
+import { MimicMaterialPool, PORCELAIN_SWATCH_ID } from "./materialSwatches";
 
 /**
  * The renderable Mimic (bible §7.2, §24.2). One shell per rig segment, a dark
@@ -227,7 +223,7 @@ export class MimicVisual {
   readonly socketMarkers: readonly THREE.Mesh[];
 
   private readonly bag = new DisposalBag();
-  private readonly materials = new SwatchMaterialCache();
+  private readonly pool: MimicMaterialPool;
   private readonly segments: readonly SegmentVisual[];
   private readonly panels: readonly PanelVisual[];
   private readonly bellows: readonly THREE.Mesh[];
@@ -236,30 +232,23 @@ export class MimicVisual {
   private readonly eyeGroup: THREE.Object3D;
   private readonly eyes: readonly THREE.Mesh[];
   private readonly shutter: THREE.Mesh;
-  private readonly eyeMaterial: THREE.MeshStandardMaterial;
   private panelStates: readonly PanelState[] = [];
   private locked = false;
 
-  constructor() {
+  /**
+   * `pool` lets several bodies share one set of materials, which is what keeps
+   * a room full of Mimics from building the same shaders once per body. A body
+   * given a pool does not own it; one that is not builds and disposes its own,
+   * so a lone Mimic in the Forge needs no ceremony.
+   */
+  constructor(pool?: MimicMaterialPool) {
     this.root = new THREE.Group();
     this.root.name = "mimic";
 
-    const graphite = this.bag.add(
-      new THREE.MeshPhysicalMaterial({ color: GRAPHITE_COLOR, roughness: 0.72, metalness: 0.15 }),
-    );
-    const brass = this.bag.add(
-      new THREE.MeshPhysicalMaterial({ color: 0xb08a4a, roughness: 0.38, metalness: 0.9 }),
-    );
-    this.eyeMaterial = this.bag.add(
-      new THREE.MeshStandardMaterial({
-        color: 0x120c05,
-        roughness: 0.2,
-        emissive: new THREE.Color(0xffc47a),
-        emissiveIntensity: 5,
-      }),
-    );
-    const porcelain = this.materials.get(PORCELAIN_SWATCH_ID);
-    this.bag.add(this.materials);
+    this.pool = pool ?? this.bag.add(new MimicMaterialPool());
+    const graphite = this.pool.graphite;
+    const brass = this.pool.brass;
+    const porcelain = this.pool.swatches.get(PORCELAIN_SWATCH_ID);
 
     const segments: SegmentVisual[] = [];
     const segmentMeshes: THREE.Mesh[] = [];
@@ -389,7 +378,7 @@ export class MimicVisual {
     const eyeGeometry = this.bag.add(new THREE.SphereGeometry(0.5, 14, 10));
     const eyes: THREE.Mesh[] = [];
     for (const side of [-1, 1]) {
-      const eye = new THREE.Mesh(eyeGeometry, this.eyeMaterial);
+      const eye = new THREE.Mesh(eyeGeometry, this.pool.eyeLit);
       eye.name = `mimic_eye_${side < 0 ? "R" : "L"}`;
       this.eyeGroup.add(eye);
       eyes.push(eye);
@@ -638,7 +627,7 @@ export class MimicVisual {
     for (const segment of this.segments) {
       const bone = SEGMENT_BONES[segment.slot];
       const swatchId = (bone !== undefined ? bySlot.get(bone) : undefined) ?? bodySwatch;
-      segment.mesh.material = this.materials.get(swatchId);
+      segment.mesh.material = this.pool.swatches.get(swatchId);
     }
 
     const stateBySocket = new Map<string, PanelState>();
@@ -649,7 +638,7 @@ export class MimicVisual {
       const state = stateBySocket.get(panel.socketId);
       const slotId = state?.materialSlotId ?? "body";
       const swatchId = bySlot.get(panel.socketId) ?? bySlot.get(slotId) ?? bodySwatch;
-      panel.plate.material = this.materials.get(swatchId);
+      panel.plate.material = this.pool.swatches.get(swatchId);
     }
   }
 
@@ -698,7 +687,10 @@ export class MimicVisual {
       return;
     }
     this.locked = locked;
-    this.eyeMaterial.emissiveIntensity = locked ? 0 : 5;
+    const eyeMaterial = locked ? this.pool.eyeShut : this.pool.eyeLit;
+    for (const eye of this.eyes) {
+      eye.material = eyeMaterial;
+    }
     this.layoutHeadPod();
   }
 

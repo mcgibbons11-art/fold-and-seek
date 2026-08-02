@@ -1,0 +1,287 @@
+import { DEFAULT_MATCH_SETTINGS, JUMP_HEIGHT_M } from "@foldseek/shared";
+import { describe, expect, it } from "vitest";
+
+import { HiderLocomotion } from "../../src/forge/HiderLocomotion";
+import { CharacterController, createMoveInput } from "../../src/inspector/CharacterController";
+import { InspectorController } from "../../src/inspector/InspectorController";
+import {
+  WORLD_SCALE,
+  type AABB,
+  type MutableVec3,
+  type NavData,
+} from "../../src/inspector/navData";
+import { NAV_DATA, WALKABLE_SURFACES } from "../../src/world/maps/nav";
+import { box, openNavData, surface, testSettings, SHOP_FLOOR } from "../inspector/navFixture";
+
+/**
+ * The jump (CLAUDE.md override 6, a reversal of the rule the rest of this
+ * movement code was written under). Two claims are load-bearing and both are
+ * measured against the map rather than asserted from the design intent: a hop
+ * clears an obstacle a walk cannot, and a hop reaches nothing in the Curiosity
+ * Shop that can be stood on, because the authored climb links are still the
+ * only way up onto furniture.
+ */
+
+const FRAME_SECONDS = 1 / 60;
+const FACING_NORTH = 0;
+
+/** How high the feet get with the step lip added, which is what mounts a ledge. */
+const HOP_REACH_M = JUMP_HEIGHT_M + WORLD_SCALE.stepHeight;
+
+/**
+ * A kerb of floor clutter: taller than the lip a walk crosses, shorter than a
+ * hop's reach. Nothing in the shop is currently this low, which is the point of
+ * building it here rather than borrowing one.
+ */
+const KERB_HEIGHT_M = (WORLD_SCALE.stepHeight + HOP_REACH_M) / 2;
+const KERB: AABB = box(-0.4, 0, -1.2, 0.4, KERB_HEIGHT_M, -1.0);
+
+function kerbNavData(): NavData {
+  return {
+    floors: [SHOP_FLOOR],
+    blockers: [KERB],
+    climbLinks: [],
+    spawnPoints: { inspectors: [], mimics: [] },
+    securityOffice: box(-9, 0, -9, -8, 1, -8),
+  };
+}
+
+function at(x: number, y: number, z: number): MutableVec3 {
+  return { x, y, z };
+}
+
+/**
+ * The apex of a hop is a frame lower than the height it was authored at, and
+ * always lower rather than sometimes higher. The controller decrements the
+ * velocity before it integrates, so the discrete arc undershoots the analytic
+ * one by about half a frame's worth of takeoff speed. That is the safe
+ * direction — `JUMP_HEIGHT_M` is a true ceiling on how high a body gets, which
+ * is what the "cannot mount" invariant below relies on.
+ */
+const APEX_SLACK_M = Math.sqrt(2 * WORLD_SCALE.gravity * JUMP_HEIGHT_M) * FRAME_SECONDS;
+
+/**
+ * Holds the keys for `seconds`, then lets go and runs on until the body is back
+ * at rest. Every claim here is about where a hop ends up, so a run that stopped
+ * with the key still down would be measuring a body in mid-air.
+ */
+function runKeys(
+  locomotion: HiderLocomotion,
+  keys: readonly string[],
+  seconds: number,
+  root: MutableVec3,
+  yaw = FACING_NORTH,
+): { readonly apexY: number } {
+  for (const key of keys) locomotion.press(key);
+  let apexY = root.y;
+  const frames = Math.round(seconds / FRAME_SECONDS);
+  for (let frame = 0; frame < frames; frame += 1) {
+    locomotion.update(FRAME_SECONDS, yaw, root);
+    apexY = Math.max(apexY, root.y);
+  }
+
+  locomotion.releaseAll();
+  for (let frame = 0; frame < frames + 120 && locomotion.airborne; frame += 1) {
+    locomotion.update(FRAME_SECONDS, yaw, root);
+    apexY = Math.max(apexY, root.y);
+  }
+  if (locomotion.airborne) throw new Error("runKeys: the body never came down");
+  return { apexY };
+}
+
+describe("the hop", () => {
+  it("rises to the authored height, within a frame of it, and comes back down", () => {
+    const locomotion = new HiderLocomotion(openNavData());
+    const root = at(0, 0, 0);
+    const { apexY } = runKeys(locomotion, [" "], 1, root);
+
+    expect(apexY).toBeGreaterThan(JUMP_HEIGHT_M - APEX_SLACK_M);
+    expect(apexY).toBeLessThanOrEqual(JUMP_HEIGHT_M);
+    expect(root.y).toBeCloseTo(0, 6);
+  });
+
+  it("clears a kerb that stops a walk", () => {
+    const walked = at(0, 0, -0.5);
+    runKeys(new HiderLocomotion(kerbNavData()), ["w"], 2, walked);
+    // Walking north, the kerb's south face is at z = -1.0 and the body stops a
+    // player radius short of it.
+    expect(walked.z).toBeGreaterThan(-1.0 - WORLD_SCALE.playerRadius - 0.01);
+
+    const hopped = at(0, 0, -0.5);
+    runKeys(new HiderLocomotion(kerbNavData()), ["w", " "], 2, hopped);
+    expect(hopped.z).toBeLessThan(-1.2 - WORLD_SCALE.playerRadius);
+    expect(hopped.y).toBeCloseTo(0, 6);
+  });
+
+  it("reaches nothing in the shop that can be stood on", () => {
+    // The invariant, taken from the map: no walkable surface a body could climb
+    // onto is within a hop's reach of the floor it would hop from. Retuning
+    // either the hop or the map's lowest ledge fails here rather than quietly
+    // handing the player a shortcut past the climb links.
+    const elevated = WALKABLE_SURFACES.filter(
+      (entry) => entry.bounds.max.y > WORLD_SCALE.stepHeight,
+    );
+    expect(elevated.length).toBeGreaterThan(20);
+
+    const lowest = Math.min(...elevated.map((entry) => entry.bounds.max.y));
+    expect(HOP_REACH_M).toBeLessThan(lowest);
+    // And it is a hop rather than a stumble: more than the lip a walk crosses.
+    expect(JUMP_HEIGHT_M).toBeGreaterThan(WORLD_SCALE.stepHeight * 2);
+  });
+
+  it("cannot mount the steel rack's bottom board, which is that lowest ledge", () => {
+    const board = WALKABLE_SURFACES.find((entry) => entry.id === "shelving_board_1");
+    if (board === undefined) throw new Error("the map no longer has shelving_board_1");
+
+    // Standing on the floor at the board's south edge, hopping straight at it.
+    const locomotion = new HiderLocomotion(NAV_DATA);
+    const root = at(
+      (board.bounds.min.x + board.bounds.max.x) / 2,
+      0,
+      board.bounds.max.z + WORLD_SCALE.playerRadius * 2,
+    );
+    const { apexY } = runKeys(locomotion, ["w", " "], 4, root, Math.PI);
+
+    expect(apexY).toBeLessThan(board.bounds.max.y);
+    expect(root.y).toBe(0);
+  });
+
+  it("does not launch a second time in mid-air", () => {
+    const locomotion = new HiderLocomotion(openNavData());
+    const root = at(0, 0, 0);
+    // Space held throughout, so the body hops again each time it lands. No
+    // single hop may stack onto the last and turn into a climb.
+    const { apexY } = runKeys(locomotion, [" "], 3, root);
+    expect(apexY).toBeLessThanOrEqual(JUMP_HEIGHT_M);
+  });
+});
+
+describe("hopping while the hunt's creep cap is on", () => {
+  const CREEP_SPEED = DEFAULT_MATCH_SETTINGS.hiderCreepSpeed;
+
+  function creeper(navData: NavData = openNavData()): HiderLocomotion {
+    const locomotion = new HiderLocomotion(navData);
+    locomotion.setCreepLimit(CREEP_SPEED);
+    return locomotion;
+  }
+
+  it("lands back on the height it left, so a hop in place costs no ground", () => {
+    const locomotion = creeper();
+    // Deliberately resting above the floor rather than on it, but still within
+    // ground snap: a locked disguise sits where the Forge posed it, and landing
+    // on whatever is underfoot instead would spend creep budget the hop never
+    // earned. The offset is under `groundSnap`, so the body counts as standing.
+    const restY = WORLD_SCALE.groundSnap / 2;
+    const root = at(0, restY, 0);
+    const { apexY } = runKeys(locomotion, [" "], 1, root);
+
+    expect(apexY).toBeGreaterThan(restY + JUMP_HEIGHT_M - APEX_SLACK_M);
+    expect(apexY).toBeLessThanOrEqual(restY + JUMP_HEIGHT_M);
+    expect(root.y).toBe(restY);
+    expect(root.x).toBe(0);
+    expect(root.z).toBe(0);
+  });
+
+  it("never travels faster than the cap, hop included", () => {
+    const locomotion = creeper();
+    const root = at(0, 0, 0);
+    const start = { ...root };
+    runKeys(locomotion, ["w", " "], 2, root);
+    // Two seconds of holding both keys. The authority measures the straight
+    // line between published poses, and both are taken on the ground, so what
+    // matters is that the horizontal is capped and the height came back.
+    expect(root.y).toBe(0);
+    expect(Math.hypot(root.x - start.x, root.z - start.z)).toBeLessThanOrEqual(CREEP_SPEED * 2 + 1e-6);
+  });
+
+  it("reports itself airborne so the round holds the pose until it lands", () => {
+    const locomotion = creeper();
+    const root = at(0, 0, 0);
+    expect(locomotion.airborne).toBe(false);
+
+    locomotion.press(" ");
+    locomotion.update(FRAME_SECONDS, FACING_NORTH, root);
+    expect(locomotion.airborne).toBe(true);
+
+    locomotion.releaseAll();
+    for (let frame = 0; frame < 120 && locomotion.airborne; frame += 1) {
+      locomotion.update(FRAME_SECONDS, FACING_NORTH, root);
+    }
+    expect(locomotion.airborne).toBe(false);
+    expect(root.y).toBe(0);
+  });
+});
+
+describe("the Inspector hops on the same key with the same physics", () => {
+  it("reaches the same height as a Mimic and lands on the floor it left", () => {
+    const controller = new InspectorController(openNavData(), testSettings());
+    controller.teleportTo({ position: { x: 0, y: 0, z: 0 }, yaw: 0 });
+
+    const input = createMoveInput();
+    input.jump = true;
+    let apexY = controller.position.y;
+    for (let frame = 0; frame < 12; frame += 1) {
+      controller.update(FRAME_SECONDS, input);
+      apexY = Math.max(apexY, controller.position.y);
+    }
+    input.jump = false;
+    for (let frame = 0; frame < 120 && !controller.grounded; frame += 1) {
+      controller.update(FRAME_SECONDS, input);
+      apexY = Math.max(apexY, controller.position.y);
+    }
+
+    expect(apexY).toBeGreaterThan(JUMP_HEIGHT_M - APEX_SLACK_M);
+    expect(apexY).toBeLessThanOrEqual(JUMP_HEIGHT_M);
+    expect(controller.position.y).toBeCloseTo(0, 6);
+    expect(controller.grounded).toBe(true);
+  });
+
+  it("still cannot reach a ledge it has no climb link to", () => {
+    // A shelf one hop's reach above the floor plus a millimetre.
+    const shelf = surface(
+      "shelf",
+      box(-1, HOP_REACH_M + 0.001, -2, 1, HOP_REACH_M + 0.051, 0),
+      1,
+    );
+    const navData: NavData = {
+      floors: [SHOP_FLOOR, shelf],
+      blockers: [],
+      climbLinks: [],
+      spawnPoints: { inspectors: [], mimics: [] },
+      securityOffice: box(-9, 0, -9, -8, 1, -8),
+    };
+
+    const controller = new InspectorController(navData, testSettings());
+    controller.teleportTo({ position: { x: 0, y: 0, z: 1 }, yaw: 0 });
+    const input = createMoveInput();
+    input.jump = true;
+    input.forward = 1;
+    for (let frame = 0; frame < 240; frame += 1) controller.update(FRAME_SECONDS, input);
+    input.jump = false;
+    for (let frame = 0; frame < 120 && !controller.grounded; frame += 1) {
+      controller.update(FRAME_SECONDS, input);
+    }
+
+    expect(controller.surfaceId).toBe("floor");
+    expect(controller.position.y).toBeCloseTo(0, 6);
+  });
+});
+
+describe("the shared controller", () => {
+  it("gives both roles the same hop, because there is only one body", () => {
+    const forHider = new CharacterController(openNavData(), () => 0);
+    const forInspector = new CharacterController(openNavData(), () => 0);
+    const input = createMoveInput();
+    input.jump = true;
+
+    for (const controller of [forHider, forInspector]) {
+      controller.teleportTo({ position: { x: 0, y: 0, z: 0 }, yaw: 0 });
+    }
+    for (let frame = 0; frame < 30; frame += 1) {
+      forHider.update(FRAME_SECONDS, input);
+      forInspector.update(FRAME_SECONDS, input);
+      expect(forHider.position.y).toBe(forInspector.position.y);
+    }
+    expect(forHider.position.y).toBeGreaterThan(0);
+  });
+});

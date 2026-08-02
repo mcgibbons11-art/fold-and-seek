@@ -1,5 +1,6 @@
 import { Matrix4, Vector3, type PerspectiveCamera } from "three";
 
+import { HOP_LANDING_SPEED } from "./CharacterController";
 import { nearestBlockerEntry } from "./geometry";
 import type { InspectorController } from "./InspectorController";
 import {
@@ -65,9 +66,28 @@ export const MIN_BOOM_LENGTH_M = WORLD_SCALE.playerHeight * MIN_BOOM_PER_BODY_HE
 /** Gap kept between the camera and the surface it pulled in against. */
 export const CAMERA_SKIN_M = WORLD_SCALE.playerHeight * SKIN_PER_BODY_HEIGHT;
 
-/** Walk bob, small enough to read as breathing rather than head-shake. */
-const BOB_AMPLITUDE_M = WORLD_SCALE.playerHeight * BOB_PER_BODY_HEIGHT;
-const BOB_RATE_RAD_PER_M = 4.2;
+/**
+ * Walk bob, small enough to read as breathing rather than head-shake. Exported
+ * because the Forge's orbit rig bobs too, and a body that breathes at one rate
+ * from behind and another from the eye is two creatures.
+ */
+export const BOB_AMPLITUDE_M = WORLD_SCALE.playerHeight * BOB_PER_BODY_HEIGHT;
+export const BOB_RATE_RAD_PER_M = 4.2;
+
+/**
+ * How far the rig sinks on landing, as a share of body height, and how long it
+ * takes to get there. The camera echoes the body's own compression rather than
+ * inventing a second one: same gesture, seen from behind.
+ */
+const LANDING_DIP_BODY_SHARE = 0.05;
+const LANDING_DIP_SECONDS = 0.12;
+const LANDING_DIP_OMEGA = 1 / LANDING_DIP_SECONDS;
+const LANDING_DIP_MAX_SCALE = 2;
+/** Kick that puts the peak of the impulse response at the authored depth. */
+const LANDING_DIP_IMPULSE =
+  WORLD_SCALE.playerHeight * LANDING_DIP_BODY_SHARE * LANDING_DIP_OMEGA * Math.E;
+/** Under a tenth of a millimetre at this scale, so the dip ends rather than fades. */
+const DIP_SETTLE_M = WORLD_SCALE.playerHeight * 3e-4;
 
 /** Aiming damps sway to this fraction of its free-walk amount. */
 const AIMED_SWAY_SCALE = 0.15;
@@ -100,6 +120,9 @@ export class InspectorCamera {
 
   private aimAmountValue = 0;
   private bobPhase = 0;
+  /** Live landing compression and its rate of change, a critically damped pair. */
+  private dipM = 0;
+  private dipVelocity = 0;
 
   constructor(camera: PerspectiveCamera, navData: NavData, options: InspectorCameraOptions = {}) {
     this.camera = camera;
@@ -140,13 +163,14 @@ export class InspectorCamera {
 
     this.bobPhase += controller.speed * dtSeconds * BOB_RATE_RAD_PER_M;
     const bob = Math.sin(this.bobPhase) * BOB_AMPLITUDE_M * this.swayScale;
+    const dip = this.stepLandingDip(dtSeconds, controller);
 
     // Right of the Inspector, level with the floor, so the shoulder offset does
     // not tilt with pitch.
     const rightX = cosYaw;
     const rightZ = -sinYaw;
     this.pivot.x = this.eye.x + rightX * this.shoulderOffsetM;
-    this.pivot.y = this.eye.y + bob;
+    this.pivot.y = this.eye.y + bob - dip;
     this.pivot.z = this.eye.z + rightZ * this.shoulderOffsetM;
 
     this.boomDirection.x = -this.forward.x;
@@ -177,6 +201,37 @@ export class InspectorCamera {
     }
     this.camera.updateMatrixWorld();
     this.viewMatrix.copy(this.camera.matrixWorld).invert();
+  }
+
+  /**
+   * The rig's share of a landing. The controller reports the touchdown and how
+   * hard it was; the impulse it kicks into this spring dips the boom and lets it
+   * recover, which is the same gesture the body makes and the reason a drop off
+   * the counter lands with more than a change of height to show for it.
+   *
+   * The eye itself is untouched: every gameplay distance is measured from it, so
+   * a dip that moved it would change what the Inspector can reach for a fifth of
+   * a second, and camera feel may never do that (§8.5).
+   */
+  private stepLandingDip(dtSeconds: number, controller: InspectorController): number {
+    if (controller.justLanded) {
+      const weight = Math.min(controller.landingSpeed / HOP_LANDING_SPEED, LANDING_DIP_MAX_SCALE);
+      this.dipVelocity += LANDING_DIP_IMPULSE * weight;
+    }
+    if (dtSeconds <= 0) return this.dipM;
+
+    const omega = LANDING_DIP_OMEGA;
+    const f = 1 + 2 * dtSeconds * omega;
+    const hoo = dtSeconds * omega * omega;
+    const detInv = 1 / (f + dtSeconds * hoo);
+    const previous = this.dipM;
+    this.dipM = (f * previous + dtSeconds * this.dipVelocity) * detInv;
+    this.dipVelocity = (this.dipVelocity - hoo * previous) * detInv;
+    if (Math.abs(this.dipM) < DIP_SETTLE_M && Math.abs(this.dipVelocity) < DIP_SETTLE_M) {
+      this.dipM = 0;
+      this.dipVelocity = 0;
+    }
+    return this.dipM;
   }
 
   /**

@@ -1,6 +1,7 @@
 import {
   MatchSimulation,
   type MatchCommand,
+  type ObjectRegistry,
   type PublicMatchState,
   type MatchSettingsPatch,
   type PrivateMatchState,
@@ -27,6 +28,8 @@ import {
 import {
   batchEvents,
   decodeChunks,
+  EYE_REPORT_EPSILON_M,
+  MAX_EYE_REPORTS_PER_SECOND,
   decodeHostPublication,
   decodePaintBook,
   decodePoseBook,
@@ -101,11 +104,30 @@ export interface PortalsAdapterOptions {
    */
   readonly spatial?: SpatialValidator;
   /**
+   * The map's accusable objects, for whichever client ends up host. Omitted,
+   * the simulation falls back to its five-prop test fixture and refuses every
+   * accusation aimed at a real prop as `target_unknown`. It is also what names
+   * the map in a published snapshot, so a successor whose registry disagrees
+   * refuses to restore rather than resuming a round about a different room.
+   */
+  readonly objectRegistry?: ObjectRegistry;
+  /**
+   * Where a remote Inspector reports looking from, for whichever client ends up
+   * host. It is called on the host only, once per accepted `eye` report, and
+   * the caller is expected to feed it to the same validator passed as `spatial`.
+   * Omitted, the host knows only its own eye and refuses every accusation any
+   * other client fires.
+   */
+  readonly onInspectorEye?: (seatId: string, eye: EyePosition | null) => void;
+  /**
    * Clock for the authoritative simulation. Defaults to Date.now() so the
    * timeline in a published snapshot still means something to the next host.
    */
   readonly now?: () => number;
 }
+
+/** An Inspector's eye in world metres, as it travels over the relay. */
+export type EyePosition = readonly [number, number, number];
 
 /** Reads the SDK the Portals host injects, or null outside Portals. */
 export function detectPortals(): PortalsSdk | null {
@@ -114,7 +136,7 @@ export function detectPortals(): PortalsSdk | null {
   return isPortalsSdk(candidate) ? candidate : null;
 }
 
-function isPortalsSdk(value: unknown): value is PortalsSdk {
+export function isPortalsSdk(value: unknown): value is PortalsSdk {
   if (typeof value !== "object" || value === null) return false;
   const sdk = value as Partial<PortalsSdk>;
   return typeof sdk.ready === "function" && typeof sdk.net === "object" && sdk.net !== null;
@@ -162,6 +184,10 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private lastPaintUpdate: PaintUpdate | null = null;
   /** A layer a reforge asked for, waiting on the flush after the pose went out. */
   private pendingPaintResend: PaintUpdate | null = null;
+  /** Where this client last said it was looking from, and where it is now. */
+  private pendingEye: EyePosition | null = null;
+  private sentEye: EyePosition | null = null;
+  private eyeReported = false;
   /** Locked poses, kept out of the frequently rewritten publication. */
   private poseBook: PoseBook = {};
   private poseSeq = 0;
@@ -193,6 +219,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     MAX_FORGE_SNAPSHOTS_PER_SECOND,
     RATE_WINDOW_MS,
   );
+  private readonly eyeWindow = new KeyedRateWindow(MAX_EYE_REPORTS_PER_SECOND, RATE_WINDOW_MS);
 
   private flushTimer: ReturnType<typeof setInterval> | null = null;
   private tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -347,6 +374,20 @@ export class PortalsNetAdapter implements NetworkAdapter {
       to: this.authoritySeatId,
       paint: update,
     });
+  }
+
+  /**
+   * Tells the room where this client is looking from, if anyone else is running
+   * the simulation. Called as often as the camera moves; the report itself goes
+   * out at the flush cadence, and only once the eye has actually travelled.
+   *
+   * The host needs nothing from this. Its own bridge is written directly by the
+   * round that owns the camera, and that write is what a remote client is here
+   * to reproduce.
+   */
+  reportInspectorEye(eye: EyePosition | null): void {
+    this.pendingEye = eye === null ? null : [round3(eye[0]), round3(eye[1]), round3(eye[2])];
+    this.eyeReported = true;
   }
 
   getSelfId(): string | null {
@@ -506,6 +547,20 @@ export class PortalsNetAdapter implements NetworkAdapter {
         if (fromSeat !== undefined) this.applyPaintUpdate(fromSeat, envelope.paint);
         return;
 
+      case "eye":
+        // Only the host holds a validator anyone is asking, and only it should
+        // be spending work on positions. A report addressed to a stale host is
+        // dropped rather than applied, exactly as a command would be.
+        if (!this.isAuthority() || envelope.to !== this.selfSeatId) return;
+        if (!this.eyeWindow.tryConsume(fromId, this.clock())) {
+          console.warn(
+            `[portals] ${fromId} exceeded ${MAX_EYE_REPORTS_PER_SECOND} eye reports/s`,
+          );
+          return;
+        }
+        if (fromSeat !== undefined) this.options.onInspectorEye?.(fromSeat, envelope.eye);
+        return;
+
       case "resync": {
         // A resync costs the host a message, so it spends the sender's own
         // command allowance rather than being free to repeat.
@@ -607,8 +662,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.refusedConnections.delete(player.id);
     this.commandWindow.forget(player.id);
     this.forgeWindow.forget(player.id);
+    this.eyeWindow.forget(player.id);
 
     if (this.sim && this.isAuthority() && this.seatOwners.get(seat) === player.id) {
+      // A departed Inspector's last reported eye is not where anybody is
+      // standing, so the host forgets it rather than keeping a ghost's view.
+      this.options.onInspectorEye?.(seat, null);
       this.seatOwners.delete(seat);
       this.pendingSync.delete(seat);
       this.privateOutbox.delete(seat);
@@ -713,6 +772,9 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
     if (next === this.authoritySeatId) return;
     this.authoritySeatId = next;
+    // A new host has never heard this client's eye, so the record of what was
+    // already sent is worthless and the next flush states it again.
+    this.sentEye = null;
 
     if (next !== null && next === this.selfSeatId) {
       this.assumeAuthority();
@@ -747,7 +809,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
       ? settingsPatchOf(snapshot.publicState.settings)
       : (this.options.settings ?? {});
 
-    this.sim = new MatchSimulation(settings, this.options.seed ?? 1, this.options.spatial);
+    this.sim = new MatchSimulation(
+      settings,
+      this.options.seed ?? 1,
+      this.options.spatial,
+      this.options.objectRegistry,
+    );
     this.seatOwners.clear();
     // One entry per seat, in a fixed order, so every client that could have
     // taken over would have built the same roster.
@@ -798,6 +865,10 @@ export class PortalsNetAdapter implements NetworkAdapter {
     try {
       restored = MatchSimulation.restore(parsed.data, {
         ...(this.options.spatial ? { spatial: this.options.spatial } : {}),
+        // A snapshot names the map it belongs to, and restore() refuses one
+        // that does not match the registry it is given, so the successor has to
+        // be holding the same map the departed host was running.
+        ...(this.options.objectRegistry ? { objectRegistry: this.options.objectRegistry } : {}),
         // Locked poses were omitted from the snapshot because they are already
         // in the public state this client has been holding all along.
         poses: this.withBodies(publication).disguises,
@@ -851,6 +922,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.refusedConnections.clear();
     this.commandWindow.clear();
     this.forgeWindow.clear();
+    this.eyeWindow.clear();
     // The next host publishes its own ranges, so it starts with a clean latch
     // and reports a fault of its own rather than inheriting this one's silence.
     this.oversizedRanges.clear();
@@ -977,6 +1049,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private flush(): void {
     if (this.selfSeatId === null) return;
     this.drainPaintResend();
+    this.drainEyeReport();
     if (!this.isAuthority()) return;
 
     if (this.publicOutbox.length > 0) {
@@ -1059,6 +1132,31 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (update === null) return;
     this.pendingPaintResend = null;
     this.sendPaintUpdate(update);
+  }
+
+  /**
+   * Sends this client's eye to the host, at most once per flush and only when
+   * it has moved.
+   *
+   * A client that has not been asked about its eye at all sends nothing, so a
+   * Mimic never spends a message on a position the authority does not use. The
+   * host is skipped for the reason `reportInspectorEye` gives.
+   */
+  private drainEyeReport(): void {
+    if (!this.eyeReported || this.isAuthority() || this.authoritySeatId === null) return;
+    const eye = this.pendingEye;
+    if (eyesAgree(eye, this.sentEye)) return;
+    if (
+      !this.rawSend({
+        v: PORTALS_PROTOCOL_VERSION,
+        t: "eye",
+        to: this.authoritySeatId,
+        eye,
+      })
+    ) {
+      return;
+    }
+    this.sentEye = eye;
   }
 
   /**
@@ -1468,6 +1566,21 @@ export function coalesceDisguiseUpdates(events: readonly SimEvent[]): SimEvent[]
     );
   }
   return kept.reverse();
+}
+
+/** Millimetres. Finer than any check the authority makes, and shorter on the wire. */
+function round3(value: number): number {
+  return Math.round(value * 1_000) / 1_000;
+}
+
+/** Whether a fresh eye is close enough to the last reported one to say nothing. */
+function eyesAgree(left: EyePosition | null, right: EyePosition | null): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    Math.abs(left[0] - right[0]) < EYE_REPORT_EPSILON_M &&
+    Math.abs(left[1] - right[1]) < EYE_REPORT_EPSILON_M &&
+    Math.abs(left[2] - right[2]) < EYE_REPORT_EPSILON_M
+  );
 }
 
 function seatIdOf(player: PortalsNetPlayer): string {

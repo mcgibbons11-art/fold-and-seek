@@ -191,22 +191,31 @@ export function boardRailAction(open: boolean): RailAction {
 }
 
 /**
- * A hider's controls during the hunt. There is no walk key: the body is moved by
- * dragging it, slowly, which is override 4 in CLAUDE.md and is why nothing here
- * mentions WASD.
+ * A hider's controls during the hunt (CLAUDE.md overrides 5 and 6). A Mimic
+ * runs about the shop on WASD while it folds and goes on creeping on the same
+ * keys once the disguise has manifested, capped at `hiderCreepSpeed`; space
+ * hops; and the left button does two things depending on what is under it,
+ * which is why it appears twice. Shift is absent from the walk because a creep
+ * has one speed.
+ *
+ * The Inspector-eyeline preview is on E rather than the §7.5 space, because
+ * space became the jump.
  */
 export const HIDER_CONTROL_HINTS: readonly ControlHint[] = [
-  { id: "drag", keys: ["LMB"], label: "Drag a handle" },
-  { id: "orbit", keys: ["RMB"], label: "Orbit" },
+  { id: "walk", keys: ["W", "A", "S", "D"], label: "Creep" },
+  { id: "jump", keys: ["Space"], label: "Hop" },
+  { id: "camera", keys: ["LMB"], label: "Look around" },
+  { id: "drag", keys: ["LMB"], label: "On a handle: pose" },
   { id: "pan", keys: ["Shift", "LMB"], label: "Pan" },
   { id: "undo", keys: ["Ctrl", "Z"], label: "Undo" },
   { id: "silhouette", keys: ["V"], label: "Silhouette" },
-  { id: "eyeline", keys: ["Space"], label: "Their eyeline" },
+  { id: "eyeline", keys: ["E"], label: "Their eyeline" },
 ];
 
 /** The Inspector walks the room, so their strip is locomotion and the mouse. */
 export const INSPECTOR_CONTROL_HINTS: readonly ControlHint[] = [
   { id: "walk", keys: ["W", "A", "S", "D"], label: "Walk" },
+  { id: "jump", keys: ["Space"], label: "Hop" },
   { id: "brisk", keys: ["Shift"], label: "Hurry" },
   { id: "release", keys: ["Esc"], label: "Release the mouse" },
 ];

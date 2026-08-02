@@ -11,7 +11,7 @@ import { ShopMaterials } from "./props/materials";
 import type { NavData } from "../../inspector/navData";
 import { NAV_DATA } from "./nav";
 import { buildMapObjects, buildObjectRegistry, CURIOSITY_SHOP_MAP_ID, type MapObjectEntry } from "./registry";
-import { ZONES, type MapZone } from "./zones";
+import { ZONES, zoneById, type MapZone, type ZoneId } from "./zones";
 
 /**
  * The Curiosity Shop, the first map (§10.2), built as a procedural blockout to
@@ -58,6 +58,48 @@ function layerFor(placement: PropPlacement): PropLayer {
   return placement.inspectable ? "standard" : "background";
 }
 
+/** One unit of map building, reported so a loading screen can name it. */
+export interface ShopBuildStep {
+  /** What was just built, for the player: "the clock wall", "the counter". */
+  readonly label: string;
+  readonly done: number;
+  readonly total: number;
+}
+
+export interface ShopBuildRun {
+  readonly zoneId: ZoneId;
+  readonly placements: readonly PropPlacement[];
+}
+
+/**
+ * The map cut into the pieces the build yields between, one per contiguous run
+ * of a zone in the authored order.
+ *
+ * Build order is the mesh numbering (§24.6) and a saved disguise resolves the
+ * surface it is anchored to by name, so the props cannot be regrouped by zone
+ * to make tidier chunks. `SHOP_PLACEMENTS` is already written as one run per
+ * zone, and cutting it wherever the zone changes preserves the order exactly
+ * while giving the loading screen something to name.
+ */
+export const SHOP_BUILD_RUNS: readonly ShopBuildRun[] = (() => {
+  const runs: { zoneId: ZoneId; placements: PropPlacement[] }[] = [];
+  for (const placement of SHOP_PLACEMENTS) {
+    const current = runs[runs.length - 1];
+    if (current !== undefined && current.zoneId === placement.zoneId) {
+      current.placements.push(placement);
+      continue;
+    }
+    runs.push({ zoneId: placement.zoneId, placements: [placement] });
+  }
+  return runs;
+})();
+
+/**
+ * The shell and the batcher's finalize bracket the zones, and each is a step of
+ * its own: `finalize` is where the merged geometry is actually built.
+ */
+export const SHOP_BUILD_STEP_COUNT = SHOP_BUILD_RUNS.length + 2;
+
 export class CuriosityShop {
   private readonly bag = new DisposalBag();
   private built = false;
@@ -67,10 +109,28 @@ export class CuriosityShop {
   private batcher: PropBatcher | null = null;
 
   /**
-   * Builds the map once. Calling it twice would duplicate every GPU resource,
-   * so a second call is a programming error rather than a rebuild.
+   * Builds the map once, in full. Calling it twice would duplicate every GPU
+   * resource, so a second call is a programming error rather than a rebuild.
    */
   build(quality: QualitySettings): CuriosityShopMap {
+    const steps = this.buildSteps(quality);
+    let step = steps.next();
+    while (step.done !== true) {
+      step = steps.next();
+    }
+    return step.value;
+  }
+
+  /**
+   * The same build, cut into pieces a caller can spread over several frames.
+   *
+   * Building the whole shop takes long enough on a weak device to stop the tab
+   * outright, and it used to happen inside the click that started a round with
+   * nothing on screen to say so. Yielding between zones costs nothing, keeps the
+   * menu drawing behind the loading screen, and lets the progress the player is
+   * shown be the real one.
+   */
+  *buildSteps(quality: QualitySettings): Generator<ShopBuildStep, CuriosityShopMap> {
     if (this.built) {
       throw new Error("CuriosityShop: already built; construct a new instance for a second map");
     }
@@ -87,23 +147,34 @@ export class CuriosityShop {
     this.batcher = batcher;
 
     const context: PropContext = { geometry, materials, batcher };
-    buildArchitecture(context);
+    const total = SHOP_BUILD_STEP_COUNT;
+    let done = 0;
 
-    for (const placement of SHOP_PLACEMENTS) {
-      const builder = PROP_BUILDERS[placement.variant];
-      batcher.begin(
-        placement.objectId,
-        placement.position,
-        placement.rotationY,
-        placement.hero,
-        1,
-        layerFor(placement),
-      );
-      builder(context, placement);
-      batcher.end();
+    buildArchitecture(context);
+    done += 1;
+    yield { label: "the walls and the floor", done, total };
+
+    for (const run of SHOP_BUILD_RUNS) {
+      for (const placement of run.placements) {
+        const builder = PROP_BUILDERS[placement.variant];
+        batcher.begin(
+          placement.objectId,
+          placement.position,
+          placement.rotationY,
+          placement.hero,
+          1,
+          layerFor(placement),
+        );
+        builder(context, placement);
+        batcher.end();
+      }
+      done += 1;
+      yield { label: zoneById(run.zoneId).label.toLowerCase(), done, total };
     }
 
     const batch = batcher.finalize();
+    done += 1;
+    yield { label: "the lights", done, total };
     const lighting = new ShopLighting(root, quality);
     this.lighting = lighting;
 

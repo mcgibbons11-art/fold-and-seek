@@ -67,13 +67,23 @@ function spawned(
   return controller;
 }
 
+/**
+ * Long enough for the acceleration curve in `CharacterController` to have run
+ * its course, so a test that means to measure the speed cap measures the cap
+ * rather than the ramp up to it. The ramp itself is measured in
+ * `movementFeel.test.ts`.
+ */
+const AT_FULL_SPEED_FRAMES = 60;
+
 describe("InspectorController movement", () => {
   it("walks forward at the configured speed on open floor", () => {
     const controller = spawned(OPEN_ROOM);
-    walk(controller, 4, { forward: 1 });
+    walk(controller, AT_FULL_SPEED_FRAMES, { forward: 1 });
 
+    const from = controller.position.x;
+    walk(controller, 4, { forward: 1 });
     const expected = testSettings().inspectorMoveSpeed * FRAME_SECONDS * 4;
-    expect(controller.position.x).toBeCloseTo(expected, 6);
+    expect(controller.position.x - from).toBeCloseTo(expected, 6);
     expect(controller.position.z).toBeCloseTo(0, 6);
     expect(controller.grounded).toBe(true);
     expect(controller.surfaceId).toBe("floor");
@@ -82,10 +92,18 @@ describe("InspectorController movement", () => {
   it("covers the brisk multiple of the walk distance with Shift held", () => {
     const walker = spawned(OPEN_ROOM);
     const brisk = spawned(OPEN_ROOM);
+    walk(walker, AT_FULL_SPEED_FRAMES, { forward: 1 });
+    walk(brisk, AT_FULL_SPEED_FRAMES, { forward: 1, brisk: true });
+
+    const walkerFrom = walker.position.x;
+    const briskFrom = brisk.position.x;
     walk(walker, 4, { forward: 1 });
     walk(brisk, 4, { forward: 1, brisk: true });
 
-    expect(brisk.position.x).toBeCloseTo(walker.position.x * BRISK_WALK_MULTIPLIER, 6);
+    expect(brisk.position.x - briskFrom).toBeCloseTo(
+      (walker.position.x - walkerFrom) * BRISK_WALK_MULTIPLIER,
+      6,
+    );
   });
 
   it("normalizes diagonal intent so strafing is no faster than walking", () => {
@@ -125,6 +143,11 @@ describe("InspectorController movement", () => {
   it("keeps a slide moving at full speed along the free axis", () => {
     const controller = spawned();
     walk(controller, 60, { forward: 1 });
+    // The turn into the wall is a change of velocity like any other, so it eases
+    // rather than snapping. What is at stake here is where it settles: pressed
+    // diagonally into a wall, the free axis carries the whole diagonal component
+    // and none of it is lost to the axis that is blocked.
+    walk(controller, AT_FULL_SPEED_FRAMES, { forward: 1, strafe: 1 });
     const zBefore = controller.position.z;
     walk(controller, 10, { forward: 1, strafe: 1 });
 

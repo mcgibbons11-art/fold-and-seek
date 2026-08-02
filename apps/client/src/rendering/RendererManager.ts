@@ -18,6 +18,72 @@ export interface DeviceEvent {
 
 type DeviceEventListener = (event: DeviceEvent) => void;
 
+/**
+ * A shader program the driver refused to link. On the WebGL 2 path this is the
+ * first event in the chain that kills the context: three logs the failure, binds
+ * the unlinked program anyway, and the driver takes the device down a few calls
+ * later (see `PRACTICAL_CEILING` in `quality.ts` for the measured chain).
+ */
+export interface ShaderLinkFailure {
+  readonly api: string;
+  /** The driver's own account of the failure, which is routinely empty. */
+  readonly message: string;
+}
+
+type ShaderLinkFailureListener = (failure: ShaderLinkFailure) => void;
+
+/** What a link failure should cost, decided by `ShaderFailurePolicy`. */
+export type ShaderFailureResponse = "ignore" | "demote" | "fault";
+
+/**
+ * A failure storm arrives as one burst, every material the frame touched failing
+ * to link at once, so the burst rather than the individual failure is the unit
+ * of decision. Anything inside this window after a decision is the tail of the
+ * same storm and buys nothing by demoting the tier again.
+ */
+const LINK_FAILURE_BURST_MS = 1_500;
+
+/**
+ * Bursts tolerated once the tier can go no lower. One is survivable: a single
+ * material may be the only thing over the limit, and the demote that preceded it
+ * may already have fixed the rest. A second says the floor is not low enough,
+ * and the honest answer is the device-fault panel rather than a tab that renders
+ * nothing and then dies.
+ */
+const FLOOR_BURSTS_ALLOWED = 2;
+
+/**
+ * Turns link failures into a response. Kept free of the renderer and of the
+ * tier table so the policy can be driven directly in a test: the caller reports
+ * whether a lower tier still exists and does as it is told.
+ */
+export class ShaderFailurePolicy {
+  private readonly burstMs: number;
+  private readonly floorBurstsAllowed: number;
+  private quietUntilMs = Number.NEGATIVE_INFINITY;
+  private floorBursts = 0;
+
+  constructor(burstMs = LINK_FAILURE_BURST_MS, floorBurstsAllowed = FLOOR_BURSTS_ALLOWED) {
+    this.burstMs = burstMs;
+    this.floorBurstsAllowed = floorBurstsAllowed;
+  }
+
+  record(nowMs: number, canDemote: boolean): ShaderFailureResponse {
+    if (nowMs < this.quietUntilMs) {
+      return "ignore";
+    }
+    this.quietUntilMs = nowMs + this.burstMs;
+    if (canDemote) {
+      // A demote that lands is a fresh start: the floor count exists to describe
+      // failures the tier ladder has already been spent on.
+      this.floorBursts = 0;
+      return "demote";
+    }
+    this.floorBursts += 1;
+    return this.floorBursts >= this.floorBurstsAllowed ? "fault" : "ignore";
+  }
+}
+
 function readString(source: Record<string, unknown>, key: string): string | null {
   const value = source[key];
   return typeof value === "string" && value.length > 0 ? value : null;
@@ -73,6 +139,7 @@ export class RendererManager {
 
   private readonly pipeline: RenderPipeline;
   private readonly deviceListeners = new Set<DeviceEventListener>();
+  private readonly shaderListeners = new Set<ShaderLinkFailureListener>();
   private settings: QualitySettings;
   private backendName: RenderBackend = "webgl2";
   private initialized = false;
@@ -110,6 +177,7 @@ export class RendererManager {
 
     this.pipeline = new RenderPipeline(this.renderer, settings);
     this.chainDeviceHandlers();
+    this.installShaderErrorHook();
   }
 
   /**
@@ -134,6 +202,45 @@ export class RendererManager {
     }) as THREE.WebGPURenderer["onError"];
   }
 
+  /**
+   * `debug.onShaderError` fires on the WebGL 2 backend for every program the
+   * driver refuses to link, which is the last point at which anything can be
+   * done about it: three carries on and binds the unlinked program. Taking the
+   * hook replaces three's own console report, so the driver's logs are written
+   * out here instead — losing them would make the next one of these harder to
+   * diagnose, not easier. The WebGPU backend never calls it.
+   */
+  private installShaderErrorHook(): void {
+    this.renderer.debug.onShaderError = (gl, program, vertexShader, fragmentShader) => {
+      const logs = [
+        gl.getProgramInfoLog(program),
+        gl.getShaderInfoLog(vertexShader),
+        gl.getShaderInfoLog(fragmentShader),
+      ]
+        .map((log) => (log ?? "").trim())
+        .filter((log) => log.length > 0);
+      // An empty log is the interesting case and the common one on the drivers
+      // this fires on, so it is named rather than left as a blank line.
+      const message =
+        logs.length > 0 ? logs.join(" — ") : "the driver linked no program and reported no reason";
+      // Program size is logged with it because the standing hypothesis for the
+      // empty-log failures is that the unrolled light loop runs the fragment
+      // program past a driver limit, and this is the number that would show it.
+      const fragmentChars = (gl.getShaderSource(fragmentShader) ?? "").length;
+      console.error(
+        `[renderer] shader program failed to link (fragment source ${String(fragmentChars)} chars):`,
+        message,
+      );
+      this.emitShaderLinkFailure({ api: this.backendName, message });
+    };
+  }
+
+  private emitShaderLinkFailure(failure: ShaderLinkFailure): void {
+    for (const listener of this.shaderListeners) {
+      listener(failure);
+    }
+  }
+
   private emitDeviceEvent(event: DeviceEvent): void {
     for (const listener of this.deviceListeners) {
       listener(event);
@@ -145,6 +252,14 @@ export class RendererManager {
     this.deviceListeners.add(listener);
     return () => {
       this.deviceListeners.delete(listener);
+    };
+  }
+
+  /** Subscribes to program link failures. Returns an unsubscribe. */
+  onShaderLinkFailure(listener: ShaderLinkFailureListener): () => void {
+    this.shaderListeners.add(listener);
+    return () => {
+      this.shaderListeners.delete(listener);
     };
   }
 
@@ -240,6 +355,8 @@ export class RendererManager {
     void this.renderer.setAnimationLoop(null);
     this.pipeline.dispose();
     this.deviceListeners.clear();
+    this.shaderListeners.clear();
+    this.renderer.debug.onShaderError = null;
     this.renderer.dispose();
     this.initialized = false;
   }

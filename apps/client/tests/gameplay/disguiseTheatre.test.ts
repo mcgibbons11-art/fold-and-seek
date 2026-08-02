@@ -218,9 +218,14 @@ describe("DisguiseTheatre", () => {
 
     theatre.sync([], null);
     expect(theatre.proxies()).toHaveLength(0);
-    expect(scene.children).toHaveLength(0);
+    // The bodies stay parented but stop being drawn: a disguise that has gone
+    // hands its body back to the reserve, so the next one to arrive costs no
+    // geometry and no shader. Nothing visible is left standing in the room.
+    expect(scene.children.filter((child) => child.visible)).toHaveLength(0);
+    expect(theatre.sparedBodies).toBe(2);
 
     theatre.dispose();
+    expect(scene.children).toHaveLength(0);
   });
 });
 
@@ -345,5 +350,139 @@ describe("DisguiseTheatre taunts", () => {
 
     theatre.dispose();
     reference.dispose();
+  });
+});
+
+/**
+ * A shader is built per distinct material the first time a frame draws it, and
+ * on the weaker backend that build stops the whole tab. These count what the
+ * hunt actually asks the device to build, and when it asks for it.
+ */
+describe("DisguiseTheatre build cost", () => {
+  /** Every material the scene would hand the renderer, counted by identity. */
+  function sceneMaterials(scene: THREE.Scene): Set<THREE.Material> {
+    const materials = new Set<THREE.Material>();
+    scene.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      const material = object.material;
+      if (Array.isArray(material)) {
+        for (const entry of material) materials.add(entry);
+        return;
+      }
+      materials.add(material);
+    });
+    return materials;
+  }
+
+  function bodies(scene: THREE.Scene): THREE.Object3D[] {
+    return scene.children.filter((child) => child.name.startsWith("disguise"));
+  }
+
+  const cast = (count: number): PublicDisguiseView[] =>
+    Array.from({ length: count }, (_, i) =>
+      publicDisguise(`obj_${String(i)}`, createBotDisguisePayload(i)),
+    );
+
+  it("gives the whole cast one set of materials rather than one each", () => {
+    const solo = new THREE.Scene();
+    const one = new DisguiseTheatre(solo, QUALITY);
+    one.sync(cast(1), null);
+    const soloMaterials = sceneMaterials(solo).size;
+
+    const room = new THREE.Scene();
+    const four = new DisguiseTheatre(room, QUALITY);
+    four.sync(cast(4), null);
+
+    // Four bodies wearing the same swatches are four times the geometry and
+    // exactly the same shaders. Before the pool this was 4 x soloMaterials.
+    expect(bodies(room)).toHaveLength(4);
+    expect(sceneMaterials(room).size).toBe(soloMaterials);
+    expect(four.materialCount).toBe(one.materialCount);
+
+    one.dispose();
+    four.dispose();
+  });
+
+  it("builds the hunt's bodies during the load, not at the transition into it", async () => {
+    const scene = new THREE.Scene();
+    const theatre = new DisguiseTheatre(scene, QUALITY);
+
+    // What the renderer would be handed at precompile time: everything the
+    // prewarm built has to be visible then, or its shaders are skipped and the
+    // build lands in the middle of the hunt after all.
+    let compiled: { bodies: number; hiddenParts: number; culled: number } | null = null;
+    await theatre.prewarm(4, () => {
+      let hiddenParts = 0;
+      let culled = 0;
+      scene.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        // The socket studs are the one part a disguise never shows: they mark
+        // empty sockets for the Forge's panel tool and belong to nobody else.
+        if (!object.visible && !object.name.startsWith("mimic_socket_marker")) hiddenParts += 1;
+        if (object.frustumCulled) culled += 1;
+      });
+      compiled = { bodies: bodies(scene).filter((body) => body.visible).length, hiddenParts, culled };
+      return Promise.resolve();
+    });
+
+    expect(compiled).toEqual({ bodies: 4, hiddenParts: 0, culled: 0 });
+    expect(theatre.sparedBodies).toBe(4);
+    // Parked out of sight, and culling back on, so nothing is drawn or
+    // precompiled for them again.
+    expect(bodies(scene).every((body) => !body.visible)).toBe(true);
+
+    const beforeBodies = scene.children.length;
+    const beforeMaterials = sceneMaterials(scene).size;
+
+    theatre.sync(cast(4), null);
+
+    // The transition adds no body and no material: it takes over four that
+    // already exist and re-poses them, which is geometry and transforms only.
+    expect(scene.children).toHaveLength(beforeBodies);
+    expect(sceneMaterials(scene).size).toBe(beforeMaterials);
+    expect(theatre.sparedBodies).toBe(0);
+    expect(theatre.proxies()).toHaveLength(4);
+    // And they are real disguises, not the placeholder they were built as.
+    for (const proxy of theatre.proxies()) {
+      expect(theatre.boundsOf(proxy.objectId)?.isEmpty()).toBe(false);
+    }
+
+    theatre.dispose();
+  });
+
+  it("warms a painted body too, since paint swaps in a different material", async () => {
+    const scene = new THREE.Scene();
+    const theatre = new DisguiseTheatre(scene, QUALITY);
+
+    let paintedAtCompile = 0;
+    await theatre.prewarm(4, () => {
+      paintedAtCompile = paintedMeshes(scene).length;
+      return Promise.resolve();
+    });
+
+    expect(paintedAtCompile).toBeGreaterThan(0);
+    // The clones go back before the body is parked, so a disguise taking it
+    // over starts from the pool's own materials exactly as a fresh body does.
+    expect(paintedMeshes(scene)).toHaveLength(0);
+
+    theatre.dispose();
+  });
+
+  it("prewarms once, so a second round does not build the cast again", async () => {
+    const scene = new THREE.Scene();
+    const theatre = new DisguiseTheatre(scene, QUALITY);
+    let compiles = 0;
+    const compile = (): Promise<void> => {
+      compiles += 1;
+      return Promise.resolve();
+    };
+
+    await theatre.prewarm(4, compile);
+    await theatre.prewarm(4, compile);
+
+    expect(compiles).toBe(1);
+    expect(theatre.sparedBodies).toBe(4);
+
+    theatre.dispose();
   });
 });

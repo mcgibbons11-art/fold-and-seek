@@ -1,4 +1,5 @@
 import type { InnocentReactionId } from "@foldseek/game-sim";
+import { MatchPhase } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
 
 import type { AudioPlayer, SoundId } from "../forge/AudioPlayer";
@@ -27,6 +28,26 @@ export const REACTION_SOUNDS: Readonly<Record<InnocentReactionId, SoundId>> = {
   vase_dust_puff: "vase_dust_puff",
   clock_chimes: "clock_chime",
   kettle_whistles: "kettle_whistle",
+};
+
+/**
+ * What a phase sounds like as it opens. A phase absent from this table opens in
+ * silence, which is most of them: the lobby, the role reveal and the loading
+ * screen are all places the ambience beds carry on their own.
+ *
+ * The hunt opens on two sounds at once because it is two things at once: the
+ * shop door letting the Inspector in, and the room going from workshop to hunt.
+ * Every role hears both, and a hider hearing the door is the whole tension of
+ * the phase opening.
+ *
+ * `MatchPhase.Locking` is deliberately absent. The Forge plays `lock_seal` as it
+ * freezes the disguise, and a second one here would double it.
+ */
+export const PHASE_SOUNDS: Partial<Readonly<Record<MatchPhase, readonly SoundId[]>>> = {
+  [MatchPhase.InspectionIntro]: ["door_open", "hunt_riser"],
+  [MatchPhase.Reveal]: ["reveal_swell"],
+  [MatchPhase.Results]: ["results_resolve"],
+  [MatchPhase.RematchVote]: ["rematch_tick"],
 };
 
 /** How an innocent object protests when a warrant is spent on it (§5.10). */

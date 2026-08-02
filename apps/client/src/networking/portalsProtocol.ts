@@ -207,6 +207,27 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     to: connectionId,
     paint: PaintUpdateSchema,
   }),
+  /**
+   * Where an Inspector is looking from, reported to the host.
+   *
+   * The authority checks range and line of sight from an eye position, and
+   * refuses `inspector_position_unknown` for a player it has never been told
+   * about. On the loopback the Inspector *is* the authority, so writing the eye
+   * into the local spatial bridge was enough; over the relay the Inspector is
+   * usually not the host, and without this envelope every shot that client
+   * fires is refused. It is a client-reported position, which is the authority
+   * model Portals gives us (docs/PORTALS_CONSTRAINTS.md): the host still
+   * decides what may be shot from it.
+   *
+   * Null when the sender stops being an Inspector, so the host forgets an eye
+   * rather than keeping the last one it heard.
+   */
+  z.strictObject({
+    v: version,
+    t: z.literal("eye"),
+    to: connectionId,
+    eye: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).nullable(),
+  }),
   /** A client asking the host for a fresh sync after a join or a reconnect. */
   z.strictObject({ v: version, t: z.literal("resync") }),
   /**
@@ -408,6 +429,20 @@ export const MAX_COMMANDS_PER_SECOND = 20;
  * cadence the match settings budget for (§27.2).
  */
 export const MAX_FORGE_SNAPSHOTS_PER_SECOND = DEFAULT_MATCH_SETTINGS.maxForgeCommandHz;
+
+/**
+ * Inbound eye reports allowed per sender per second. A client sends at most one
+ * per flush, so the honest rate is 1000 / FLUSH_INTERVAL_MS; the allowance sits
+ * above it so ordinary timer jitter does not cost an Inspector their position.
+ */
+export const MAX_EYE_REPORTS_PER_SECOND = 15;
+
+/**
+ * How far the eye must travel before it is worth another message. An Inspector
+ * standing still would otherwise spend half their send allowance restating
+ * where they already are. Well under the shot tolerances the authority applies.
+ */
+export const EYE_REPORT_EPSILON_M = 0.01;
 
 /** Sliding-window counter for the relay's per-second send allowance. */
 export class RateWindow {

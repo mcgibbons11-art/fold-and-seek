@@ -141,12 +141,30 @@ describe("control hints", () => {
     }
   });
 
-  it("offer a hider no walk keys, because there is no walk", () => {
-    // CLAUDE.md override 4: a hider creeps by being dragged, and there is no
-    // jump. Printing WASD here would promise controls that do nothing.
-    const printed = HIDER_CONTROL_HINTS.flatMap((hint) => hint.keys);
-    for (const key of ["W", "A", "S", "D"]) expect(printed).not.toContain(key);
+  it("give a hider the walk keys as well as the handle drag", () => {
+    // CLAUDE.md override 2: a hider stays active and creeps on the same keys it
+    // ran on while folding, so both controls are real and both are printed.
+    const walk = HIDER_CONTROL_HINTS.find((hint) => hint.id === "walk");
+    expect(walk?.keys).toEqual(["W", "A", "S", "D"]);
     expect(HIDER_CONTROL_HINTS.map((hint) => hint.id)).toContain("drag");
+  });
+
+  it("put the jump on space for both roles, and the eyeline somewhere else", () => {
+    // CLAUDE.md override 6. Space was the Inspector-eyeline preview and had to
+    // move, because one key cannot be both a movement verb and a camera hold.
+    for (const hints of [HIDER_CONTROL_HINTS, INSPECTOR_CONTROL_HINTS]) {
+      const jump = hints.find((hint) => hint.id === "jump");
+      expect(jump?.keys).toEqual(["Space"]);
+    }
+    const eyeline = HIDER_CONTROL_HINTS.find((hint) => hint.id === "eyeline");
+    expect(eyeline?.keys).toEqual(["E"]);
+  });
+
+  it("show the left button doing both of the things it does", () => {
+    // CLAUDE.md override 5: a hold anywhere drives the camera, a press that
+    // lands on a handle poses. The same button, so it is printed twice.
+    const onLeft = HIDER_CONTROL_HINTS.filter((hint) => hint.keys.length === 1 && hint.keys[0] === "LMB");
+    expect(onLeft.map((hint) => hint.id)).toEqual(["camera", "drag"]);
   });
 
   it("give the Inspector locomotion, which is what they steer with", () => {

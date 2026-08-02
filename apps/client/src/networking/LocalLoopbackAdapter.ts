@@ -283,8 +283,13 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
   step(): void {
     const sim = this.sim;
     if (!sim) return;
-    this.publish(sim.tick(this.clock()));
-    this.driveBots(sim);
+    // One reading drives the whole step. A bot measures how much of the match it
+    // has to catch up on against the clock the phase machine was just advanced
+    // to, so taking a second reading for the bots would hand them a different
+    // moment from the one the authority is judging them in.
+    const nowMs = this.clock();
+    this.publish(sim.tick(nowMs));
+    this.driveBots(sim, nowMs);
     this.emitSync();
   }
 
@@ -355,14 +360,18 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
    * disguise in the Forge are the two things a seat must do for the match to
    * progress at all, so they live here; everything a bot chooses to do after
    * that is the brain's, and a round without one runs the clock out.
+   *
+   * `nowMs` is the step's own clock reading and is the only time a brain is
+   * given. Ticks are not counted anywhere: this interval is coalesced by the
+   * browser whenever the main thread is busy, so a brain that acted per callback
+   * would slow down exactly when the match did not.
    */
-  private driveBots(sim: MatchSimulation): void {
+  private driveBots(sim: MatchSimulation, nowMs: number): void {
     const phase = sim.getPhase();
     const brain = this.options.botBrain;
     // Taken once and shared: it is a defensive copy of the whole room, and one
     // per bot per tick would be several disguise poses of garbage a second.
     const publicState = brain === undefined ? null : sim.getPublicState();
-    const nowMs = this.clock();
 
     for (const [index, bot] of this.bots.entries()) {
       if (!bot.autoPlay) continue;
@@ -393,11 +402,11 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
         publicState,
         privateState: state,
       });
-      for (const action of actions) this.applyBotAction(bot.playerId, action);
+      for (const action of actions) this.applyBotAction(bot.playerId, action, nowMs);
     }
   }
 
-  private applyBotAction(playerId: string, action: BotAction): void {
+  private applyBotAction(playerId: string, action: BotAction, nowMs: number): void {
     const sim = this.sim;
     if (!sim) return;
     if (action.kind === "command") {
@@ -405,10 +414,10 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
       return;
     }
     // A creep is judged on its own terms, so it goes to the pose channel rather
-    // than through handleCommand, exactly as a human hider's does.
-    this.publish(
-      sim.recordForgeSnapshot(playerId, action.encodedPose, action.revision, this.clock()),
-    );
+    // than through handleCommand, exactly as a human hider's does, and against
+    // the moment the brain decided on it rather than a later reading of the
+    // clock, because the authority measures creep speed over that interval.
+    this.publish(sim.recordForgeSnapshot(playerId, action.encodedPose, action.revision, nowMs));
   }
 
   /**

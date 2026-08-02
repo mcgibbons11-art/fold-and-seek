@@ -35,6 +35,7 @@ export {
   type RoundEngineState,
   type RoundSessionOptions,
 } from "./RoundSession";
+export { dealSeed, type GameRound } from "./round";
 export {
   createLocalRound,
   LOCAL_ROUND_BOTS,
@@ -42,3 +43,9 @@ export {
   type LocalRound,
   type LocalRoundOptions,
 } from "./localRound";
+export {
+  createPortalsRound,
+  PORTALS_ROUND_CHANNEL,
+  type PortalsRound,
+  type PortalsRoundOptions,
+} from "./portalsRound";

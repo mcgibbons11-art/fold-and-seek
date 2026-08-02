@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type ReactElement } from "react";
-import { GameHost } from "../engine/GameHost";
+import { GameHost, type RoundLoadProgress } from "../engine/GameHost";
 import type { ForgeController } from "../forge/ForgeController";
 import {
   createLocalRound,
   LOCAL_ROUND_NAME,
   seedFromLocation,
-  type LocalRound,
 } from "../gameplay/localRound";
+import { createPortalsRound, PORTALS_ROUND_CHANNEL } from "../gameplay/portalsRound";
+import type { GameRound } from "../gameplay/round";
 import type { RoundSession } from "../gameplay/RoundSession";
+import { detectPortalsSession, type PortalsBoot } from "../networking/portalsBoot";
 import { isQualityTier, QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
+import type { ConnectionDetail } from "../networking/NetworkAdapter";
 import { RendererInitError, type DeviceEvent, type RenderBackend } from "../rendering/RendererManager";
 import { ForgeHud } from "../ui/ForgeHud";
+import { LoadingScreen } from "../ui/LoadingScreen";
 import { MainMenu } from "../ui/MainMenu";
 import { RoundHud } from "../ui/RoundHud";
 
@@ -26,7 +30,7 @@ interface GpuCapableNavigator extends Navigator {
 
 /** Everything one live round holds open, so leaving it releases all of it. */
 interface ActiveRound {
-  readonly round: LocalRound;
+  readonly round: GameRound;
   readonly session: RoundSession;
 }
 
@@ -65,6 +69,20 @@ function describeFailure(error: unknown): { headline: string; detail: string } {
   };
 }
 
+/** What to tell the player about a join the room refused (§27.3 wording). */
+const JOIN_FAILURE_COPY: Readonly<Record<string, string>> = {
+  room_full: "That room already has as many players as a round allows.",
+  duplicate_session: "This account is already playing from another tab.",
+  join_failed: "The room would not let this game join. Try again in a moment.",
+  transport_unavailable: "Multiplayer is unavailable here.",
+};
+
+function joinFailureCopy(detail: ConnectionDetail, error: unknown): string {
+  const known = detail === null ? undefined : JOIN_FAILURE_COPY[detail];
+  if (known !== undefined) return known;
+  return error instanceof Error ? error.message : "The round could not be opened.";
+}
+
 const panelStyle: CSSProperties = {
   position: "absolute",
   left: 20,
@@ -96,10 +114,16 @@ export function App(): ReactElement {
   const [tier, setTier] = useState<QualityTier>("high");
   const [forge, setForge] = useState<ForgeController | null>(null);
   const [round, setRound] = useState<ActiveRound | null>(null);
-  const [startingRound, setStartingRound] = useState(false);
+  /** The Portals session, or null when this page is not inside Portals. */
+  const [portals, setPortals] = useState<PortalsBoot | null>(null);
+  const [loading, setLoading] = useState<RoundLoadProgress | null>(null);
+  /** Why the last attempt to open a round did not get as far as the shop. */
+  const [roundError, setRoundError] = useState<string | null>(null);
   const [deviceFault, setDeviceFault] = useState<DeviceEvent | null>(null);
   const hostRef = useRef<GameHost | null>(null);
   const roundRef = useRef<ActiveRound | null>(null);
+  /** Read inside the click handler, where the loading state itself is stale. */
+  const loadingRef = useRef(false);
 
   useEffect(() => {
     const canvas = document.getElementById("game-canvas");
@@ -112,7 +136,14 @@ export function App(): ReactElement {
     let host: GameHost | null = null;
 
     const runBootSequence = async (): Promise<void> => {
-      if (!(await hasDrawableBackend())) {
+      // Both probes ask something outside the page and neither depends on the
+      // other, so the slower one sets the length of the boot rather than the
+      // sum of the two.
+      const [drawable, session] = await Promise.all([
+        hasDrawableBackend(),
+        detectPortalsSession(),
+      ]);
+      if (!drawable) {
         if (!disposed) {
           setBoot({ kind: "failed", headline: NO_BACKEND_HEADLINE, detail: NO_BACKEND_DETAIL });
         }
@@ -121,6 +152,9 @@ export function App(): ReactElement {
       if (disposed) {
         return;
       }
+      // A game page outside a room plays exactly as it does offline: Portals.net
+      // is reachable there, but there is nobody in particular to reach.
+      setPortals(session !== null && session.context === "room" ? session : null);
       setBoot({ kind: "initializing" });
 
       host = new GameHost(
@@ -207,40 +241,68 @@ export function App(): ReactElement {
 
   const onPlayRound = useCallback(() => {
     const host = hostRef.current;
-    if (host === null || roundRef.current !== null) {
+    if (host === null || roundRef.current !== null || loadingRef.current) {
       return;
     }
-    setStartingRound(true);
+    loadingRef.current = true;
+    setLoading({ label: "the shop", fraction: 0 });
 
-    const local = createLocalRound({ seed: seedFromLocation(window.location.search) });
+    // Inside a Portals room the round is the people who are in it; anywhere
+    // else it is this tab and its bots. Everything after this point is the
+    // same, because the director, the session and the engine all read the
+    // NetworkAdapter interface and nothing narrower.
+    const opening: { round: GameRound; channel: string; displayName: string } =
+      portals === null
+        ? {
+            round: createLocalRound({ seed: seedFromLocation(window.location.search) }),
+            channel: LOCAL_ROUND_NAME,
+            displayName: DEFAULT_PLAYER_NAME,
+          }
+        : {
+            round: createPortalsRound({ sdk: portals.sdk }),
+            channel: PORTALS_ROUND_CHANNEL,
+            displayName: portals.player.displayName ?? DEFAULT_PLAYER_NAME,
+          };
+    const { round: opened } = opening;
+
+    setRoundError(null);
     const abandon = (error: unknown): void => {
       console.error("[round] could not open the shop", error);
       roundRef.current = null;
-      local.dispose();
+      loadingRef.current = false;
+      opened.dispose();
       host.exitRoundMode();
-      setStartingRound(false);
+      setLoading(null);
+      // A refused join is the common case here and it is entirely the player's
+      // business why: a full room and a second tab of one account read as the
+      // game doing nothing at all otherwise.
+      setRoundError(joinFailureCopy(opened.adapter.getConnection().detail, error));
     };
 
-    let active: ActiveRound;
-    try {
-      // Building the map allocates the whole shop against the live device, so
-      // it can fail outright. Leaving the menu on "opening" would strand the
-      // player with no way back and no reason given.
-      active = { round: local, session: host.enterRoundMode(local.adapter, local.director, local.spatial) };
-    } catch (error) {
-      abandon(error);
-      return;
-    }
-    roundRef.current = active;
-
-    local.adapter
-      .join(LOCAL_ROUND_NAME, DEFAULT_PLAYER_NAME)
-      .then(() => {
+    // The build yields the frame back between zones, so the loading screen
+    // below animates and the menu room keeps drawing behind it. It resolves
+    // null when the player left before the shop was ready.
+    host
+      .enterRoundMode(opened.adapter, opened.director, opened.spatial, setLoading)
+      .then(async (session) => {
+        if (session === null) {
+          opened.dispose();
+          loadingRef.current = false;
+          setLoading(null);
+          return;
+        }
+        const active: ActiveRound = { round: opened, session };
+        roundRef.current = active;
+        // The loopback has no transport to acquire and the Portals adapter
+        // waits on the SDK handshake, which has already happened by now.
+        await opened.adapter.connect();
+        await opened.adapter.join(opening.channel, opening.displayName);
+        loadingRef.current = false;
         setRound(active);
-        setStartingRound(false);
+        setLoading(null);
       })
       .catch(abandon);
-  }, []);
+  }, [portals]);
 
   const onLeaveRound = useCallback(() => {
     const active = roundRef.current;
@@ -308,13 +370,19 @@ export function App(): ReactElement {
     return <ForgeHud controller={forge} onExit={onLeaveForge} />;
   }
 
+  if (loading !== null) {
+    return <LoadingScreen progress={loading} />;
+  }
+
   return (
     <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
       <MainMenu
         backend={boot.backend}
         onPlayRound={onPlayRound}
         onForgePractice={onEnterForge}
-        starting={startingRound}
+        starting={false}
+        multiplayer={portals !== null}
+        notice={roundError}
       />
       <div style={panelStyle}>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
