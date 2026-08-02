@@ -138,7 +138,12 @@ export function App(): ReactElement {
             }
           },
         },
-        { forceWebGL: new URLSearchParams(window.location.search).has("webgl") },
+        // WebGL 2 is the launch default: across every measurement session the
+        // WebGPU path rendered the shop erratically (0.1-5 fps against a
+        // consistent 12-21 on WebGL 2, same content, same machine) and the
+        // cause is still open — see docs/STATUS.md "WebGPU shop performance".
+        // `?webgpu` opts back in for investigation.
+        { forceWebGL: !new URLSearchParams(window.location.search).has("webgpu") },
       );
       hostRef.current = host;
 
