@@ -13,7 +13,8 @@ import {
   type InspectorSystem,
 } from "../inspector";
 import type { AABB } from "../inspector/navData";
-import { NAV_DATA } from "../world/maps/nav";
+import { MIMIC_NAV_DATA, NAV_DATA } from "../world/maps/nav";
+import { OFFICE_DOOR_NAME } from "../world/maps/props";
 import { CURIOSITY_SHOP_OBJECTS } from "../world/maps/registry";
 import { encodeDisguiseState } from "../mimic/poseWire";
 import type { NetworkAdapter, Unsubscribe } from "../networking/NetworkAdapter";
@@ -91,6 +92,60 @@ const SURVEY_HEIGHT_M = 2.35;
 const SURVEY_RAD_PER_SECOND = 0.06;
 const SURVEY_FOV_DEG = 55;
 
+/**
+ * Where the Inspector waits out the fold: inside the Security Office, on the
+ * same slow turn, behind a shut door (§5.9).
+ *
+ * The sales-floor survey used to run for every role in every phase, which meant
+ * the one player who must not know where anybody is spent the whole of the Forge
+ * looking down on the shop while the Mimics chose their places. The office is
+ * the room the fiction already puts them in, and the map makes it work without
+ * a curtain or a blindfold: the partition is solid to a metre, the player is
+ * 0.35 m tall, and the only opening is the doorway the door now fills.
+ */
+const OFFICE_VIGIL_CENTRE = new THREE.Vector3(5.9, 0, 3.7);
+const OFFICE_VIGIL_TARGET = new THREE.Vector3(4.95, 0.35, 3.6);
+const OFFICE_VIGIL_RADIUS_M = 0.55;
+/**
+ * Eye height for the vigil, and the number that does the work.
+ *
+ * The office partition is solid to a metre and glazed above it, onto the back
+ * workshop where a Mimic may well be folding. Held below the dado and tilted
+ * down at the door, the frame never reaches the glass, so what keeps the shop
+ * out of the shot is the geometry rather than a promise about the camera path.
+ */
+const OFFICE_VIGIL_HEIGHT_M = 0.7;
+
+/**
+ * When the Inspector is shut in. It is the fold and nothing else: the baseline
+ * scan before it is the phase whose whole point is that the Inspector walks an
+ * undisturbed shop and memorises it (§5.6), and no Mimic is on their feet yet.
+ * The moment the Forge opens they are, and that is the moment the office closes.
+ */
+const OFFICE_VIGIL_PHASES: ReadonlySet<MatchPhase> = new Set([
+  MatchPhase.Forge,
+  MatchPhase.Locking,
+]);
+
+/** Phases in which the office door stands open, which is the hunt and after. */
+const DOOR_OPEN_PHASES: ReadonlySet<MatchPhase> = new Set([
+  MatchPhase.InspectionIntro,
+  MatchPhase.Inspection,
+  MatchPhase.FinalCountdown,
+  MatchPhase.Reveal,
+  MatchPhase.Results,
+  MatchPhase.RematchVote,
+]);
+
+/**
+ * How far the office door swings and how long it takes. The angle lays the leaf
+ * back along the inside of the partition, out of the walk-out; the duration is
+ * the length of the `door_open` cue the hunt opens on, so the sound and the
+ * movement are one event.
+ */
+const OFFICE_DOOR_OPEN_RAD = 1.5;
+const OFFICE_DOOR_SWING_SECONDS = 1.1;
+
 /** What the Forge says once the disguise is standing in the room (override 2). */
 const HUNT_EDIT_HINT = "Your disguise is in the room. Keep shaping it, and creep slowly.";
 
@@ -153,6 +208,10 @@ export class RoundSession {
   private inspectablesRevision = -1;
 
   private surveyAngle = 0.6;
+  /** The office door leaf, resolved from the map once and cached. */
+  private officeDoor: THREE.Object3D | null = null;
+  private officeDoorSearched = false;
+  private officeDoorAngleRad = 0;
   private publishedRevision = -1;
   private sincePublishMs = 0;
   private lastPhase: MatchPhase | null = null;
@@ -256,9 +315,11 @@ export class RoundSession {
         this.driveInspector(dtMs, nowMs, state);
         break;
       case "survey":
-        this.driveSurvey(dtMs);
+        this.driveSurvey(dtMs, state);
         break;
     }
+
+    this.stepOfficeDoor(dtMs, state);
 
     this.publishPose(dtMs, state);
     this.publishEngineState();
@@ -518,8 +579,10 @@ export class RoundSession {
       // the practice room's eight metre box, dragging a Mimic off any far wall.
       workspace: SHOP_FORGE_WORKSPACE,
       // The same walkable geometry the Inspector hunts over, so a Mimic runs
-      // for its hiding place on the shop's own floors, blockers and climbs.
-      navData: NAV_DATA,
+      // for its hiding place on the shop's own floors, blockers and climbs —
+      // with the office door shut, which is the one square metre of the shop a
+      // Mimic may never stand in (§10.4).
+      navData: MIMIC_NAV_DATA,
     });
     this.forge = forge;
     this.forgeLocked = false;
@@ -640,7 +703,7 @@ export class RoundSession {
 
     const spawn = NAV_DATA.spawnPoints.inspectors[0];
     if (spawn !== undefined) inspector.spawnAt(spawn);
-    inspector.setAmmo(state.self.warrantsRemaining ?? state.warrantsRemaining ?? 0);
+    this.loadWarrants(inspector, state);
 
     // The authority refuses an accusation from an Inspector whose eye it has
     // never been told, so the spawn is reported before the first frame runs.
@@ -669,7 +732,7 @@ export class RoundSession {
     }
     // Nothing may be shot during the walk-out, and the reveal ends the hunt.
     inspector.enabled = state.phase !== MatchPhase.InspectionIntro;
-    inspector.setAmmo(state.self.warrantsRemaining ?? state.warrantsRemaining ?? 0);
+    this.loadWarrants(inspector, state);
     inspector.update(dtMs, nowMs);
     // The Inspector never creeps: the cap belongs to a disguised hider.
     this.footsteps.update(dtMs, inspector.controller, false);
@@ -681,6 +744,16 @@ export class RoundSession {
     if (selfId !== null) this.options.spatial.setInspectorEye(selfId, inspector.cameraRig.eye);
   }
 
+
+  /**
+   * Warrants into the gun. The total is what the drum is built with and the
+   * remainder is what is still in it, so the chambered rounds on the model and
+   * the magazine in the HUD are the same two numbers.
+   */
+  private loadWarrants(inspector: InspectorSystem, state: RoundViewState): void {
+    const remaining = state.self.warrantsRemaining ?? state.warrantsRemaining ?? 0;
+    inspector.setAmmo(remaining, state.warrantsTotal ?? remaining);
+  }
 
   /**
    * The warrant gun (override 1), heard from the state the weapon publishes
@@ -745,18 +818,73 @@ export class RoundSession {
 
   // ------------------------------------------------------------------ survey
 
-  private driveSurvey(dtMs: number): void {
+  /**
+   * The between-phases camera, and the one thing about it the role decides.
+   *
+   * Everybody else turns slowly over the sales floor. An Inspector who has not
+   * been let out yet turns just as slowly inside the Security Office, because
+   * the sales floor is what they are not allowed to see: the Mimics are out
+   * there choosing hiding places, and a round the seeker watched being set up is
+   * no longer a round. Once the hunt has opened the office is behind them and
+   * the shop is theirs, so the reveal and the results run the ordinary survey.
+   */
+  private driveSurvey(dtMs: number, state: RoundViewState): void {
+    const vigil = this.waitingInTheOffice(state);
+    // The survey turns about whatever it is looking at; the vigil turns about
+    // the middle of the office and keeps looking at the door, because the door
+    // is the thing the Inspector is waiting on.
+    const centre = vigil ? OFFICE_VIGIL_CENTRE : SURVEY_TARGET;
+    const target = vigil ? OFFICE_VIGIL_TARGET : SURVEY_TARGET;
+    const radius = vigil ? OFFICE_VIGIL_RADIUS_M : SURVEY_RADIUS_M;
+    const height = vigil ? OFFICE_VIGIL_HEIGHT_M : SURVEY_HEIGHT_M;
+
     this.surveyAngle += (dtMs / 1000) * SURVEY_RAD_PER_SECOND;
     this.viewCamera.position.set(
-      SURVEY_TARGET.x + Math.sin(this.surveyAngle) * SURVEY_RADIUS_M,
-      SURVEY_HEIGHT_M,
-      SURVEY_TARGET.z + Math.cos(this.surveyAngle) * SURVEY_RADIUS_M,
+      centre.x + Math.sin(this.surveyAngle) * radius,
+      height,
+      centre.z + Math.cos(this.surveyAngle) * radius,
     );
-    this.viewCamera.lookAt(SURVEY_TARGET);
+    this.viewCamera.lookAt(target);
     if (Math.abs(this.viewCamera.fov - SURVEY_FOV_DEG) > 1e-3) {
       this.viewCamera.fov = SURVEY_FOV_DEG;
       this.viewCamera.updateProjectionMatrix();
     }
+  }
+
+  /** True while this client is the Inspector and the Mimics are folding. */
+  private waitingInTheOffice(state: RoundViewState): boolean {
+    return state.self.role === "inspector" && OFFICE_VIGIL_PHASES.has(state.phase);
+  }
+
+  /**
+   * Swings the office door. It is shut for as long as the Inspector is behind
+   * it and opens on the hunt, over roughly the length of the cue that announces
+   * it, so the sound the whole room hears has something to have happened.
+   *
+   * The leaf is a hero prop whose parts all sit on the hinge, so writing one
+   * angle onto each of them is the whole of the animation. Nothing in the
+   * navigation data moves with it: the Inspector's map has the doorway open
+   * because they only ever walk it during the hunt, and a Mimic's has it shut
+   * for the whole round because §10.4 never lets them in.
+   */
+  private stepOfficeDoor(dtMs: number, state: RoundViewState): void {
+    const door = this.resolveOfficeDoor();
+    if (door === null) return;
+
+    const wanted = DOOR_OPEN_PHASES.has(state.phase) ? OFFICE_DOOR_OPEN_RAD : 0;
+    if (this.officeDoorAngleRad !== wanted) {
+      const step = ((dtMs / 1000) * OFFICE_DOOR_OPEN_RAD) / OFFICE_DOOR_SWING_SECONDS;
+      const gap = wanted - this.officeDoorAngleRad;
+      this.officeDoorAngleRad += Math.abs(gap) <= step ? gap : Math.sign(gap) * step;
+    }
+    for (const part of door.children) part.rotation.y = this.officeDoorAngleRad;
+  }
+
+  private resolveOfficeDoor(): THREE.Object3D | null {
+    if (this.officeDoorSearched) return this.officeDoor;
+    this.officeDoorSearched = true;
+    this.officeDoor = this.options.scene.getObjectByName(OFFICE_DOOR_NAME) ?? null;
+    return this.officeDoor;
   }
 
   // ---------------------------------------------------------------- HUD feed

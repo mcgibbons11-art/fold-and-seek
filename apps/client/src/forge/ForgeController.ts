@@ -38,12 +38,15 @@ import {
   type PanelState,
 } from "../mimic/panels";
 import type { CharacterController } from "../inspector/CharacterController";
+import { nearestBlockerEntry } from "../inspector/geometry";
 import {
   BOB_AMPLITUDE_M as CAMERA_BOB_AMPLITUDE_M,
   BOB_RATE_RAD_PER_M as CAMERA_BOB_RATE_RAD_PER_M,
 } from "../inspector/InspectorCamera";
+import { DEFAULT_LOOK_SENSITIVITY } from "../inspector/InspectorInput";
 import { WORLD_SCALE, type AABB, type NavData, type Vec3Like } from "../inspector/navData";
 import { BodyLanguage, type BodyPosture } from "./BodyLanguage";
+import { LocomotionRig } from "./LocomotionRig";
 import { HiderLocomotion } from "./HiderLocomotion";
 import {
   boneIndex,
@@ -304,9 +307,27 @@ const CAMERA_FOLLOW_SNAP_M = WORLD_SCALE.playerHeight * 1e-4;
  */
 const CAMERA_LANDING_ECHO_SHARE = 0.55;
 
-const ORBIT_PER_PIXEL = 0.007;
-const PITCH_PER_PIXEL = 0.005;
+/**
+ * Radians the shot turns per pixel of drag, the same number for both axes and
+ * the same number the Inspector's own look uses. A game has one turn rate: at
+ * the old 0.007 a four-hundred-pixel drag swung the view through 160 degrees,
+ * which reads as the room being thrown past the player rather than as walking
+ * around them, and a yaw that answered faster than the pitch bent every
+ * diagonal drag into a curve.
+ */
+const ORBIT_PER_PIXEL = DEFAULT_LOOK_SENSITIVITY;
+const PITCH_PER_PIXEL = DEFAULT_LOOK_SENSITIVITY;
 const ZOOM_PER_NOTCH = 0.0016;
+
+/**
+ * Gap kept between the camera and whatever the boom would otherwise pass
+ * through, as a share of body height, and the shortest the boom may be pulled
+ * to. Without them the orbit swung straight through the floorboards and the
+ * legs of the furniture: the pivot was still on the body, but the body was
+ * behind a carpet, which is the same thing as having lost it.
+ */
+const ORBIT_SKIN_M = WORLD_SCALE.playerHeight * 0.069;
+const ORBIT_MIN_RADIUS_M = WORLD_SCALE.playerHeight * 0.9;
 
 /**
  * Handle radius in metres at one metre from the camera, kept constant on
@@ -534,6 +555,12 @@ export class ForgeController {
    */
   private readonly anchorObjects: readonly THREE.Object3D[];
   private readonly workspace: ForgeWorkspace;
+  /**
+   * The map's own geometry, or null in the practice room. The camera reads its
+   * blockers to keep the boom out of the floor and the furniture, which is the
+   * same query the Inspector's rig makes of the same data.
+   */
+  private readonly navData: NavData | null;
   /** Null when the map published no walkable geometry to run the body over. */
   private readonly locomotion: HiderLocomotion | null;
   private readonly raycaster = new THREE.Raycaster();
@@ -572,7 +599,13 @@ export class ForgeController {
   private state: DisguiseState;
   private lockedPayload: LockedDisguise | null = null;
 
-  private orbitTarget = new THREE.Vector3();
+  /**
+   * The point the shot turns about. It is derived from the body every frame
+   * rather than accumulated, so nothing that moves the creature — a walk, a
+   * pelvis drag, an undo, an anchor hauling the root onto a shelf — can leave
+   * the camera turning about a place the creature no longer is.
+   */
+  private readonly orbitTarget = new THREE.Vector3();
   private yaw = 0.7;
   private pitch = 0.22;
   private radius = CAMERA_START_RADIUS;
@@ -619,7 +652,7 @@ export class ForgeController {
   private hoveredHandle: Handle | null = null;
   private draggedHandle: Handle | null = null;
   private dragPointerId = -1;
-  private cameraDrag: "orbit" | "pan" | null = null;
+  private cameraDrag: "orbit" | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
   private poseEditBefore: PoseSnapshot | null = null;
@@ -633,6 +666,7 @@ export class ForgeController {
   private walkAnchors: readonly AnchorState[] = [];
   private readonly walkPosition = { x: 0, y: 0, z: 0 };
   private readonly bodyLanguage = new BodyLanguage();
+  private readonly gaitRig = new LocomotionRig();
   private readonly postureRotation = new THREE.Quaternion();
   private readonly postureAxis = new THREE.Vector3();
   private readonly postureRoot = new THREE.Vector3();
@@ -669,8 +703,6 @@ export class ForgeController {
   private panelDragBefore: PanelState | null = null;
   private panelDragAnchorBefore: AnchorState | null = null;
   private panelSnapCandidate: AnchorCapture | null = null;
-  private readonly scratchRight = new THREE.Vector3();
-  private readonly scratchUp = new THREE.Vector3();
   private readonly scratchForward = new THREE.Vector3();
 
   constructor(options: ForgeControllerOptions) {
@@ -681,6 +713,7 @@ export class ForgeController {
       (object) => object.userData[MIMIC_BODY_TAG] !== true,
     );
     this.workspace = options.workspace ?? TEST_ROOM_WORKSPACE;
+    this.navData = options.navData ?? null;
     this.locomotion =
       options.navData === undefined ? null : new HiderLocomotion(options.navData);
 
@@ -749,11 +782,7 @@ export class ForgeController {
       ownsPointerEvent: (event) => this.ownsPointerEvent(event),
     });
 
-    this.orbitTarget.set(
-      origin.x,
-      origin.y + WORLD_SCALE.playerHeight * ORBIT_TARGET_BODY_SHARE,
-      origin.z,
-    );
+    this.syncOrbitTarget();
     // The shot starts where the body is rather than chasing it in from the last
     // one: an opening frame has nothing to catch up with.
     this.cameraTarget.copy(this.orbitTarget);
@@ -811,7 +840,7 @@ export class ForgeController {
   update(dtMs = 0): void {
     this.refreshCreepBudget(dtMs);
     this.stepLocomotion(dtMs);
-    this.stepBodyLanguage(dtMs / 1_000);
+    this.stepBodyMotion(dtMs / 1_000);
     this.stepCameraFollow(dtMs / 1_000);
     this.layoutHandles();
     // Cheap when nothing was painted: a reference check per part and an upload
@@ -930,7 +959,14 @@ export class ForgeController {
     this.boundsPosition.copy(root.position);
     root.quaternion.identity();
     root.position.set(0, 0, 0);
+    // And on the authored limbs, not the striding ones. The gait is as
+    // cosmetic as the lean and reaches the box the same way if it is left on:
+    // an owner mid-step would be shootable where their swinging arm is rather
+    // than where every peer computes it from the pose they published.
+    const striding = !this.gaitRig.neutral;
+    if (striding) this.mimic.applyPose(this.pose);
     this.bodyBox.setFromObject(root);
+    if (striding) this.applyPoseToVisual();
     root.quaternion.copy(this.boundsRotation);
     root.position.copy(this.boundsPosition);
     // `setFromObject` left every part's world matrix computed against the
@@ -991,13 +1027,11 @@ export class ForgeController {
     for (const target of this.targets.values()) {
       target.set(target.x + dx, target.y + dy, target.z + dz);
     }
-    this.orbitTarget.x += dx;
-    this.orbitTarget.y += dy;
-    this.orbitTarget.z += dz;
     this.pose.rootPosition.set(x, y, z);
-    // The camera is not placed here. `stepCameraFollow` runs later in the same
-    // frame and moves the shot toward this new orbit point with some weight,
-    // rather than the shot being welded to the body every step it takes.
+    // The camera is not placed here, and neither is its orbit point.
+    // `stepCameraFollow` runs later in the same frame, reads the point off the
+    // body it now finds, and moves the shot toward it with some weight, rather
+    // than the shot being welded to the body every step it takes.
     // Re-solves and re-captures the disguise, which is what advances the
     // revision the round publishes.
     this.solveAndRefresh();
@@ -1022,20 +1056,44 @@ export class ForgeController {
    * shelf tells an Inspector which of the six vases is a player, which is a
    * worse giveaway than any pose mistake the Forge could make.
    */
-  private stepBodyLanguage(dtSeconds: number): void {
+  private stepBodyMotion(dtSeconds: number): void {
     const locomotion = this.locomotion;
     if (locomotion === null) return;
     // A locked disguise, and a body being authored, both stand exactly as posed:
     // a handle is dragged to a place on the body, so the body has to be at the
-    // place the pose says it is while the player is reaching for it.
-    if (this.locked || this.authoring()) {
+    // place the pose says it is while the player is reaching for it. A locked
+    // one has a second reason — an anonymized object that breathes on the shelf
+    // tells an Inspector which of the six vases is a player.
+    const suppressed = this.locked || this.authoring();
+    if (suppressed) {
       if (!this.bodyLanguage.neutral) {
         this.bodyLanguage.reset();
         this.applyPosture(this.bodyLanguage.posture);
       }
-      return;
+    } else {
+      this.applyPosture(this.bodyLanguage.update(dtSeconds, locomotion.sample));
     }
-    this.applyPosture(this.bodyLanguage.update(dtSeconds, locomotion.sample));
+    // The gait eases out rather than being cut, because the pose handles are
+    // laid out on the body as it is drawn: cutting it would move a grip out
+    // from under the pointer that was reaching for it.
+    if (!suppressed || !this.gaitRig.neutral) {
+      this.gaitRig.update(dtSeconds, locomotion.sample, locomotion.motion.speed, suppressed);
+      this.applyPoseToVisual();
+    }
+  }
+
+  /**
+   * Draws the body wearing this frame's gait. The rig hands back the authored
+   * pose itself while it is neutral, so a locked or hand-posed body is drawn
+   * from exactly the state the player authored and nothing is copied at all.
+   */
+  private applyPoseToVisual(): void {
+    this.mimic.applyPose(this.gaitRig.pose(this.pose));
+  }
+
+  /** Where a bone is as the body is carrying it, gait included. */
+  private drawnBonePosition(index: number): Vec3Like | undefined {
+    return this.gaitRig.pose(this.pose).worldPositions[index];
   }
 
   /** True while the pointer is on the body rather than steering it. */
@@ -1096,12 +1154,35 @@ export class ForgeController {
   }
 
   /**
+   * Puts the orbit point back on the creature's chest. Just over halfway up the
+   * body height keeps the head clear of the top of the frame, and reading it off
+   * the root each frame is what makes the shot turn about the creature however
+   * the creature came to be there.
+   *
+   * A handle drag is the one thing it sits out. The pointer moves the body along
+   * a plane fixed to the view, so a camera that chased the body mid-drag would
+   * move the plane the drag is being measured on and the two would push each
+   * other across the room. It resyncs on release, and the follow lag glides the
+   * shot back rather than cutting to it.
+   */
+  private syncOrbitTarget(): void {
+    if (this.draggedHandle !== null) return;
+    const root = this.pose.rootPosition;
+    this.orbitTarget.set(
+      root.x,
+      root.y + WORLD_SCALE.playerHeight * ORBIT_TARGET_BODY_SHARE,
+      root.z,
+    );
+  }
+
+  /**
    * Moves the shot toward the orbit point, adds the walk bob, and lets the
    * camera feel the landing the body just took. The bob is quoted against body
    * height with the same constants the Inspector's own rig uses, so the two
    * cameras breathe at one rate rather than at two.
    */
   private stepCameraFollow(dtSeconds: number): void {
+    this.syncOrbitTarget();
     if (this.preview !== "none") {
       this.cameraTarget.copy(this.orbitTarget);
       this.updateCamera();
@@ -1650,18 +1731,13 @@ export class ForgeController {
   }
 
   /**
-   * Recentres the orbit on the Mimic, which an arrangement may have carried. The
-   * height comes from the root and the body-height share rather than from the
-   * pelvis bone, so a folded arrangement that tucks its hips does not drop the
-   * whole frame with them. The zoom is left where the player put it.
+   * Cuts the shot to the Mimic, which an arrangement may have carried across the
+   * room. The orbit point follows the body by itself; what this adds is that the
+   * shot arrives with it rather than sliding after it. The zoom and the angle
+   * are left where the player put them.
    */
   private frameMimic(): void {
-    const root = this.state.root.position;
-    this.orbitTarget.set(
-      root[0],
-      root[1] + WORLD_SCALE.playerHeight * ORBIT_TARGET_BODY_SHARE,
-      root[2],
-    );
+    this.syncOrbitTarget();
     // Switching arrangement is a cut, not a move, so the shot goes with it
     // rather than sliding across the shop after a body that teleported.
     this.cameraTarget.copy(this.orbitTarget);
@@ -1777,7 +1853,7 @@ export class ForgeController {
     this.mimic.applyForms(this.pose);
     this.mimic.applyPanels(this.state.panels);
     this.mimic.applyMaterials(this.state.materials);
-    this.mimic.applyPose(this.pose);
+    this.applyPoseToVisual();
     this.layoutHandles();
     this.layoutAnchorMarkers();
     this.layoutPanelTipHandles();
@@ -2098,7 +2174,7 @@ export class ForgeController {
     );
     clampPanelState(panel);
     this.mimic.applyPanels(this.state.panels);
-    this.mimic.applyPose(this.pose);
+    this.applyPoseToVisual();
     return true;
   }
 
@@ -2587,11 +2663,12 @@ export class ForgeController {
    */
   private layoutHandles(): void {
     for (const handle of this.handles) {
-      const world = this.pose.worldPositions[handle.boneIndex];
+      const world = this.drawnBonePosition(handle.boneIndex);
       if (world === undefined) continue;
       // On the joint as the body is carrying it, not as the pose authored it:
       // a grip a few millimetres off the shoulder it belongs to is a grip the
-      // player reaches for and misses.
+      // player reaches for and misses. That is the gait as well as the lean —
+      // a knee mid-stride is a long way from where the pose left it.
       this.toPosturedWorld(world, handle.group.position);
       const distance = this.camera.position.distanceTo(handle.group.position);
       const radius = clamp(
@@ -2644,17 +2721,15 @@ export class ForgeController {
       // the capture phase, so stopping propagation here would swallow the press
       // before it ever reached the brush. In paint mode the left button belongs
       // to the brush and the Forge does not touch the event at all. Right-drag
-      // orbit, middle-drag and shift-drag pan still work while painting.
-      if (this.paintOwnsPointer() && event.button === 0 && !event.shiftKey) return;
+      // and middle-drag still turn the shot while painting.
+      if (this.paintOwnsPointer() && event.button === 0) return;
       event.stopPropagation();
       event.preventDefault();
       this.lastPointerX = event.clientX;
       this.lastPointerY = event.clientY;
 
-      if (event.button === 2) {
+      if (event.button === 2 || event.button === 1) {
         this.cameraDrag = "orbit";
-      } else if (event.button === 1 || (event.button === 0 && event.shiftKey)) {
-        this.cameraDrag = "pan";
       } else if (event.button === 0 && !this.beginLeftPress(event)) {
         // Nothing under the pointer to edit, so the press belongs to the camera.
         // Right-drag orbits too, but a left-drag on empty space is the gesture
@@ -2684,8 +2759,6 @@ export class ForgeController {
           CAMERA_MAX_PITCH,
         );
         this.updateCamera();
-      } else if (this.cameraDrag === "pan") {
-        this.panCamera(event.clientX - this.lastPointerX, event.clientY - this.lastPointerY);
       } else if (this.draggedHandle !== null) {
         this.dragHandle(this.draggedHandle);
       } else if (this.draggedPanelSocket !== null) {
@@ -3191,17 +3264,6 @@ export class ForgeController {
     return hits[0] ?? null;
   }
 
-  private panCamera(deltaX: number, deltaY: number): void {
-    const scale = (this.radius * 1.4) / Math.max(this.viewportHeight, 1);
-    this.camera.getWorldDirection(this.scratchForward);
-    this.scratchRight.crossVectors(this.scratchForward, this.camera.up).normalize();
-    this.scratchUp.crossVectors(this.scratchRight, this.scratchForward).normalize();
-    this.orbitTarget.addScaledVector(this.scratchRight, -deltaX * scale);
-    this.orbitTarget.addScaledVector(this.scratchUp, deltaY * scale);
-    this.orbitTarget.y = clamp(this.orbitTarget.y, 0, this.workspace.maxY);
-    this.updateCamera();
-  }
-
   private updateCamera(): void {
     if (this.preview !== "none") {
       this.placePreviewCamera();
@@ -3209,15 +3271,49 @@ export class ForgeController {
     }
     // The orbit angle and distance are the player's and answer at once; only the
     // point being orbited lags, and the sway rides on top of wherever it got to.
-    const horizontal = Math.cos(this.pitch) * this.radius;
     const targetY = this.cameraTarget.y + this.cameraSway();
-    this.camera.position.set(
-      this.cameraTarget.x + Math.sin(this.yaw) * horizontal,
-      targetY + Math.sin(this.pitch) * this.radius,
-      this.cameraTarget.z + Math.cos(this.yaw) * horizontal,
-    );
     this.scratchVector.set(this.cameraTarget.x, targetY, this.cameraTarget.z);
+
+    // Out from the creature along the boom, which is the direction the camera
+    // would have to travel to reach where the angle asks for it.
+    const cosPitch = Math.cos(this.pitch);
+    this.scratchForward.set(
+      Math.sin(this.yaw) * cosPitch,
+      Math.sin(this.pitch),
+      Math.cos(this.yaw) * cosPitch,
+    );
+    const boom = this.boomLength();
+
+    this.camera.position
+      .copy(this.scratchVector)
+      .addScaledVector(this.scratchForward, boom);
     this.camera.lookAt(this.scratchVector);
+  }
+
+  /**
+   * How far back the shot may stand this frame. The map's blockers are the same
+   * ones the Inspector's own rig pulls its boom in against, so both cameras stop
+   * at the same wall; without it the orbit swept the view through the floor and
+   * the legs of the furniture and left the creature behind a carpet.
+   *
+   * The practice room publishes no geometry, so there the boom is simply the
+   * distance the player zoomed to.
+   */
+  private boomLength(): number {
+    const navData = this.navData;
+    if (navData === null) return this.radius;
+    const hit = nearestBlockerEntry(
+      navData.blockers,
+      this.scratchVector,
+      this.scratchForward,
+      0,
+      this.radius,
+    );
+    if (hit < 0) return this.radius;
+    // Never past the distance the player zoomed to: the floor on the pull-in
+    // stops the shot collapsing into the creature's own head, and a floor that
+    // outran the zoom would push the camera further out than it was asked for.
+    return Math.min(this.radius, Math.max(ORBIT_MIN_RADIUS_M, hit - ORBIT_SKIN_M));
   }
 
   /**

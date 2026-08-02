@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MatchPhase } from "@foldseek/shared";
-import { Harness } from "./harness";
+import { Harness, testPose } from "./harness";
 
 describe("identity privacy", () => {
   it("assigns public object ids that carry no link to the owner", () => {
@@ -65,6 +65,34 @@ describe("identity privacy", () => {
       ),
     ).toBe(false);
     expect(state?.warrantsRemaining).toBeNull();
+  });
+
+  /**
+   * The Inspector waits out the fold with nothing to look at, which only holds
+   * if the state their client reads carries nothing to look at either. A Mimic
+   * may lock whenever they please and a bot seat locks on the Forge's first
+   * tick, so "the record exists" and "the room may see it" have to be different
+   * questions: live play had an Inspector watching the disguises arrange
+   * themselves through the whole of the fold.
+   */
+  it("keeps every disguise out of public state until the fold closes", () => {
+    const harness = new Harness({ players: 5, seed: 91 });
+    harness.toForge();
+
+    const mimicId = harness.mimicIds()[0] as string;
+    harness.command(mimicId, { type: "lock_disguise", payload: testPose(0), revision: 1 });
+
+    // The owner still has their own, through their own private state.
+    const own = harness.sim.getPrivateStateFor(mimicId)?.ownDisguise;
+    expect(own?.publicObjectId).toBeDefined();
+    expect(harness.sim.getPublicState().disguises).toHaveLength(0);
+
+    harness.tickUntil(MatchPhase.Inspection);
+    expect(
+      harness.sim
+        .getPublicState()
+        .disguises.some((entry) => entry.publicObjectId === own?.publicObjectId),
+    ).toBe(true);
   });
 
   it("reveals every owner once the round reaches the reveal", () => {

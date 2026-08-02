@@ -55,6 +55,7 @@ export function buildArchitecture(ctx: PropContext): void {
   buildWindowBay(ctx);
   buildStreetDoor(ctx);
   buildOfficePartition(ctx);
+  buildOfficeDoor(ctx);
   buildDisplayPlatform(ctx);
   buildThresholds(ctx);
   buildNightExterior(ctx);
@@ -392,6 +393,69 @@ function buildStreetDoor(ctx: PropContext): void {
     wood,
     { y: (DOOR_HEIGHT + 0.08) / 2, z: -0.03 },
     { shadow: false },
+  );
+  b.end();
+}
+
+/**
+ * The Security Office door, which is the one moving part of the shell.
+ *
+ * The Inspector is staged inside the office while the Mimics fold (§5.9), and
+ * before this the room had a doorway and no door: the waiting Inspector looked
+ * straight down it at a shop full of people choosing hiding places. Shut, the
+ * leaf is the whole of that fix — the partition is solid to a metre and the
+ * player is 0.35 m tall, so a closed door leaves nothing to see. It opens on the
+ * hunt, over the `door_open` cue the phase already plays.
+ *
+ * Every part is authored around the hinge: the geometry carries the offset and
+ * each mesh sits at the hinge itself with no rotation of its own, so a caller
+ * swings the door by writing one angle onto the group's children and nothing
+ * else has to know how the leaf was built. It is a hero prop for the same
+ * reason — a batched part is baked into a shared mesh and cannot move.
+ */
+/**
+ * The leaf overlaps the opening rather than fitting inside it, on both axes and
+ * at the head. A door hung to the exact size of its gap leaves a slit down the
+ * closing edge, and at this scale a two-centimetre slit is a hand's width of
+ * shop floor: the first shot taken through the shut door showed shelving
+ * through it. Overlapping costs nothing, because the leaf swings clear into the
+ * office rather than into its own frame.
+ */
+export const OFFICE_DOOR_LEAF_WIDTH_M = OFFICE_DOOR_MAX_Z - OFFICE_DOOR_MIN_Z + 0.1;
+export const OFFICE_DOOR_LEAF_HEIGHT_M = 2.22;
+/** Where the leaf hangs, so the swing and the nav blocker agree on the gap. */
+export const OFFICE_DOOR_HINGE: readonly [number, number, number] = [
+  OFFICE_MIN_X,
+  0,
+  OFFICE_DOOR_MIN_Z - 0.05,
+];
+export const OFFICE_DOOR_NAME = "shop.officeDoor";
+
+function buildOfficeDoor(ctx: PropContext): void {
+  const b = ctx.batcher;
+  const panel = ctx.materials.get("paint_midnight_02");
+  const brass = ctx.materials.get("brass_tarnished_01");
+  const width = OFFICE_DOOR_LEAF_WIDTH_M;
+  const height = OFFICE_DOOR_LEAF_HEIGHT_M;
+
+  b.begin(OFFICE_DOOR_NAME, OFFICE_DOOR_HINGE, 0, true, 1, "standard", true);
+  b.part(
+    ctx.geometry.get(`officeDoor.leaf#${width.toFixed(2)}`, () => {
+      const leaf = chamferedBox(0.06, height, width, 0.012);
+      leaf.translate(0, height / 2 + 0.02, width / 2);
+      return leaf;
+    }),
+    panel,
+    {},
+  );
+  b.part(
+    ctx.geometry.get(`officeDoor.handle#${width.toFixed(2)}`, () => {
+      const handle = chamferedBox(0.05, 0.2, 0.05, 0.008);
+      handle.translate(0.055, 0.95, width - 0.12);
+      return handle;
+    }),
+    brass,
+    {},
   );
   b.end();
 }

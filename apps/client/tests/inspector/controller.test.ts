@@ -1,4 +1,4 @@
-import { HIDER_FORGE_RUN_SPEED } from "@foldseek/shared";
+import { DEFAULT_MATCH_SETTINGS, HIDER_FORGE_RUN_SPEED } from "@foldseek/shared";
 import { describe, expect, it } from "vitest";
 
 import { CharacterController } from "../../src/inspector/CharacterController";
@@ -16,8 +16,13 @@ import {
   WORLD_SCALE,
   type NavData,
 } from "../../src/inspector/navData";
-import { CLUTTER_BLOCKERS, NAV_DATA } from "../../src/world/maps/nav";
-import { WALL_HEIGHT } from "../../src/world/maps/zones";
+import { CLUTTER_BLOCKERS, MIMIC_NAV_DATA, NAV_DATA } from "../../src/world/maps/nav";
+import {
+  OFFICE_DOOR_MAX_Z,
+  OFFICE_DOOR_MIN_Z,
+  OFFICE_MIN_X,
+  WALL_HEIGHT,
+} from "../../src/world/maps/zones";
 import {
   box,
   openNavData,
@@ -434,5 +439,46 @@ describe("CharacterController falling through the shop", () => {
     expect(controller.position.z).toBeLessThan(CRATE.min.z);
     expect(controller.position.y).toBe(0);
     expect(controller.surfaceId).not.toBeNull();
+  });
+});
+
+/**
+ * The Inspector is staged inside the Security Office and steps out through its
+ * door when the hunt opens (§5.9). Live play found that step refused: the floor
+ * plan stops at the partition line and the office floor starts a tenth of a
+ * metre east of it, so `surfaceAt` reported nothing underfoot in the doorway and
+ * the walk-out was a wall the whole hunt.
+ */
+describe("the Security Office doorway", () => {
+  const DOORWAY_Z = (OFFICE_DOOR_MIN_Z + OFFICE_DOOR_MAX_Z) / 2;
+
+  it("carries walkable floor across the partition line", () => {
+    for (let x = OFFICE_MIN_X - 0.2; x <= OFFICE_MIN_X + 0.2; x += 0.01) {
+      expect(surfaceAt(NAV_DATA.floors, x, DOORWAY_Z, WORLD_SCALE.stepHeight), `x=${x.toFixed(2)}`)
+        .not.toBeNull();
+    }
+  });
+
+  it("lets an Inspector walk out of the office onto the sales floor", () => {
+    const controller = new CharacterController(
+      NAV_DATA,
+      () => DEFAULT_MATCH_SETTINGS.inspectorMoveSpeed,
+    );
+    controller.teleportTo({ position: { x: 5.2, y: 0, z: DOORWAY_Z }, yaw: Math.PI / 2 });
+    const input = createMoveInput();
+    input.forward = 1;
+    for (let frame = 0; frame < 600; frame += 1) controller.update(FRAME_SECONDS, input);
+
+    expect(controller.position.x).toBeLessThan(OFFICE_MIN_X - 0.3);
+  });
+
+  it("keeps a Mimic out of the office, which is the Inspector's room alone", () => {
+    const controller = new CharacterController(MIMIC_NAV_DATA, () => HIDER_FORGE_RUN_SPEED);
+    controller.teleportTo({ position: { x: 4.3, y: 0, z: DOORWAY_Z }, yaw: -Math.PI / 2 });
+    const input = createMoveInput();
+    input.forward = 1;
+    for (let frame = 0; frame < 600; frame += 1) controller.update(FRAME_SECONDS, input);
+
+    expect(controller.position.x).toBeLessThan(OFFICE_MIN_X);
   });
 });

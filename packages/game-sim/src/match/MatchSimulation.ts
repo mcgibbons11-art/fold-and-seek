@@ -1163,13 +1163,15 @@ export class MatchSimulation {
         lifeState: player.lifeState,
         rolePublicState: this.publicRoleOf(player, revealed),
       })),
-      disguises: [...this.disguises.values()].map((record) => ({
-        publicObjectId: record.publicObjectId,
-        encodedPose: record.encodedPose,
-        encodedPaint: record.encodedPaint,
-        defaultArrangementId: record.defaultArrangementId,
-        revealed: revealed || this.resolvedObjects.get(record.publicObjectId) === "mimic",
-      })),
+      disguises: this.disguisesManifested()
+        ? [...this.disguises.values()].map((record) => ({
+            publicObjectId: record.publicObjectId,
+            encodedPose: record.encodedPose,
+            encodedPaint: record.encodedPaint,
+            defaultArrangementId: record.defaultArrangementId,
+            revealed: revealed || this.resolvedObjects.get(record.publicObjectId) === "mimic",
+          }))
+        : [],
       results: this.copyResults(this.results),
     };
   }
@@ -2496,6 +2498,25 @@ export class MatchSimulation {
    */
   private isPostLockEditPhase(): boolean {
     return this.phase === MatchPhase.InspectionIntro || this.isInspectionPhase();
+  }
+
+  /**
+   * When a locked disguise is part of the room rather than a private draft.
+   *
+   * A Mimic may lock at any point during the Forge, and a bot seat locks on the
+   * phase's first tick. Publishing the record the moment it exists put every
+   * early lock — which in a solo round is every bot in the shop — into the state
+   * the Inspector's client reads, and the client stood the bodies up: the player
+   * waiting for the hunt to open watched the answers arrange themselves.
+   *
+   * The disguise manifests when the Forge closes (§5.8), so that is when the
+   * room is told about it. Before then the record is the authority's alone: its
+   * owner still sees it, through `ownDisguise` on their own private state, and
+   * the host still carries it through a migration, because the snapshot is taken
+   * from the records rather than from this view.
+   */
+  private disguisesManifested(): boolean {
+    return this.isPostLockEditPhase() || this.isPostRoundPhase();
   }
 
   private isPostRoundPhase(): boolean {

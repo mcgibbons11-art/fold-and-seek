@@ -1424,6 +1424,12 @@ describe("PortalsNetAdapter body paint", () => {
 
     const objectId = own?.publicObjectId;
     expect(objectId).toBeDefined();
+    // Nothing about the body reaches the relay while the fold is still running,
+    // whatever a Mimic locks and whenever they lock it: the room is told about
+    // its disguises when the Forge closes, and the ranges follow the room.
+    expect(decodePaintBook(session.relay.stateSnapshot())?.[objectId as string]).toBeUndefined();
+
+    session.runTo(MatchPhase.Inspection, "a", 150);
     const book = decodePaintBook(session.relay.stateSnapshot());
     expect(book?.[objectId as string]).toBe(PAINT_LAYER);
 

@@ -1,7 +1,11 @@
-import type { CSSProperties, ReactElement } from "react";
+import { useState, type CSSProperties, type ReactElement } from "react";
 
 import { ControlsLegend } from "./ControlsLegend";
-import { CORE_CONTROL_HINTS } from "./rounds/huntControls";
+import {
+  CORE_CONTROL_HINTS,
+  HIDER_CONTROL_HINTS,
+  INSPECTOR_ROLE_HINTS,
+} from "./rounds/huntControls";
 import {
   ALARM,
   BRASS,
@@ -54,6 +58,93 @@ const cardStyle: CSSProperties = {
 const buttonBlock: CSSProperties = { display: "block", width: "100%", marginTop: 10 };
 
 /**
+ * The rules card is taller than the title card and has to work on a short
+ * viewport, so it scrolls inside itself the way the lobby column does — the
+ * back button must never sit below the fold.
+ */
+const rulesCardStyle: CSSProperties = {
+  ...cardStyle,
+  width: 460,
+  textAlign: "left",
+  maxHeight: "min(78vh, 640px)",
+  overflowY: "auto",
+};
+
+const rulesHeadingStyle: CSSProperties = {
+  margin: "18px 0 6px",
+  font: `600 13px/1.3 ${FONT_UI}`,
+  letterSpacing: "0.14em",
+  textTransform: "uppercase",
+  color: BRASS_LIT,
+};
+
+const rulesBodyStyle: CSSProperties = {
+  margin: 0,
+  fontSize: 13,
+  lineHeight: 1.65,
+  opacity: 0.85,
+};
+
+/** The rules, told in the order a first round meets them. */
+function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
+  return (
+    <div style={rulesCardStyle} className="fs-rise">
+      <div style={{ textAlign: "center" }}>
+        <div style={{ ...labelStyle, opacity: 0.7, marginBottom: 8 }}>How to play</div>
+        <div style={{ ...ornamentRuleStyle(180), margin: "0 auto" }} aria-hidden />
+      </div>
+
+      <h3 style={rulesHeadingStyle}>The setup</h3>
+      <p style={rulesBodyStyle}>
+        Each round, one player is the Inspector. Everyone else is a Mimic: a small mechanical
+        body loose in a shop full of clutter, whose only defence is looking like it belongs
+        there.
+      </p>
+
+      <h3 style={rulesHeadingStyle}>The forge</h3>
+      <p style={rulesBodyStyle}>
+        While the Inspector waits behind the office door, Mimics have a few minutes to build a
+        disguise. Drag your limbs to fold into the shape of something on the shelves, stretch
+        and reshape your parts, then paint yourself to match — the eyedropper copies any colour
+        in the room, and the brush covers you in it. Lock your disguise before the timer runs
+        out, and stand where a thing like you would stand.
+      </p>
+
+      <h3 style={rulesHeadingStyle}>The hunt</h3>
+      <p style={rulesBodyStyle}>
+        The office door opens and the Inspector steps out carrying a gun and a handful of
+        warrants. Every shot is an accusation: hit a hiding Mimic and they are caught, hit an
+        innocent object and a warrant is gone. Mimics are not frozen — you can creep between
+        hiding spots, climb the shelves, and taunt the Inspector for the nerve of it. Move only
+        while unwatched. Movement is how they catch you.
+      </p>
+
+      <h3 style={rulesHeadingStyle}>Winning</h3>
+      <p style={rulesBodyStyle}>
+        Mimics score for surviving the inspection, for every sweep that passes them by, and for
+        bold taunts. The Inspector scores for each catch and keeps points for unspent warrants.
+        Roles rotate, so everyone gets a turn with the gun.
+      </p>
+
+      <h3 style={rulesHeadingStyle}>Mimic controls</h3>
+      <ControlsLegend hints={HIDER_CONTROL_HINTS} />
+
+      <h3 style={rulesHeadingStyle}>Inspector controls</h3>
+      <ControlsLegend hints={INSPECTOR_ROLE_HINTS} />
+
+      <button
+        type="button"
+        className={PRESS_CLASS}
+        style={{ ...buttonStyle, ...buttonBlock, marginTop: 20 }}
+        onClick={onBack}
+      >
+        Back
+      </button>
+    </div>
+  );
+}
+
+/**
  * The wordmark, set the way the cover art sets it: FOLD in lit brass, SEEK in
  * cream, and the ampersand between them smaller and dimmer so the two words read
  * as a pair rather than a list.
@@ -99,6 +190,16 @@ export function MainMenu({
   multiplayer = false,
   notice = null,
 }: MainMenuProps): ReactElement {
+  const [showRules, setShowRules] = useState(false);
+
+  if (showRules) {
+    return (
+      <div style={overlayStyle}>
+        <HowToPlay onBack={() => setShowRules(false)} />
+      </div>
+    );
+  }
+
   return (
     <div style={overlayStyle}>
       <div style={cardStyle} className="fs-rise">
@@ -121,7 +222,16 @@ export function MainMenu({
           onClick={onPlayRound}
           disabled={starting}
         >
-          {starting ? "Opening the shop…" : multiplayer ? "Join the room" : "Play a round"}
+          {starting ? "Opening the shop…" : multiplayer ? "Join the room" : "Start game"}
+        </button>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={{ ...(starting ? disabledButtonStyle(buttonStyle) : buttonStyle), ...buttonBlock }}
+          onClick={() => setShowRules(true)}
+          disabled={starting}
+        >
+          How to play
         </button>
         <button
           type="button"

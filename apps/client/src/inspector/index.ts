@@ -5,6 +5,8 @@ import type { MatchSettings } from "@foldseek/shared";
 import { ShootingDriver, type ShotOutcome, type WeaponState } from "./ShootingDriver";
 import { CameraSamplePublisher, type CameraSample } from "./cameraSamples";
 import { FocusSystem, InspectableSet, type FocusMetadata } from "./FocusSystem";
+import { nearestBlockerEntry } from "./geometry";
+import { GunView, MISS_RANGE_M, shotImpactPoint } from "./GunView";
 import { InspectorCamera, type InspectorCameraOptions } from "./InspectorCamera";
 import { createMoveInput, InspectorController } from "./InspectorController";
 import { InspectorInput } from "./InspectorInput";
@@ -55,6 +57,7 @@ export {
   type WeaponPhase,
   type WeaponState,
 } from "./ShootingDriver";
+export { GunView, shotImpactPoint, type GunFrame } from "./GunView";
 export { CameraSamplePublisher, type CameraSample } from "./cameraSamples";
 export {
   SpatialValidatorImpl,
@@ -96,6 +99,8 @@ export interface InspectorSystem {
   readonly cameraRig: InspectorCamera;
   readonly focusSystem: FocusSystem;
   readonly weapon: ShootingDriver;
+  /** The gun the player can see: model, sway, recoil, and what a round leaves behind. */
+  readonly gun: GunView;
   /** Null when no DOM element was supplied. */
   readonly input: InspectorInput | null;
   /** False freezes movement and the trigger, for the reveal of §5.14. */
@@ -103,8 +108,12 @@ export interface InspectorSystem {
   update(dtMs: number, nowMs: number): void;
   spawnAt(pose: SpawnPose): void;
   setInspectables(inspectables: InspectableSet): void;
-  /** Warrants remaining, which is the gun's magazine. */
-  setAmmo(warrantsRemaining: number): void;
+  /**
+   * Warrants remaining, which is the gun's magazine. The total is what the drum
+   * is built with; left out, the drum takes the fullest magazine it has seen,
+   * which is right for anyone who was there when the hunt opened.
+   */
+  setAmmo(warrantsRemaining: number, warrantsTotal?: number): void;
   /** Outcome of this client's own shot, from `accusation_resolved`. */
   handleAccusationResolved(correct: boolean): void;
   /** A refusal from the adapter's `onRejection`, of any command type. */
@@ -138,6 +147,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
     onShot: deps.onShot,
     onStateChange: deps.onWeaponState,
   });
+  const gun = new GunView(deps.scene);
   const onCameraSample = deps.onCameraSample;
   const samples = new CameraSamplePublisher(
     onCameraSample === undefined ? 0 : deps.settings.cameraSampleHz,
@@ -154,6 +164,23 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
   let inspectables = deps.inspectables;
   let sentFocusId: string | null = null;
   let lastFocusCommandAtMs = Number.NEGATIVE_INFINITY;
+  /** Rounds the gun has already shown. The weapon's own counter is the trigger. */
+  let shownShots = 0;
+  let warrantsSeen = 0;
+
+  /**
+   * Where the round that just left the muzzle stopped. A shot with something
+   * under the reticle stops at that object, at the distance the focus system
+   * measured; anything else carries on until the map's own geometry takes it.
+   */
+  function impactPoint(focus: FocusMetadata | null) {
+    const focusDistance = focus !== null && focus.visible ? focus.distanceM : null;
+    const wall =
+      focusDistance !== null
+        ? -1
+        : nearestBlockerEntry(deps.navData.blockers, cameraRig.eye, cameraRig.forward, 0, MISS_RANGE_M);
+    return shotImpactPoint(cameraRig.eye, cameraRig.forward, focusDistance, wall);
+  }
 
   const system: InspectorSystem = {
     root,
@@ -161,6 +188,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
     cameraRig,
     focusSystem,
     weapon,
+    gun,
     input,
     enabled: true,
 
@@ -192,6 +220,29 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
 
       weapon.update(dtMs, focus, firePressed, aiming);
 
+      // Placed before the shot is shown, so the muzzle a round leaves from is
+      // where the gun is this frame rather than where it was last one.
+      gun.update(dtMs, {
+        eye: cameraRig.eye,
+        yaw: controller.yaw,
+        pitch: controller.pitch,
+        aimAmount: cameraRig.aimAmount,
+        swayScale: cameraRig.swayScale,
+        speedMps: controller.speed,
+      });
+
+      // A round is shown from the weapon's own count rather than from the
+      // trigger, so a shot the driver refused (cooling, still pending) never
+      // flashes, and one it took always does.
+      const state = weapon.state;
+      if (state.shotsFired > shownShots) {
+        shownShots = state.shotsFired;
+        gun.fire(
+          state.lastShot ?? "miss",
+          state.lastShot === "empty" ? null : impactPoint(focus),
+        );
+      }
+
       // Losing the target is reported at once: a stale "still looking at it" is
       // the direction that would misinform the gaze scoring of §6.3, whereas a
       // late "now looking at something else" only delays a gain.
@@ -220,6 +271,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
       samples.reset();
       sentFocusId = null;
       lastFocusCommandAtMs = Number.NEGATIVE_INFINITY;
+      shownShots = weapon.state.shotsFired;
     },
 
     setInspectables(next: InspectableSet): void {
@@ -227,12 +279,15 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
       focusSystem.setInspectables(next);
     },
 
-    setAmmo(warrantsRemaining: number): void {
+    setAmmo(warrantsRemaining: number, warrantsTotal?: number): void {
       weapon.setAmmo(warrantsRemaining);
+      warrantsSeen = Math.max(warrantsSeen, warrantsTotal ?? warrantsRemaining);
+      gun.setWarrants(warrantsRemaining, warrantsSeen);
     },
 
     handleAccusationResolved(correct: boolean): void {
       weapon.handleResolved(correct);
+      gun.resolve(correct);
     },
 
     handleRejection(rejection: { readonly type: string; readonly reason: string }): void {
@@ -246,6 +301,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
 
     dispose(): void {
       input?.dispose();
+      gun.dispose();
       root.removeFromParent();
     },
   };

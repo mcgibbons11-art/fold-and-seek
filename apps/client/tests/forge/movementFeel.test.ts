@@ -490,6 +490,59 @@ describe("body language never reaches the wire", () => {
     expect(moving.root.rotation).toEqual(parked.root.rotation);
   });
 
+  it("swings the drawn legs while it walks, and publishes none of it", () => {
+    const rig = build();
+    rig.run(1);
+    rig.press("w");
+
+    // Where the shin sits inside the body, so the body travelling does not
+    // count as the leg swinging.
+    const shinInBody = (): THREE.Vector3 => {
+      rig.scene.updateMatrixWorld(true);
+      const shin = rig.scene.getObjectByName("mimic_shin_L");
+      if (shin === undefined) throw new Error("the Mimic has no left shin");
+      return rig.bodyRoot.worldToLocal(shin.getWorldPosition(new THREE.Vector3()));
+    };
+
+    const authored = JSON.stringify(rig.controller.disguise.bones);
+    let nearest = Infinity;
+    let furthest = -Infinity;
+    for (let frame = 0; frame < 90; frame += 1) {
+      rig.controller.update(FRAME_MS);
+      const z = shinInBody().z;
+      nearest = Math.min(nearest, z);
+      furthest = Math.max(furthest, z);
+    }
+
+    // A stride the player can see: the knee travels a good share of the
+    // creature's own height fore and aft as the body crosses the shop.
+    expect(furthest - nearest).toBeGreaterThan(PLAYER_HEIGHT_M * 0.15);
+    // And every bone the round publishes is exactly what was folded, because
+    // the gait is laid over a copy of the pose rather than over the pose.
+    expect(JSON.stringify(rig.controller.disguise.bones)).toBe(authored);
+  });
+
+  it("stops the legs dead once the disguise locks", () => {
+    const rig = build();
+    rig.press("w");
+    rig.run(30);
+    rig.controller.lock();
+    // The gait eases out rather than cutting, so the body needs the blend
+    // before it is standing exactly as it was folded.
+    rig.run(30);
+
+    const shin = (): number[] => {
+      rig.scene.updateMatrixWorld(true);
+      const mesh = rig.scene.getObjectByName("mimic_shin_L");
+      if (mesh === undefined) throw new Error("the Mimic has no left shin");
+      return [...mesh.matrixWorld.elements];
+    };
+
+    const settled = shin();
+    rig.run(120);
+    expect(shin()).toEqual(settled);
+  });
+
   it("gives the authority the authored box, not the leaning one", () => {
     // The bounds a hider is shot at are read out of their own Forge while the
     // theatre is not drawing them (see gameplay/ownDisguiseBounds.test.ts). If

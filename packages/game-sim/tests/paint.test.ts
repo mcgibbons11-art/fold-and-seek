@@ -56,6 +56,11 @@ describe("paint during the forge", () => {
 
     const own = harness.sim.getPrivateStateFor(mimicId)?.ownDisguise;
     expect(own?.encodedPaint).toBe(layer);
+    // The lock records the disguise; the Forge closing is what hands it to the
+    // room, so nothing about it is public while the fold is still running.
+    expect(harness.sim.getPublicState().disguises).toHaveLength(0);
+
+    harness.tickUntil(MatchPhase.Inspection);
     const view = harness.sim
       .getPublicState()
       .disguises.find((entry) => entry.publicObjectId === own?.publicObjectId);

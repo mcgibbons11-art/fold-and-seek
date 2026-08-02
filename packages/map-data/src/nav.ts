@@ -124,11 +124,20 @@ const FLOOR_SURFACES: readonly WalkableSurface[] = FLOOR_PLAN.map((box, index) =
  * The Inspector's entry room (§5.9). It is walkable so the Inspector can be
  * staged inside it before the door opens; Mimic spawns are kept out of it by
  * the spawn table rather than by removing the floor.
+ *
+ * Its west edge crosses the partition line rather than stopping short of it.
+ * The sales floor ends at `OFFICE_MIN_X` and this room used to begin a tenth of
+ * a metre east of that, so a strip the width of the doorway had nothing
+ * published underneath: `surfaceAt` answers null there, a step onto null is
+ * refused as walking off the map, and the Inspector's one route out of the room
+ * they are staged in ran straight through it. The role spent whole hunts walking
+ * into a doorway it could not cross. Overlapping the two floors is what closes
+ * it; the partition's own blockers still stop a body anywhere but the doorway.
  */
 const OFFICE_FLOOR = ledge(
   "floor_office",
   0,
-  OFFICE_MIN_X + 0.1,
+  OFFICE_MIN_X - 0.05,
   OFFICE_MIN_Z + 0.1,
   SHOP_MAX_X - 0.28,
   SHOP_MAX_Z - 0.28,
@@ -410,6 +419,27 @@ export const NAV_BLOCKERS: readonly AABB[] = [
   ...CLUTTER_BLOCKERS,
 ];
 
+/**
+ * The office door itself, filling the gap the partition leaves. It is not in
+ * `NAV_BLOCKERS`, because the Inspector walks through the doorway the moment the
+ * hunt opens and the accusation sight lines are traced with it standing open.
+ *
+ * A Mimic never has that moment. §10.4 keeps them out of the Security Office for
+ * the whole round, and the map used to enforce it by accident: the doorway had
+ * no floor published under it, so nobody could cross. Now that the boards are
+ * there for the Inspector, the rule needs stating, and this is it.
+ */
+export const OFFICE_DOOR_BLOCKER: AABB = aabb(
+  OFFICE_MIN_X,
+  0,
+  OFFICE_DOOR_MIN_Z,
+  OFFICE_MIN_X + 0.12,
+  WALL_HEIGHT,
+  OFFICE_DOOR_MAX_Z,
+);
+
+export const MIMIC_NAV_BLOCKERS: readonly AABB[] = [...NAV_BLOCKERS, OFFICE_DOOR_BLOCKER];
+
 // ---------------------------------------------------------------------------
 // Climb links
 // ---------------------------------------------------------------------------
@@ -570,6 +600,16 @@ export const NAV_DATA: NavData = {
   climbLinks: CLIMB_LINKS,
   spawnPoints: SPAWN_POINTS,
   securityOffice: SECURITY_OFFICE,
+};
+
+/**
+ * The same shop with the office door shut, which is the map a Mimic walks. It
+ * differs from `NAV_DATA` in exactly one box: everything else a hider runs,
+ * climbs and hides on is the room the Inspector hunts through.
+ */
+export const MIMIC_NAV_DATA: NavData = {
+  ...NAV_DATA,
+  blockers: MIMIC_NAV_BLOCKERS,
 };
 
 /** Rise a link crosses, which the authoring rules above are stated against. */

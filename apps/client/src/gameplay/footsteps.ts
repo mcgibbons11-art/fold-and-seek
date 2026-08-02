@@ -64,8 +64,13 @@ export function footstepMaterial(surfaceId: string | null): FootstepMaterial {
   return "wood";
 }
 
-/** One footfall per this share of body height travelled. */
-const STRIDE_FACTOR = 0.62;
+/**
+ * One footfall per this share of body height travelled. Exported because the
+ * gait is measured against it too (`forge/LocomotionRig.ts`): the visible step
+ * and the audible one have to land together, and they cannot if each carries
+ * its own number.
+ */
+export const STRIDE_FACTOR = 0.62;
 /** Below this share of body height per second, nobody is walking. */
 const MIN_SPEED_FACTOR = 0.3;
 const FOOTSTEP_PITCH_JITTER = 0.12;
