@@ -1,5 +1,5 @@
 import type { MatchCommand, PrivateSimEvent, SimEvent } from "@foldseek/game-sim";
-import { LIMITS, PrivateSimEventSchema, SimEventSchema } from "@foldseek/shared";
+import { eyesAgree, LIMITS, PrivateSimEventSchema, SimEventSchema } from "@foldseek/shared";
 import { z } from "zod";
 import {
   EMPTY_SYNC,
@@ -8,6 +8,7 @@ import {
   type ConnectionDetail,
   type ConnectionState,
   type ConnectionStatus,
+  type EyePosition,
   type ForgeSnapshot,
   type MatchSync,
   type NetworkAdapter,
@@ -41,6 +42,9 @@ const FORGE_SNAPSHOT_MESSAGE = "forge_snapshot";
 
 /** Mirrors PAINT_UPDATE_MESSAGE in apps/server/src/rooms/MatchRoom.ts. */
 const PAINT_UPDATE_MESSAGE = "paint_update";
+
+/** Mirrors INSPECTOR_EYE_MESSAGE in apps/server/src/rooms/MatchRoom.ts. */
+const INSPECTOR_EYE_MESSAGE = "eye";
 
 const MAX_EVENTS_PER_MESSAGE = 256;
 const SimEventListSchema = z.array(SimEventSchema).max(MAX_EVENTS_PER_MESSAGE);
@@ -96,6 +100,9 @@ export class ColyseusAdapter implements NetworkAdapter {
   private connection: ConnectionState = idleConnection("colyseus");
   private sync: MatchSync = EMPTY_SYNC;
   private selfPublicId: string | null = null;
+  private sentEye: EyePosition | null = null;
+  /** Whether an eye has ever been reported: null is a value, not "unknown". */
+  private eyeSent = false;
   private disposed = false;
 
   constructor(options: ColyseusAdapterOptions) {
@@ -135,6 +142,10 @@ export class ColyseusAdapter implements NetworkAdapter {
     this.roster = [];
     this.sync = EMPTY_SYNC;
     this.selfPublicId = null;
+    // A room this client rejoins has never heard its eye, so the record of what
+    // was already sent is dropped and the next report goes out in full.
+    this.sentEye = null;
+    this.eyeSent = false;
     this.syncSignal.emit(this.sync);
     this.rosterSignal.emit(this.roster);
     this.setStatus("closed", null);
@@ -171,6 +182,31 @@ export class ColyseusAdapter implements NetworkAdapter {
 
   sendPaintUpdate(update: PaintUpdate): void {
     this.room?.send(PAINT_UPDATE_MESSAGE, update);
+  }
+
+  /**
+   * Reports where this client's Inspector is looking from.
+   *
+   * The server checks range and line of sight from an eye position and refuses
+   * `inspector_position_unknown` for a player it has never been told about, so
+   * without this every shot this client fires is refused. It is the same report
+   * `PortalsNetAdapter.reportInspectorEye` sends over the relay, and a round
+   * feeds both from the one place that knows: the `RoundSpatialBridge`
+   * observer, which fires on every local eye write.
+   *
+   * The room writes into a map and answers nothing, so this is called on the
+   * round's own cadence rather than per frame, and an eye that has not moved
+   * far enough to change a decision is not sent at all: an Inspector standing
+   * still would otherwise spend a message a tick restating where they already
+   * are. Null forgets the eye, which is what the round reports when this client
+   * stops being an Inspector.
+   */
+  reportInspectorEye(eye: EyePosition | null): void {
+    const rounded = eye === null ? null : ([round3(eye[0]), round3(eye[1]), round3(eye[2])] as const);
+    if (this.eyeSent && eyesAgree(rounded, this.sentEye)) return;
+    this.eyeSent = true;
+    this.sentEye = rounded;
+    this.room?.send(INSPECTOR_EYE_MESSAGE, { eye: rounded });
   }
 
   getSelfId(): string | null {
@@ -307,6 +343,11 @@ export class ColyseusAdapter implements NetworkAdapter {
     };
     this.statusSignal.emit(this.connection);
   }
+}
+
+/** Millimetres. Finer than any check the server makes, and shorter on the wire. */
+function round3(value: number): number {
+  return Math.round(value * 1_000) / 1_000;
 }
 
 interface PlayerMapLike {

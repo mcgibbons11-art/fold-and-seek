@@ -183,6 +183,59 @@ export const ForgeSnapshotSchema = z.strictObject({
   encodedPose,
 });
 
+/**
+ * Where an Inspector is looking from, reported to whichever machine is holding
+ * authority.
+ *
+ * The authority checks range and line of sight from an eye position and refuses
+ * `inspector_position_unknown` for a player it has never been told about. On
+ * the loopback the Inspector *is* the authority, so writing the eye into the
+ * local spatial bridge is enough; on both networked transports the Inspector is
+ * usually somewhere else, and without this report every shot that client fires
+ * is refused.
+ *
+ * It is a client-reported position, which is the authority model Portals gives
+ * us (docs/PORTALS_CONSTRAINTS.md) and which the dedicated server matches so the
+ * two transports refuse and allow the same shots. The authority still decides
+ * what may be shot from it.
+ *
+ * Null when the sender stops being an Inspector, so the authority forgets an eye
+ * rather than keeping the last one it heard.
+ */
+export const InspectorEyeSchema = z.strictObject({
+  eye: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).nullable(),
+});
+
+export type InspectorEyeReport = z.infer<typeof InspectorEyeSchema>;
+
+/**
+ * Inbound eye reports allowed per sender per second. A client sends at most one
+ * per publication flush, so the honest rate is well under this; the allowance
+ * sits above it so ordinary timer jitter does not cost an Inspector their
+ * position.
+ */
+export const MAX_EYE_REPORTS_PER_SECOND = 15;
+
+/**
+ * How far the eye must travel before it is worth another message. An Inspector
+ * standing still would otherwise spend half their send allowance restating where
+ * they already are. Well under the shot tolerances the authority applies.
+ */
+export const EYE_REPORT_EPSILON_M = 0.01;
+
+/** True when a fresh eye is close enough to the last reported one to say nothing. */
+export function eyesAgree(
+  left: readonly [number, number, number] | null,
+  right: readonly [number, number, number] | null,
+): boolean {
+  if (left === null || right === null) return left === right;
+  return (
+    Math.abs(left[0] - right[0]) < EYE_REPORT_EPSILON_M &&
+    Math.abs(left[1] - right[1]) < EYE_REPORT_EPSILON_M &&
+    Math.abs(left[2] - right[2]) < EYE_REPORT_EPSILON_M
+  );
+}
+
 // ----------------------------------------------------- canonical disguise wire
 
 /**

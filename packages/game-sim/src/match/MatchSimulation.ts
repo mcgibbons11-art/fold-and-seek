@@ -129,6 +129,12 @@ export interface PublicMatchState {
   readonly results: MatchResults | null;
 }
 
+/** Where one live disguise stands, for an authority that cannot see the room. */
+export interface DisguisePlacement {
+  readonly publicObjectId: string;
+  readonly rootPosition: readonly [number, number, number];
+}
+
 export interface OwnDisguiseView {
   readonly publicObjectId: string;
   readonly encodedPose: string;
@@ -1212,6 +1218,32 @@ export class MatchSimulation {
 
   getObjectRegistry(): ObjectRegistry {
     return this.objectRegistry;
+  }
+
+  /**
+   * Where the authority believes every uncaught disguise is standing.
+   *
+   * A `SpatialValidator` has to answer `objectBounds` for a disguise as well as
+   * for a prop, and only one of the two authorities can see the bodies: the
+   * Portals host reads the rendered bounds out of its own theatre, while the
+   * dedicated server has no renderer. This is what the server derives its box
+   * from, and it is the simulation's own record rather than a second reading of
+   * the published pose, so the position a shot is checked against is the same
+   * one the creep rule accepted.
+   *
+   * Nothing secret leaves: a disguise is an object standing in the room, its
+   * pose is already in the public state, and the owner is not named here.
+   */
+  getDisguisePlacements(): readonly DisguisePlacement[] {
+    const placements: DisguisePlacement[] = [];
+    for (const record of this.disguises.values()) {
+      if (record.caughtAtMs !== null) continue;
+      placements.push({
+        publicObjectId: record.publicObjectId,
+        rootPosition: record.rootPosition,
+      });
+    }
+    return placements;
   }
 
   // ----------------------------------------------------------------- snapshot

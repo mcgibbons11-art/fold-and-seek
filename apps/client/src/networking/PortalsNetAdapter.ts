@@ -10,7 +10,13 @@ import {
   type SimOutput,
   type SpatialValidator,
 } from "@foldseek/game-sim";
-import { LIMITS, MatchPhase, MatchSnapshotSchema, type MatchSettings } from "@foldseek/shared";
+import {
+  eyesAgree,
+  LIMITS,
+  MatchPhase,
+  MatchSnapshotSchema,
+  type MatchSettings,
+} from "@foldseek/shared";
 import {
   BotSeats,
   isBotSeat,
@@ -27,6 +33,7 @@ import {
   type ConnectionState,
   type ConnectionStatus,
   type ForgeSnapshot,
+  type EyePosition,
   type MatchSync,
   type NetworkAdapter,
   type PaintUpdate,
@@ -36,7 +43,6 @@ import {
 import {
   batchEvents,
   decodeChunks,
-  EYE_REPORT_EPSILON_M,
   MAX_EYE_REPORTS_PER_SECOND,
   decodeHostPublication,
   decodePaintBook,
@@ -158,9 +164,6 @@ export interface PortalsAdapterOptions extends BotSeatOptions {
    */
   readonly joinRetryDelayMs?: number;
 }
-
-/** An Inspector's eye in world metres, as it travels over the relay. */
-export type EyePosition = readonly [number, number, number];
 
 /** Reads the SDK the Portals host injects, or null outside Portals. */
 export function detectPortals(): PortalsSdk | null {
@@ -1885,16 +1888,6 @@ export function coalesceDisguiseUpdates(events: readonly SimEvent[]): SimEvent[]
 /** Millimetres. Finer than any check the authority makes, and shorter on the wire. */
 function round3(value: number): number {
   return Math.round(value * 1_000) / 1_000;
-}
-
-/** Whether a fresh eye is close enough to the last reported one to say nothing. */
-function eyesAgree(left: EyePosition | null, right: EyePosition | null): boolean {
-  if (left === null || right === null) return left === right;
-  return (
-    Math.abs(left[0] - right[0]) < EYE_REPORT_EPSILON_M &&
-    Math.abs(left[1] - right[1]) < EYE_REPORT_EPSILON_M &&
-    Math.abs(left[2] - right[2]) < EYE_REPORT_EPSILON_M
-  );
 }
 
 /**

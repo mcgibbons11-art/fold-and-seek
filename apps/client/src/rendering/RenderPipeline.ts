@@ -1,7 +1,20 @@
 import { bloom } from "three/addons/tsl/display/BloomNode.js";
 import { ao } from "three/addons/tsl/display/GTAONode.js";
 import * as THREE from "three/webgpu";
-import { emissive, mrt, normalView, output, pass, vec3, vec4 } from "three/tsl";
+import {
+  clamp,
+  emissive,
+  mrt,
+  normalView,
+  output,
+  pass,
+  screenSize,
+  screenUV,
+  uniform,
+  vec2,
+  vec3,
+  vec4,
+} from "three/tsl";
 import type { QualitySettings } from "./quality";
 
 /** Effects the pipeline can compose today. Bible §22.3 adds the rest in order. */
@@ -22,6 +35,35 @@ const BLOOM_THRESHOLD = 0.25;
 const GTAO_RESOLUTION_SCALE = 0.5;
 const GTAO_RADIUS_M = 0.4;
 const GTAO_SAMPLES = 16;
+
+/**
+ * Unsharp coefficient per unit of missing resolution.
+ *
+ * The adaptive controller answers a slow frame by drawing into a smaller
+ * backing store — `RendererManager.applySize` implements the render scale as
+ * `setPixelRatio(capped * scale)` — and the *browser* then stretches that store
+ * to the canvas' CSS size with a bilinear filter. That filter is the softness
+ * the round-6 critic photographed at 0.55–0.70 on integrated GPUs. It is not a
+ * tonemap problem and no contrast curve reaches it, because the detail is gone
+ * before the pixels are shown.
+ *
+ * So the sharpen is scaled by how much resolution the frame is actually
+ * missing: a full-scale frame gets a coefficient of exactly zero and is
+ * untouched, and the 0.5 floor every tier shares gets half of this.
+ */
+const SHARPEN_PER_MISSING_SCALE = 1;
+
+/**
+ * How far a sharpen may move a pixel, as a share of the pixel's own value.
+ *
+ * The limit has to be relative rather than absolute because the chain is still
+ * in linear HDR here: a 20.0 bulb beside a 0.05 shadow has a raw undershoot far
+ * larger than the shadow pixel itself, so an unlimited unsharp would print a
+ * black ring around every practical in the shop. Half is enough headroom for
+ * grain, weave and edge wear — which sit within a stop of their neighbours —
+ * and nowhere near enough to ring a light fixture.
+ */
+const SHARPEN_HALO_LIMIT = 0.5;
 
 type PassNodeHandle = ReturnType<typeof pass>;
 type BloomNodeHandle = ReturnType<typeof bloom>;
@@ -62,6 +104,21 @@ export class RenderPipeline {
    */
   private readonly passCamera = new THREE.PerspectiveCamera();
 
+  /**
+   * Sharpen strength for the frame, held as a uniform rather than baked into
+   * the graph.
+   *
+   * The render scale moves whenever the adaptive controller answers a slow
+   * frame, which on a weak GPU is exactly when the shop can least afford a
+   * rebuild: a rebuilt pass allocates a new render target, and a render context
+   * in three r185 is keyed on the render target, so every compiled program in
+   * the shop would be orphaned and relinked. That is the defect this class was
+   * rewritten to remove. A uniform costs one upload and no rebuild at all, so
+   * the sharpen is in every graph that gets built and simply does nothing at a
+   * coefficient of zero.
+   */
+  private readonly sharpenStrength = uniform(0);
+
   private settings: QualitySettings;
   private pipeline: THREE.RenderPipeline | null = null;
   private scenePass: PassNodeHandle | null = null;
@@ -98,6 +155,26 @@ export class RenderPipeline {
    */
   get graphBuilds(): number {
     return this.builds;
+  }
+
+  /** Sharpen coefficient the graph is running at, 0 while nothing is upscaled. */
+  get sharpenAmount(): number {
+    return this.sharpenStrength.value;
+  }
+
+  /**
+   * Tells the graph what share of the display's own pixels the frame is drawn
+   * at, which is the only thing the sharpen is a function of.
+   *
+   * It takes the ACHIEVED share rather than the one the adaptive controller
+   * asked for. `RendererManager` floors the pixel ratio at `MIN_PIXEL_RATIO`
+   * and caps it at the tier's own ceiling, so a request for 0.4 on a device
+   * that will not go under half is a frame that is only half soft, and
+   * sharpening it for 0.4 would over-correct.
+   */
+  setRenderScale(scale: number): void {
+    const missing = Math.min(Math.max(1 - scale, 0), 1);
+    this.sharpenStrength.value = SHARPEN_PER_MISSING_SCALE * missing;
   }
 
   isEnabled(effect: PipelineEffect): boolean {
@@ -270,7 +347,7 @@ export class RenderPipeline {
     }
     scenePass.setMRT(mrt(targets));
 
-    let composed: THREE.Node<"vec4"> = scenePass.getTextureNode("output");
+    let composed: THREE.Node<"vec4"> = this.sharpened(scenePass.getTextureNode("output"));
 
     if (wantGtao) {
       const aoNode = ao(scenePass.getTextureNode("depth"), scenePass.getTextureNode("normal"), camera);
@@ -299,6 +376,49 @@ export class RenderPipeline {
     // and appends the transform itself, so the chain stays in linear HDR up to
     // this point and the existing ACES exposure still applies.
     this.pipeline = new THREE.RenderPipeline(this.renderer, composed);
+  }
+
+  /**
+   * A five-tap unsharp over the beauty buffer, limited so it cannot ring.
+   *
+   * **Why it is applied here rather than to the fully composed frame.** Reading
+   * the composed node's neighbours means either re-evaluating the whole
+   * expression at four more coordinates — five bloom fetches and five occlusion
+   * fetches for nothing — or wrapping it in `rtt()`, which allocates a second
+   * full-resolution half-float target and runs an extra fullscreen pass. Both
+   * are paid on the weakest GPUs, which are the only ones that ever upscale.
+   * Neither buys anything: the occlusion is drawn at half resolution and the
+   * bloom is a wide blur, so both terms are low frequency by construction and
+   * carry no detail for a sharpen to recover. Every high frequency in the frame
+   * is in the buffer this samples, and the browser's upscale is applied to all
+   * of it equally, so pre-compensating here compensates the whole frame.
+   *
+   * **Why not three's own `sharpen()`.** r185 does ship one — AMD's RCAS, in
+   * `addons/tsl/display/SharpenNode.js` — and it is a better sharpen than this.
+   * It is not usable here for two reasons. It is a `TempNode` with its own
+   * render target and its own quad pass, so it costs exactly the target and
+   * bandwidth the paragraph above is spent avoiding. And its contrast limiter
+   * reads `1.0 - max(neighbours, centre)`, which assumes a signal already in
+   * [0, 1]; this chain stays in linear HDR until `THREE.RenderPipeline` appends
+   * the tone map, where a lamp is well over 1 and that limiter is outside its
+   * domain. The relative clamp below is scale-free and is correct in HDR.
+   */
+  private sharpened(source: ReturnType<PassNodeHandle["getTextureNode"]>): THREE.Node<"vec4"> {
+    const texel = vec2(1, 1).div(screenSize);
+    const north = source.sample(screenUV.add(vec2(0, texel.y)));
+    const south = source.sample(screenUV.sub(vec2(0, texel.y)));
+    const east = source.sample(screenUV.add(vec2(texel.x, 0)));
+    const west = source.sample(screenUV.sub(vec2(texel.x, 0)));
+
+    // The centre less the mean of its four neighbours is the local detail the
+    // upscale is about to lose; adding a share of it back is the sharpen.
+    const detail = source.rgb
+      .mul(4)
+      .sub(north.rgb.add(south.rgb).add(east.rgb).add(west.rgb))
+      .mul(0.25);
+    const room = source.rgb.mul(SHARPEN_HALO_LIMIT);
+    const change = clamp(detail.mul(this.sharpenStrength), room.negate(), room);
+    return vec4(source.rgb.add(change), source.a);
   }
 
   private teardown(): void {

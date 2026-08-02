@@ -1,8 +1,13 @@
-import { DEFAULT_MATCH_SETTINGS, JUMP_HEIGHT_M } from "@foldseek/shared";
+import { DEFAULT_MATCH_SETTINGS, HIDER_FORGE_RUN_SPEED, JUMP_HEIGHT_M } from "@foldseek/shared";
 import { describe, expect, it } from "vitest";
 
 import { HiderLocomotion } from "../../src/forge/HiderLocomotion";
-import { CharacterController, createMoveInput } from "../../src/inspector/CharacterController";
+import {
+  CharacterController,
+  createMoveInput,
+  JUMP_FALL_GRAVITY_SCALE,
+  JUMP_RISE_GRAVITY_SCALE,
+} from "../../src/inspector/CharacterController";
 import { InspectorController } from "../../src/inspector/InspectorController";
 import {
   WORLD_SCALE,
@@ -10,7 +15,7 @@ import {
   type MutableVec3,
   type NavData,
 } from "../../src/inspector/navData";
-import { CLUTTER_BLOCKERS, NAV_DATA, WALKABLE_SURFACES } from "../../src/world/maps/nav";
+import { CLIMB_LINKS, CLUTTER_BLOCKERS, NAV_DATA, WALKABLE_SURFACES } from "../../src/world/maps/nav";
 import { box, openNavData, surface, testSettings, SHOP_FLOOR } from "../inspector/navFixture";
 
 /**
@@ -27,6 +32,26 @@ const FACING_NORTH = 0;
 
 /** How high the feet get with the step lip added, which is what mounts a ledge. */
 const HOP_REACH_M = JUMP_HEIGHT_M + WORLD_SCALE.stepHeight;
+
+/**
+ * How far a hop carries the body, which is what decides whether a ledge beside
+ * a crate is within reach of one taken off its top. The airtime is the rise
+ * under the light half of the arc plus the fall under the heavy half, the body
+ * covers it at the Forge run, and the player radius is added because a capsule
+ * mounts a ledge as soon as its own edge reaches it rather than its centre.
+ */
+const HOP_TRAVEL_M =
+  (Math.sqrt((2 * JUMP_HEIGHT_M) / (WORLD_SCALE.gravity * JUMP_RISE_GRAVITY_SCALE)) +
+    Math.sqrt((2 * JUMP_HEIGHT_M) / (WORLD_SCALE.gravity * JUMP_FALL_GRAVITY_SCALE))) *
+    HIDER_FORGE_RUN_SPEED +
+  WORLD_SCALE.playerRadius;
+
+/** Distance between two footprints in the XZ plane, zero where they overlap. */
+function footprintGap(a: AABB, b: AABB): number {
+  const dx = Math.max(a.min.x - b.max.x, b.min.x - a.max.x, 0);
+  const dz = Math.max(a.min.z - b.max.z, b.min.z - a.max.z, 0);
+  return Math.hypot(dx, dz);
+}
 
 /**
  * The workshop's small packing crate, which is the obstacle these traversal
@@ -133,6 +158,33 @@ describe("the hop", () => {
       expect(blocker.max.y, where).toBeGreaterThan(WORLD_SCALE.stepHeight);
       expect(blocker.max.y, where).toBeLessThan(HOP_REACH_M);
     }
+  });
+
+  it("opens no route off the clutter that the climb links do not already offer", () => {
+    // A fall now resolves onto a blocker top instead of dropping through it, so
+    // a body can come to rest on a crate and hop from there — a takeoff height
+    // that did not exist when the only way onto clutter was to pass through it.
+    // The giant-scale rule is that the map decides where a body can get up, so
+    // what has to hold is not that the move is impossible but that everything
+    // it reaches was already reachable by an authored route.
+    const inBand: string[] = [];
+    for (const clutter of CLUTTER_BLOCKERS) {
+      for (const ledge of WALKABLE_SURFACES) {
+        const top = ledge.bounds.max.y;
+        if (top <= clutter.max.y + WORLD_SCALE.stepHeight) continue;
+        if (top > clutter.max.y + HOP_REACH_M) continue;
+        inBand.push(ledge.id);
+        if (footprintGap(clutter, ledge.bounds) > HOP_TRAVEL_M) continue;
+        expect(
+          CLIMB_LINKS.some((link) => link.to === ledge.id),
+          `${ledge.id} is within a hop of the clutter at ${clutter.min.x.toFixed(2)},${clutter.min.z.toFixed(2)} and has no authored way up`,
+        ).toBe(true);
+      }
+    }
+
+    // Not a vacuous pass: the shop really does stand clutter under ledges that a
+    // hop off it would reach, so the loop above had something to judge.
+    expect(inBand.length).toBeGreaterThan(0);
   });
 
   it("reaches nothing in the shop that can be stood on", () => {

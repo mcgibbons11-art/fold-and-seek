@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@foldseek/game-sim": "workspace:*",
+    "@foldseek/map-data": "workspace:*",
     "@foldseek/shared": "workspace:*",
     "colyseus.js": "^0.16.0",
     "react": "^19.1.0",

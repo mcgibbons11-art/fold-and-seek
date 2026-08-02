@@ -31,6 +31,13 @@ export interface CommandRejection {
   readonly detail?: string;
 }
 
+/**
+ * An Inspector's eye in world metres, as it travels to whichever machine holds
+ * authority. Both networked adapters report one and both authorities check
+ * range and line of sight from it, so it is named here rather than twice.
+ */
+export type EyePosition = readonly [number, number, number];
+
 /** The latest legal pose a Mimic has authored, and the revision it belongs to. */
 export interface ForgeSnapshot {
   readonly encodedPose: string;

@@ -2,6 +2,7 @@ import { JUMP_HEIGHT_M } from "@foldseek/shared";
 
 import {
   blocksCapsule,
+  containsXZ,
   surfaceAt,
   INSPECTOR_EYE_HEIGHT_M,
   INSPECTOR_HEIGHT_M,
@@ -259,9 +260,20 @@ export class CharacterController {
     this.reset(x, y, z, yaw);
 
     const surface = surfaceAt(this.navData.floors, x, z, y + INSPECTOR_STEP_HEIGHT_M);
-    this.surfaceId = surface?.id ?? null;
-    this.grounded =
-      surface !== null && this.position.y - surface.bounds.max.y <= WORLD_SCALE.groundSnap;
+    if (surface === null) {
+      this.surfaceId = null;
+      this.grounded = false;
+      return;
+    }
+
+    // A blocker top under the feet is what the body is standing on, and nothing
+    // walkable is published there. The Forge can leave a disguise on a crate or
+    // on the arm of the armchair, and reading only the floor underneath would
+    // report it as hanging in mid-air, which is the one state a creep refuses
+    // to move out of.
+    const restingOn = this.descentBlockedAt(y, surface.bounds.max.y);
+    this.surfaceId = restingOn === null ? surface.id : null;
+    this.grounded = y - (restingOn ?? surface.bounds.max.y) <= WORLD_SCALE.groundSnap;
   }
 
   private reset(x: number, y: number, z: number, yaw: number): void {
@@ -532,18 +544,36 @@ export class CharacterController {
       return;
     }
 
-    const top = below.bounds.max.y;
-    if (this.verticalVelocity === 0 && this.position.y - top <= WORLD_SCALE.groundSnap) {
-      this.position.y = top;
-      this.grounded = true;
-      this.surfaceId = below.id;
-      return;
+    const floorTop = below.bounds.max.y;
+    if (this.verticalVelocity === 0) {
+      // A blocker the feet already rest on holds the body up exactly as a
+      // walkable surface does. Without this the body would micro-fall off a
+      // crate top and be caught again on every single frame it stood there.
+      const restingOn = this.descentBlockedAt(this.position.y, floorTop);
+      const top = restingOn ?? floorTop;
+      if (this.position.y - top <= WORLD_SCALE.groundSnap) {
+        this.position.y = top;
+        this.grounded = true;
+        this.surfaceId = restingOn === null ? below.id : null;
+        return;
+      }
     }
 
     this.applyGravity(dtSeconds);
     const nextY = this.position.y + this.verticalVelocity * dtSeconds;
-    if (nextY <= top) {
-      this.position.y = top;
+    const landedOn = this.descentBlockedAt(this.position.y, Math.max(nextY, floorTop));
+    if (landedOn !== null) {
+      this.position.y = landedOn;
+      this.land();
+      // Nothing walkable is published at a blocker top, so no authored climb
+      // link may claim to start from one: `tryStartClimb` stands down on a null
+      // surface, which is what keeps a body that dropped onto the back of the
+      // armchair from vaulting a link it is merely standing over.
+      this.surfaceId = null;
+      return;
+    }
+    if (nextY <= floorTop) {
+      this.position.y = floorTop;
       this.land();
       this.surfaceId = below.id;
       return;
@@ -551,6 +581,45 @@ export class CharacterController {
     this.position.y = nextY;
     this.grounded = false;
     this.surfaceId = null;
+  }
+
+  /**
+   * Highest blocker top the feet cross on the way from `feetY` down to `lowY`,
+   * or null when that descent is clear.
+   *
+   * A fall used to consult `surfaceAt` alone, so a body that ran off a ledge
+   * dropped straight through whatever furniture stood under it and landed on
+   * the floor *inside* the armchair. Sweeping the descent rather than sampling
+   * its end is what makes it a fix: a frame at terminal speed covers 0.1 m,
+   * which is the whole of a packing crate, so a test done only at `nextY`
+   * tunnels through exactly the obstacles this is about.
+   *
+   * **A blocker top is standing.** Every box in the nav data is axis-aligned
+   * with a flat top, so a fall onto a crate lands on the crate and a fall onto
+   * the arm of the armchair lands on the arm. The alternative — pushing the
+   * body sideways to the nearest free column — has no answer when every
+   * neighbour is occupied, and it would still have to put the body somewhere.
+   * Landing is never a trap either: `blocksCapsule` ignores a blocker whose top
+   * is within a step of the feet, so a body standing on one can walk off it in
+   * any direction and fall from there on the ordinary rules.
+   *
+   * The footprint is tested as a point rather than as the capsule's radius, and
+   * that is deliberate: `surfaceAt` puts the body in the air the moment its
+   * centre passes a ledge edge, so a blocker top has to release it at the same
+   * moment. Growing this by the radius would leave a body hovering a radius
+   * past the edge of every crate in the shop.
+   */
+  private descentBlockedAt(feetY: number, lowY: number): number | null {
+    let top: number | null = null;
+    for (const blocker of this.navData.blockers) {
+      const blockerTop = blocker.max.y;
+      // Above the feet it is a wall beside the body rather than ground beneath
+      // it, and `blocksCapsule` is what keeps the body out of those.
+      if (blockerTop > feetY || blockerTop <= lowY) continue;
+      if (!containsXZ(blocker, this.position.x, this.position.z)) continue;
+      if (top === null || blockerTop > top) top = blockerTop;
+    }
+    return top;
   }
 
   /**

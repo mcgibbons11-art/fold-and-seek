@@ -6,8 +6,11 @@
  * one client may send them.
  *
  * The Portals adapter enforces the same two limits with its own copy in
- * apps/client/src/networking/portalsProtocol.ts. The two cannot share a module
- * because no package sits below both apps, so a change here belongs there too.
+ * apps/client/src/networking/portalsProtocol.ts, so a change here belongs there
+ * too. That duplication is left rather than justified: `@foldseek/shared` does
+ * sit below both apps and is where the eye budget was put when the two
+ * transports had to agree on it, so these two could follow whenever somebody is
+ * touching them for another reason.
  */
 
 /** Largest decoded message accepted from one client, matching the Portals cap. */

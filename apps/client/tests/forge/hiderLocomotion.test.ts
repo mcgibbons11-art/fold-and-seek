@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { HiderLocomotion, isHiderMoveKey } from "../../src/forge/HiderLocomotion";
 import {
-  blocksCapsule,
+  containsXZ,
   surfaceAt,
   WORLD_SCALE,
   type MutableVec3,
@@ -73,6 +73,26 @@ function holdUntil(
   throw new Error("holdUntil: the body never got there");
 }
 
+/**
+ * True while the body's own column stands inside a blocker rather than beside
+ * it, which is what "walked into the furniture" actually means.
+ *
+ * `blocksCapsule` is the wrong question here even though it is the right one
+ * for a step. It grows every box by the player radius, because it answers
+ * whether a step may END somewhere; a body dropping cleanly past the side of
+ * the counter is within a radius of it for the whole fall and would read as
+ * blocked by it. So the fall is measured on the body's own column instead: its
+ * centre inside the footprint, and its 0.35 m of height overlapping the box.
+ */
+function insideFurniture(root: MutableVec3): boolean {
+  return NAV_DATA.blockers.some(
+    (blocker) =>
+      containsXZ(blocker, root.x, root.z) &&
+      root.y < blocker.max.y - 1e-6 &&
+      root.y + PLAYER_HEIGHT_M > blocker.min.y + 1e-6,
+  );
+}
+
 /** Releases everything and runs on until the body has come to rest. */
 function settle(locomotion: HiderLocomotion, root: MutableVec3, seconds = 3): void {
   locomotion.releaseAll();
@@ -139,12 +159,14 @@ describe("running the Mimic during the Forge", () => {
   it("stays out of the shop's furniture whichever way it is pointed", () => {
     let anythingBlocked = false;
     const freeRun = HIDER_FORGE_RUN_SPEED * 2;
-    // The floor-level spawns. The elevated ones are a different claim: a body
-    // that runs off the window deck is airborne, and `CharacterController`
-    // checks blockers along a step but not along a fall, for the Inspector
-    // exactly as for a Mimic.
-    const spawns = NAV_DATA.spawnPoints.mimics.filter((spawn) => spawn.position.y === 0);
-    expect(spawns.length).toBeGreaterThan(3);
+    // Every spawn, the elevated ones included. They used to be left out, and
+    // the reason was a real gap rather than a scoping choice: a body that ran
+    // off the window deck was airborne, and the fall consulted the walkable
+    // surfaces alone, so it came down through whatever furniture stood under
+    // it. `CharacterController` now sweeps the descent against the blockers
+    // too, which is what lets a run off the counter be measured here at all.
+    const spawns = NAV_DATA.spawnPoints.mimics;
+    expect(spawns.filter((spawn) => spawn.position.y > 0).length).toBeGreaterThan(2);
 
     for (const spawn of spawns) {
       for (let step = 0; step < 8; step += 1) {
@@ -156,8 +178,15 @@ describe("running the Mimic during the Forge", () => {
         locomotion.press("w");
         for (let frame = 0; frame < 120; frame += 1) {
           locomotion.update(FRAME_SECONDS, yaw, root);
-          const inside = blocksCapsule(NAV_DATA.blockers, root.x, root.z, root.y);
-          expect(inside, `walked into furniture from ${JSON.stringify(spawn.position)}`).toBe(false);
+          // A climb is exempt, and it has to be: a mantle down off the window
+          // deck travels through the deck's own supporting box on the way to
+          // the boards, which is what climbing down the edge of a thing looks
+          // like. The claim is about where walking and falling leave the body.
+          if (locomotion.motion.climbState !== null) continue;
+          expect(
+            insideFurniture(root),
+            `ended up inside furniture from ${JSON.stringify(spawn.position)}`,
+          ).toBe(false);
           expect(
             surfaceAt(NAV_DATA.floors, root.x, root.z, root.y + WORLD_SCALE.stepHeight),
           ).not.toBeNull();

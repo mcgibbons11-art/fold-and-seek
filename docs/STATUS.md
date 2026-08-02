@@ -1,5 +1,326 @@
 # STATUS
 
+## The dedicated server had no geometry, and now the map is a package (2026-08-02)
+
+**This closes the gap the close-pass pass wrote down by name and left standing.**
+`apps/server/src/index.ts` defined `MatchRoom` with no options, so
+`options.spatial` was undefined and every room ran on
+`PERMISSIVE_SPATIAL_VALIDATOR`. On that transport an accusation was not gated on
+range, a direct-look escape was not gated on line of sight, a creeping hider's
+destination was never checked against the walls, and no close pass could fire at
+all. The Portals host has had all of it since `RoundSpatialBridge` landed. The
+reason the server did not was mechanical rather than deliberate: the nav data and
+the validator lived in `apps/client`, and no server can import a browser bundle.
+
+### `packages/map-data`, and the one thing that had to change to make it possible
+
+The shop moved out of the client whole: `navData.ts`, `geometry.ts`,
+`SpatialValidatorImpl.ts`, `zones.ts`, `placements.ts` and `nav.ts`, plus a new
+`objects.ts` carrying the pure half of the old `registry.ts`. The client keeps
+every one of those paths as a re-export, so **no other client file moved and no
+existing client test was touched**.
+
+**Only `zones.ts` needed editing, and only to stop being Three.js.** Its zone
+bounds, floor plan, cabinet blocks and office box were `THREE.Box3`, which a
+server cannot construct. Every reader of them across `src` and `tests` was
+checked first and every one takes `.min` and `.max` and nothing else — no reader
+anywhere calls a `Box3` method on a zone box — so the type became the plain
+`AABB` the navigation contract already defined and the values are identical.
+
+**`registry.ts` kept its Three.js face and did not move**, because that one is
+genuinely used as Three.js: `huntCues` calls `getSize` and `getCenter` on a focus
+box, and `FocusSystem` raycasts a `Box3` pick proxy. It now converts the
+package's records instead of computing its own boxes, so there is one arithmetic
+and two representations rather than two arithmetics.
+
+**The package cannot regress into the browser.** Its tsconfig omits the DOM lib,
+which turns a stray `document` into a compile error. A tsconfig cannot catch an
+import of `three`, though, because three ships its own types and would typecheck
+perfectly before failing on a server nobody is watching, so `portable.test.ts`
+scans the sources for one and asserts the package loaded with no `document`,
+`window` or WebGL context in scope.
+
+### Geometry is now the room's default, which is the actual fix
+
+Passing a validator was optional and nothing passed one. Making `index.ts`
+remember would have fixed today's bug and left tomorrow's, so `MatchRoom.onCreate`
+builds The Curiosity Shop's object registry and its own `RoomSpatialBridge` when
+the options are silent, and `index.ts` defines the room with no options at all. A
+test that wants the old behaviour asks for `PERMISSIVE_SPATIAL_VALIDATOR` by
+name.
+
+`RoomSpatialBridge` is deliberately the same shape as the client's
+`RoundSpatialBridge`: it *is* the validator rather than holding one, because the
+simulation takes its validator once at construction; it adopts a settings change
+the host makes in the lobby; and it refuses what it has not been told rather than
+assuming it.
+
+### The eye message, and the one number the two transports now share
+
+A new `eye` message carries the sender's eye or null, validated by
+`InspectorEyeSchema` in `@foldseek/shared` beside `ForgeSnapshotSchema` and
+`PaintUpdateSchema`. It is not a `MatchCommand`: the simulation never sees it and
+it produces no event, it only tells the validator where to measure from.
+
+**It spends its own allowance rather than the command budget.** An eye arrives on
+a movement cadence, and a client paying for it out of the same twenty commands a
+second would have to choose between reporting where it is standing and firing
+from there. Overflow is dropped silently, because a client sending these
+continuously cannot act on a refusal; a malformed one is still refused, since
+that is a fault rather than a flood.
+
+**`MAX_EYE_REPORTS_PER_SECOND` and `EYE_REPORT_EPSILON_M` moved into
+`@foldseek/shared`, and `portalsProtocol.ts` now re-exports them.** Two
+authorities running the same range and line-of-sight checks have to sample an
+Inspector at the same cadence, or the two transports refuse different shots.
+`eyesAgree` moved with them and `PortalsNetAdapter`'s private copy was deleted.
+
+`ColyseusAdapter.reportInspectorEye` is the client half, mirroring
+`PortalsNetAdapter`'s: rounded to the millimetre, skipped when the eye has not
+travelled past the epsilon, and re-sent in full after a rejoin because the new
+room has heard nothing. **No round factory drives it yet** — there is no
+`colyseusRound.ts`, and the whole adapter is still unreached from the app shell —
+so the seam is built and tested but not yet played through. That belongs with
+task #7.
+
+### Where the server thinks a disguise is, which is the one approximation here
+
+`canAccuse` and `isNearby` need a box for a disguise as well as for a prop, and
+only one authority can see the bodies: the Portals host reads the rendered bounds
+out of its own theatre, and a server has no renderer. `MatchSimulation` gained
+`getDisguisePlacements()`, a read-only accessor over the `rootPosition` it
+already keeps and already validates every creep against, and the room puts a
+body-sized envelope around it: `WORLD_SCALE.playerRadius` either side,
+`PLAYER_HEIGHT_M` up, and a quarter of that down for a disguise draped over a
+ledge.
+
+**That is coarser than the client's box on a tightly folded disguise and tighter
+on a sprawling one, and it is stated rather than hidden.** Matching it exactly
+would mean running the Mimic rig's forward kinematics on a machine with no rig.
+The root is taken from the simulation rather than by decoding the published pose
+a second time, so the position a shot is checked against is the one the creep
+rule accepted, including for a disguise that never sent a pose at all.
+
+The bridge is refreshed in `publish`, which every command and every tick already
+ends in, so the bound on how stale a box can be is one publication: a creeping
+hider covers a couple of centimetres in that time, well inside the reaches being
+measured.
+
+### Verified, on the shop's own geometry
+
+`pnpm -r typecheck` clean across six projects. `pnpm -r test` green: 778 client
+over 73 files, 172 game-sim, 47 shared, 38 server, 7 map-data. `npx vite build`
+green at 254 modules, 1.72 MB and 488 KB gzipped, to a scratch `--outDir`, so the
+extraction cost the Portals bundle nothing. `eslint` clean over every file
+touched.
+
+**The fixtures are props rather than invented boxes.** The wall test is the
+longcase clock of zone B, which stands against the west wall at x -7.33..-6.91:
+an eye 0.35 m east of it is in the room and in the clear, an eye 0.35 m west of
+it is in the street behind the plaster, and the test asserts the two offsets are
+equal before asserting that one shot lands and the other comes back
+`no_line_of_sight`. The creep test tucks a disguise against the west face of the
+cabinet island and walks it 0.12 m east into the cabinet, with the mirror-image
+move down the aisle accepted as the control, so what refuses it is the walls and
+not the speed cap.
+
+**Three cases reproduce the defect rather than describing it**, by asking for
+`PERMISSIVE_SPATIAL_VALIDATOR` back: the through-wall shot lands, the creep into
+the cabinet is accepted, and twenty ticks beside a disguise produce no close
+pass. Fifteen server cases in `roomGeometry.test.ts`, seven package cases in
+`portable.test.ts`, seven client cases in `mapDataParity.test.ts` comparing the
+Three.js face against the plain records prop by prop, and seven in
+`colyseusEye.test.ts`.
+
+**Three of the first-run failures were the tests being wrong, and were fixed as
+findings rather than loosened.** A second accusation in one room was refused for
+the phase because the first had spent the last warrant and ended the hunt; the
+eye-cap case had assumed only the first of twenty-five reports landed when
+fifteen do, and it now fills the window with far reports and watches the legal
+one get dropped; and an invented "every prop sits inside the shop shell"
+assertion was deleted rather than tuned, because `window_sconce_01` is recessed
+into the north wall and `clockwall_wallshelf_01` overhangs the west wall by
+0.33 m, and the map never promised otherwise.
+
+**Not verified: no Colyseus server was booted and no client connected to one.**
+Every server case drives `MatchRoom` directly, which is how the existing suite
+works and is enough for message validation, routing and geometry, but it does not
+exercise msgpack encoding of the `eye` payload over a real socket, and nothing
+has played a round against the dedicated server end to end. The disguise envelope
+above has also never been compared against a real rendered body; it is derived
+from the body's own dimensions rather than measured.
+
+## A fall that lands on the furniture, and a sharpen for the frames that are upscaled (2026-08-02)
+
+Two unrelated items, and one of them turned up a mistaken premise worth reading
+before the next rendering pass.
+
+### A body that ran off a ledge came to rest inside the armchair
+
+`CharacterController.resolveVertical` consulted `surfaceAt` on the way down and
+never `blocksCapsule`, so a fall was resolved against the walkable surfaces
+alone. Furniture stopped a step and did not stop a descent. Running off the
+counter put the body on the floor **inside** the counter, and the locomotion
+sweep in `hiderLocomotion.test.ts` had a comment saying exactly that, which is
+why it filtered the three elevated Mimic spawns out of its own sweep.
+
+**The descent is now swept against the blockers, and a blocker top is
+standing.** `descentBlockedAt(feetY, lowY)` returns the highest blocker top the
+feet cross on their way down, and the fall resolves onto it. Every box in the
+nav data is axis-aligned with a flat top, so a fall onto a crate lands on the
+crate and a fall onto the arm of the armchair lands on the arm. The alternative
+the brief offered — push out sideways to the nearest free column — has no answer
+when every neighbour is occupied and still has to put the body somewhere.
+
+**Three details are load-bearing rather than tidy.**
+
+The footprint is tested as a **point**, not as the capsule grown by the player
+radius the way `blocksCapsule` tests a step. That is what keeps it consistent
+with `surfaceAt`, which puts a body in the air the moment its centre passes a
+ledge edge. Growing it by the radius would leave a body hovering 12 cm past the
+edge of every crate in the shop.
+
+A blocker whose top is **above** the feet is skipped. That is a wall beside the
+body rather than ground beneath it, and `blocksCapsule` is what keeps the body
+out of those.
+
+`surfaceId` becomes **null** on a blocker top, because nothing walkable is
+published there. `tryStartClimb` stands down on a null surface, so a body that
+dropped onto the back of the armchair cannot vault an authored link it merely
+happens to be standing over. `placeAt` reads the same helper, so a disguise the
+Forge left on a crate reports itself as standing rather than as hanging in
+mid-air, which is the one state a creep refuses to move out of.
+
+**Landing is never a trap.** `blocksCapsule` ignores a blocker whose top is
+within a step of the feet, so a body standing on one walks off it in any
+direction and falls from there on the ordinary rules. A test drives exactly
+that off the workshop crate.
+
+**The consequence that needed a guard, and it is a real one.** A body can now
+come to rest on a crate and hop from there, which is a takeoff height that did
+not exist when the only way onto clutter was to pass through it. 0.15 m of crate
+plus a hop's 0.2275 m reach is 0.3775 m, which clears the 0.34 m window display
+deck — and `window_clutter_crate_01` stands **8.4 cm** from that deck's south
+edge. So the giant-scale rule needed restating as something a test can hold: a
+hop off the clutter may open no route the climb links do not already offer. The
+deck has two authored mantles from `floor_00` along that same edge, so the crate
+is a redundant entrance rather than a new one, and `jump.test.ts` now fails if a
+future map change parks clutter under a ledge with no authored way up. The other
+two ledges in the reachable height band, `nook_footstool` and
+`shelving_board_1`, are 1.5 m and 1.7 m from the nearest clutter.
+
+**The locomotion sweep now runs all nine Mimic spawns**, elevated ones included,
+and its oracle changed with its scope. `blocksCapsule` is the wrong question
+during a fall: it grows every box by the player radius because it answers
+whether a step may *end* somewhere, so a body dropping cleanly past the side of
+the counter reads as blocked by it for the whole descent. The sweep measures the
+body's own column against each box instead. **A climb is exempt, and finding out
+why was the interesting part**: a mantle down off the window deck travels
+through the deck's own supporting box, which is what climbing down the edge of a
+thing looks like. Running that down also turned up a pre-existing wobble nothing
+here changed — `tryStartClimb`'s heading test is a dot product against a span,
+and walking due east past the deck's descent link gives it ±1.9e-16, so floating
+point noise decides whether the climb starts. It is harmless (the link goes
+where the player was walking anyway) and is written down here rather than fixed.
+
+**Every new case was confirmed to fail with the fix removed**, printing 0 where
+0.15 and 0.61 were expected. The long-frame case takes a fixture rather than the
+shop, and the first version of it was **wrong and passed for the wrong reason**:
+every thin raised blocker in the Curiosity Shop carries a walkable ledge at its
+own top — a rack board, the workbench slab, a stool seat — so the floors alone
+catch them and the shop cannot tell a swept descent from an endpoint sample. The
+fixture is a slab standing clear of the floor with nothing walkable on it, at a
+0.2 s step, and an endpoint sample drops straight through it.
+
+### The sharpen, and three's own sharpen that is not usable here
+
+The softness diagnosed at the bottom of the texture pass: `applySize` implements
+the render scale as `setPixelRatio(capped * scale)`, so the backing store is
+genuinely smaller and the *browser* stretches it to CSS size bilinearly. A
+five-tap unsharp now runs at the end of the chain, its coefficient
+`1 - renderScale`, so a full-scale frame is untouched and the 0.5 floor every
+tier shares gets half strength.
+
+**It is a uniform, not a branch, and that is the whole design.** The render
+scale moves whenever the adaptive controller answers a slow frame, which on a
+weak GPU is exactly when the shop can least afford a rebuild: a rebuilt pass
+allocates a new render target, a render context in three r185 is keyed on the
+render target, and every compiled program in the shop would be orphaned and
+relinked. That is the defect the camera-stability pass was written to remove, so
+the sharpen is in **every** graph that gets built and simply does nothing at a
+coefficient of zero. No new `QualitySettings` field, no new entry in the effect
+key, and the existing zero-rebuild tests are green untouched.
+
+**Two deliberate departures from the brief, both measured rather than assumed.**
+
+The brief said three's TSL has no stock contrast-adaptive sharpen. **It does** —
+r185.1 ships `addons/tsl/display/SharpenNode.js`, a port of AMD's RCAS from FSR
+1, and it is a better sharpen than this one. It is not usable here for two
+reasons. It is a `TempNode` with its own render target and its own quad pass, so
+it costs a full-resolution half-float target and a fullscreen blit on precisely
+the machines that upscale. And its limiter reads `1.0 - max(neighbours, centre)`,
+which assumes a signal already in [0, 1]; this chain stays in linear HDR until
+`THREE.RenderPipeline` appends the tone map, where a practical is well over 1 and
+that arithmetic is outside its domain.
+
+The brief also asked for the sharpen to sample the **composed** node after
+bloom. It samples the beauty buffer instead, before the occlusion multiply and
+the bloom add. Reading the composed node's neighbours means either five bloom
+fetches and five occlusion fetches per pixel or wrapping it in `rtt()`, which is
+the same extra target again — and it buys nothing, because the occlusion is
+drawn at half resolution and the bloom is a wide blur, so both terms are low
+frequency by construction and carry no detail to recover. Every high frequency
+in the frame is in the buffer this samples. Net cost of the whole feature: four
+texture fetches on the composite quad, no new target, no new pass, no new
+program.
+
+**The halo clamp is relative rather than absolute**, and it has to be for the
+same HDR reason: a 20.0 bulb beside a 0.05 shadow has a raw undershoot far
+larger than the shadow pixel, so a fixed clamp would print a black ring around
+every practical. A pixel may move by half its own value.
+
+**Verified in a browser, which is the claim that mattered.** A TSL type error
+here is a black screen for every player on medium and above, and the headless
+tests build the node graph but never compile it. The client was served and
+driven into the Forge on **ANGLE / D3D11 with an Intel UHD 620** — the WebGL 2
+integrated path the softness was reported on — and the whole shop compiled and
+drew through the chain: no program link failures, no uncaptured device errors,
+no page exceptions, five console messages in the session of which two are the
+expected `_portals/sdk.js` and favicon 404s.
+
+**Not verified: whether it actually looks better.** Nothing compared an upscaled
+frame with and without it, and the strength constant is reasoned rather than
+measured. Whether `SHARPEN_PER_MISSING_SCALE = 1` reads as crisp or as crunchy
+at a 0.6 scale is a judgement only a critic looking at two frames can make, and
+it is one number to turn.
+
+**Known gap: the low and light tiers get none of this.** Both ship `gtao: false`
+and `bloom: false`, so `RenderPipeline` builds no graph at all and `render`
+falls through to `renderer.render` — and those two tiers have the lowest
+ceilings (0.8 and 0.75), so they are the softest frames in the game. Closing it
+means building a chain for them, which is a full-resolution half-float target
+(~9 MB at 1080p, against a 24 MB texture budget) plus an extra pass on the
+weakest hardware, and gating that on anything the tier can change reintroduces a
+rebuild trigger. It was left undone deliberately rather than half-wired, and it
+is the lead's call whether the memory is worth it.
+
+**Also not unit-tested: one line.** `applySize` passes the *achieved* share
+(`ratio / capped`) rather than the requested scale, because the pixel-ratio floor
+and the tier ceiling both move it — on a 0.5-dpr display the backing store is
+larger than CSS size and there is no upscale to answer for. `RendererManager`
+cannot reach `applySize` without a real device, so that expression is covered by
+the browser run above and by nothing else.
+
+### Verified
+
+`pnpm -r typecheck` clean across six projects. `pnpm -r test` green: 778 client
+over 73 files, 172 game-sim, 47 shared, 38 server, 7 map-data. `npx vite build`
+green at 254 modules, 1.72 MB / 488 KB gzip, to a scratch `--outDir`. Eleven new
+cases: five in `tests/inspector/controller.test.ts` against the fall path, one in
+`tests/forge/jump.test.ts` for the clutter-mount invariant, five in
+`tests/engine/renderPipeline.test.ts` for the sharpen, and the locomotion sweep
+in `tests/forge/hiderLocomotion.test.ts` widened from six spawns to nine.
+
 ## The room is made of something now: grain, tooth, veining, leaves and weave (2026-08-02)
 
 **The gap two critics named as the largest one left**: every surface was a solid

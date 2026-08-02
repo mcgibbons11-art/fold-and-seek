@@ -1,5 +1,7 @@
+import { HIDER_FORGE_RUN_SPEED } from "@foldseek/shared";
 import { describe, expect, it } from "vitest";
 
+import { CharacterController } from "../../src/inspector/CharacterController";
 import {
   createMoveInput,
   InspectorController,
@@ -7,17 +9,24 @@ import {
   type InspectorMoveInput,
 } from "../../src/inspector/InspectorController";
 import {
+  blocksCapsule,
+  surfaceAt,
   BRISK_WALK_MULTIPLIER,
   INSPECTOR_RADIUS_M,
   WORLD_SCALE,
+  type NavData,
 } from "../../src/inspector/navData";
+import { CLUTTER_BLOCKERS, NAV_DATA } from "../../src/world/maps/nav";
+import { WALL_HEIGHT } from "../../src/world/maps/zones";
 import {
+  box,
   openNavData,
   testNavData,
   testSettings,
   LADDER_TO_SHELF,
   MANTLE_TO_TABLE,
   SHELF_TOP,
+  SHOP_FLOOR,
   TABLE_TOP,
   WALL,
   YAW_TOWARD_TABLE,
@@ -289,5 +298,141 @@ describe("InspectorController look", () => {
     walk(controller, 100, { lookYawDelta: 0.5 });
     expect(controller.yaw).toBeGreaterThanOrEqual(-Math.PI);
     expect(controller.yaw).toBeLessThanOrEqual(Math.PI);
+  });
+});
+
+/**
+ * The fall path, against the Curiosity Shop rather than against a fixture.
+ *
+ * A step has always been checked against the blockers and a fall never was, so
+ * a body that ran off a ledge consulted the walkable surfaces alone on the way
+ * down and came to rest on the floor *inside* whatever furniture stood under
+ * it. These measure the descent instead: what it stops on, that it cannot
+ * tunnel through a crate in one long frame, and that having landed on something
+ * the map does not publish as walkable the body can still get off it.
+ */
+describe("CharacterController falling through the shop", () => {
+  /** The workshop's small packing crate, the map's own hoppable obstacle. */
+  const CRATE = (() => {
+    const found = CLUTTER_BLOCKERS.find(
+      (blocker) => blocker.min.x > 4.2 && blocker.max.x < 4.7 && blocker.min.z > -1.1,
+    );
+    if (found === undefined) throw new Error("the map no longer has the workshop clutter crate");
+    return found;
+  })();
+
+  const CRATE_X = (CRATE.min.x + CRATE.max.x) / 2;
+  const CRATE_Z = (CRATE.min.z + CRATE.max.z) / 2;
+
+  /**
+   * A point on the armchair that carries no walkable ledge: the seat cushion is
+   * published as a surface, the arms around it are not, and both are the same
+   * blocker to the controller.
+   */
+  const ARMCHAIR_ARM_X = -5.95;
+  const ARMCHAIR_ARM_Z = 3.5;
+  const ARMCHAIR_TOP_Y = 0.61;
+
+  /** Drops a still body and runs until it is standing again. */
+  function drop(x: number, y: number, z: number, dtSeconds = FRAME_SECONDS): CharacterController {
+    const controller = new CharacterController(NAV_DATA, () => 0);
+    controller.placeAt(x, y, z, 0);
+    const input = createMoveInput();
+    for (let frame = 0; frame < 600 && !controller.grounded; frame += 1) {
+      controller.update(dtSeconds, input);
+    }
+    if (!controller.grounded) throw new Error("drop: the body never landed");
+    return controller;
+  }
+
+  /** Height of the only thing the map publishes as walkable at (x, z). */
+  function walkableTopAt(x: number, z: number): number | null {
+    const surface = surfaceAt(NAV_DATA.floors, x, z, WALL_HEIGHT);
+    return surface?.bounds.max.y ?? null;
+  }
+
+  it("lands on the crate rather than on the floor inside it", () => {
+    // Nothing walkable is published at the crate's own height, so the landing
+    // height can only have come from the blocker.
+    expect(walkableTopAt(CRATE_X, CRATE_Z)).toBe(0);
+
+    const controller = drop(CRATE_X, 1, CRATE_Z);
+
+    expect(controller.position.y).toBeCloseTo(CRATE.max.y, 6);
+    expect(controller.grounded).toBe(true);
+    // And the map does not name what it is standing on, so no authored climb
+    // link may be started from it.
+    expect(controller.surfaceId).toBeNull();
+  });
+
+  it("catches a blocker the whole of one long frame passed over", () => {
+    // A shelf slab standing clear of the floor with nothing walkable on it, and
+    // a fifth of a second a step — a stalled main thread, where the body covers
+    // most of a metre between samples and the whole slab falls inside one of
+    // them. Asking only where the feet ENDED drops straight through this; the
+    // descent has to be swept.
+    //
+    // It takes a fixture rather than the shop because every thin raised blocker
+    // in the Curiosity Shop carries a walkable ledge at its own top — a rack
+    // board, the workbench slab, a stool seat — and those are caught by the
+    // floors alone. The shop cannot tell the two implementations apart, so it
+    // would not be measuring anything.
+    const slab = box(-1, 0.8, -1, 1, 0.84, 1);
+    const navData: NavData = {
+      floors: [SHOP_FLOOR],
+      blockers: [slab],
+      climbLinks: [],
+      spawnPoints: { inspectors: [], mimics: [] },
+      securityOffice: box(-9, 0, -9, -8, 1, -8),
+    };
+
+    const controller = new CharacterController(navData, () => 0);
+    controller.placeAt(0, 1.5, 0, 0);
+    const input = createMoveInput();
+    for (let frame = 0; frame < 40 && !controller.grounded; frame += 1) {
+      controller.update(0.2, input);
+    }
+
+    expect(controller.position.y).toBeCloseTo(slab.max.y, 6);
+  });
+
+  it("rests on the arm of the armchair instead of dropping into it", () => {
+    expect(walkableTopAt(ARMCHAIR_ARM_X, ARMCHAIR_ARM_Z)).toBe(0);
+
+    const controller = drop(ARMCHAIR_ARM_X, 1.4, ARMCHAIR_ARM_Z);
+
+    expect(controller.position.y).toBeCloseTo(ARMCHAIR_TOP_Y, 6);
+    expect(
+      blocksCapsule(NAV_DATA.blockers, controller.position.x, controller.position.z, controller.position.y),
+    ).toBe(false);
+  });
+
+  it("stays standing on the crate rather than sinking a frame at a time", () => {
+    const controller = drop(CRATE_X, 1, CRATE_Z);
+    const input = createMoveInput();
+    for (let frame = 0; frame < 120; frame += 1) controller.update(FRAME_SECONDS, input);
+
+    expect(controller.position.y).toBeCloseTo(CRATE.max.y, 6);
+    // A body caught and re-caught every frame would report a landing on each of
+    // them, and the camera dips on that flag.
+    expect(controller.justLanded).toBe(false);
+  });
+
+  it("walks off what it landed on, so a landing is never a trap", () => {
+    const controller = new CharacterController(NAV_DATA, () => HIDER_FORGE_RUN_SPEED);
+    controller.placeAt(CRATE_X, 1, CRATE_Z, 0);
+    const input = createMoveInput();
+    for (let frame = 0; frame < 600 && !controller.grounded; frame += 1) {
+      controller.update(FRAME_SECONDS, input);
+    }
+    expect(controller.position.y).toBeCloseTo(CRATE.max.y, 6);
+
+    // Yaw 0 walks along -Z, which leaves the crate by its north face.
+    input.forward = 1;
+    for (let frame = 0; frame < 60; frame += 1) controller.update(FRAME_SECONDS, input);
+
+    expect(controller.position.z).toBeLessThan(CRATE.min.z);
+    expect(controller.position.y).toBe(0);
+    expect(controller.surfaceId).not.toBeNull();
   });
 });

@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // No DOM. This package is imported by the dedicated Colyseus server, where
+    // there is no document and no WebGL context, so a slip has to be a compile
+    // error here rather than a crash on a server nobody is watching. Node's
+    // types supply the globals `@foldseek/shared` needs (TextEncoder) without
+    // bringing the browser back in.
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src", "tests"]
+}

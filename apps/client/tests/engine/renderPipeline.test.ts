@@ -342,3 +342,118 @@ describe("GTAONode camera binding", () => {
     scenePass.dispose();
   });
 });
+
+/**
+ * The sharpen that answers the adaptive render scale.
+ *
+ * `RendererManager.applySize` implements the scale as
+ * `setPixelRatio(capped * scale)`, so a slow frame is drawn into a genuinely
+ * smaller backing store and the browser stretches it back to the canvas with a
+ * bilinear filter. That filter is the softness a critic photographed at
+ * 0.55–0.70 on integrated GPUs, and nothing in the tonemap or the contrast
+ * curve can reach it.
+ *
+ * The claim under test is not that the picture is sharper — only a GPU can say
+ * that. It is that the correction is a uniform rather than a branch: the scale
+ * moves whenever the adaptive controller answers a slow frame, and a graph
+ * rebuilt on it would allocate a new scene-pass render target and relink the
+ * whole shop at exactly the moment the shop could least afford it.
+ */
+describe("RenderPipeline sharpen", () => {
+  /** The strength uniform, which is the only thing the render scale moves. */
+  function strengthUniform(pipeline: RenderPipeline): object {
+    return (pipeline as unknown as { sharpenStrength: object }).sharpenStrength;
+  }
+
+  /** The node three actually draws the frame from. */
+  function outputNode(pipeline: RenderPipeline): THREE.Node {
+    const built = (pipeline as unknown as { pipeline: THREE.RenderPipeline | null }).pipeline;
+    if (built === null) throw new Error("the pipeline built no graph");
+    return built.outputNode as THREE.Node;
+  }
+
+  it("is off at full scale and grows as the backing store shrinks", () => {
+    const pipeline = pipelineFor("medium");
+
+    pipeline.setRenderScale(1);
+    expect(pipeline.sharpenAmount).toBe(0);
+
+    pipeline.setRenderScale(0.65);
+    const partial = pipeline.sharpenAmount;
+    expect(partial).toBeGreaterThan(0);
+
+    pipeline.setRenderScale(0.5);
+    expect(pipeline.sharpenAmount).toBeGreaterThan(partial);
+  });
+
+  it("clamps a scale outside its range rather than inverting the sharpen", () => {
+    // A backing store LARGER than the display's own pixels is downsampled, not
+    // upscaled, and a negative coefficient would blur it on purpose.
+    const pipeline = pipelineFor("ultra");
+    pipeline.setRenderScale(1.4);
+    expect(pipeline.sharpenAmount).toBe(0);
+  });
+
+  it("changes strength without rebuilding the graph", () => {
+    const { renderer } = stubRenderer();
+    const pipeline = new RenderPipeline(renderer, qualitySettingsFor("ultra"));
+    const scene = new THREE.Scene();
+
+    pipeline.bind(scene, gameplayCamera(60, 0, 0));
+    const builds = pipeline.graphBuilds;
+
+    // The ladder the adaptive controller actually walks, down and back up.
+    for (const scale of [0.9, 0.75, 0.6, 0.75, 1]) {
+      pipeline.setRenderScale(scale);
+      pipeline.bind(scene, gameplayCamera(60, 0, 0));
+    }
+
+    expect(pipeline.graphBuilds).toBe(builds);
+    pipeline.dispose();
+  });
+
+  it("puts the strength and its four taps in the graph the frames draw", () => {
+    const { renderer } = stubRenderer();
+    const pipeline = new RenderPipeline(renderer, qualitySettingsFor("ultra"));
+    const scene = new THREE.Scene();
+    pipeline.bind(scene, gameplayCamera(60, 0, 0));
+
+    const strength = strengthUniform(pipeline);
+    const taps = new Set<THREE.Node>();
+    let carriesStrength = false;
+    outputNode(pipeline).traverse((node) => {
+      if (node === strength) carriesStrength = true;
+      const texture = node as { isPassTextureNode?: boolean; uvNode?: unknown };
+      // The centre tap reads the pass at its own screen coordinate and carries
+      // no uv of its own, so an explicit one is an offset neighbour.
+      if (texture.isPassTextureNode === true && texture.uvNode != null) taps.add(node);
+    });
+
+    expect(carriesStrength).toBe(true);
+    expect(taps.size).toBe(4);
+    pipeline.dispose();
+  });
+
+  it("survives a rebuild holding the strength it was already at", () => {
+    const { renderer } = stubRenderer();
+    const pipeline = new RenderPipeline(renderer, qualitySettingsFor("ultra"));
+    const scene = new THREE.Scene();
+    pipeline.bind(scene, gameplayCamera(60, 0, 0));
+    pipeline.setRenderScale(0.6);
+    const amount = pipeline.sharpenAmount;
+
+    // An effect set change rebuilds the graph. The uniform outlives it, so a
+    // frame drawn after one is not silently back to full sharpening or none.
+    pipeline.setEffectEnabled("bloom", false);
+    pipeline.bind(scene, gameplayCamera(60, 0, 0));
+
+    expect(pipeline.sharpenAmount).toBe(amount);
+    let carriesStrength = false;
+    const strength = strengthUniform(pipeline);
+    outputNode(pipeline).traverse((node) => {
+      if (node === strength) carriesStrength = true;
+    });
+    expect(carriesStrength).toBe(true);
+    pipeline.dispose();
+  });
+});

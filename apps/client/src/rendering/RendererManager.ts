@@ -369,5 +369,11 @@ export class RendererManager {
     const ratio = Math.min(Math.max(capped * this.scale, MIN_PIXEL_RATIO), this.settings.pixelRatioCap);
     this.renderer.setPixelRatio(ratio);
     this.renderer.setSize(this.cssWidth, this.cssHeight, false);
+    // A ratio under `capped` is a backing store smaller than the pixels the
+    // display has, and the browser stretches it to the canvas with a bilinear
+    // filter. The post chain's sharpen answers for that filter, so what it is
+    // told is the share actually achieved rather than the share asked for: the
+    // floor and the tier ceiling above both move it.
+    this.pipeline.setRenderScale(ratio / capped);
   }
 }

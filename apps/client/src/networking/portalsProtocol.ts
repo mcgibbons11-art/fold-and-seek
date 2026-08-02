@@ -429,18 +429,11 @@ export const MAX_COMMANDS_PER_SECOND = 20;
 export const MAX_FORGE_SNAPSHOTS_PER_SECOND = DEFAULT_MATCH_SETTINGS.maxForgeCommandHz;
 
 /**
- * Inbound eye reports allowed per sender per second. A client sends at most one
- * per flush, so the honest rate is 1000 / FLUSH_INTERVAL_MS; the allowance sits
- * above it so ordinary timer jitter does not cost an Inspector their position.
+ * The eye budget is shared with the dedicated server rather than copied, since
+ * both authorities run the same range and line-of-sight checks and a transport
+ * that sampled an Inspector at a different rate would refuse different shots.
  */
-export const MAX_EYE_REPORTS_PER_SECOND = 15;
-
-/**
- * How far the eye must travel before it is worth another message. An Inspector
- * standing still would otherwise spend half their send allowance restating
- * where they already are. Well under the shot tolerances the authority applies.
- */
-export const EYE_REPORT_EPSILON_M = 0.01;
+export { EYE_REPORT_EPSILON_M, MAX_EYE_REPORTS_PER_SECOND } from "@foldseek/shared";
 
 /** Sliding-window counter for the relay's per-second send allowance. */
 export class RateWindow {

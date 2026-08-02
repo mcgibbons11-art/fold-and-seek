@@ -14,6 +14,7 @@
     "@colyseus/schema": "^3.0.0",
     "@colyseus/ws-transport": "^0.16.0",
     "@foldseek/game-sim": "workspace:*",
+    "@foldseek/map-data": "workspace:*",
     "@foldseek/shared": "workspace:*",
     "pino": "^9.0.0",
     "zod": "^4.0.0"
