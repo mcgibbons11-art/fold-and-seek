@@ -41,18 +41,19 @@ export interface FakePeerOptions {
    */
   readonly playerId?: string;
   /**
-   * How many of this peer's first join() calls time out after half-registering
-   * the session, which is what the Portals editor was measured doing on a cold
-   * start (2026-08-02). A half-registered session refuses every further join
-   * until leave() clears it, so this models the failure the adapter's retry has
-   * to survive rather than a join that simply says no.
+   * How many of this peer's first join() calls time out (the host's reply
+   * outlives the SDK's request window), measured in the Portals editor on a
+   * cold start (2026-08-02). Whether the host SEATED the timed-out join is
+   * the `registerLate` knob below.
    */
   readonly failJoins?: number;
   /**
-   * When true, a timed-out join registers its session only at the moment the
-   * NEXT join arrives — after the adapter's cleanup leave() has already run.
-   * Measured in the editor (2026-08-02): the retry is then refused with
-   * "already active", and only a further leave()-and-retry gets in.
+   * When true, the host keeps the session a timed-out join created: further
+   * joins are refused with "already active", and — matching sdk.js netLeave —
+   * a plain leave() is a local no-op that never clears it, because the local
+   * mirror is empty and nothing is pending. Only a leave() sent while a join
+   * is ARMED reaches the host. When false, the timed-out join never seated,
+   * and a plain retry simply works.
    */
   readonly registerLate?: boolean;
 }
@@ -203,10 +204,10 @@ class FakePortalsNet implements PortalsNet {
   private joined = false;
   private pendingJoinFailures: number;
   private readonly registerLate: boolean;
-  /** A session the SDK registered for a join it then reported as failed. */
-  private halfJoined = false;
-  /** A timed-out join whose registration has not landed yet (registerLate). */
-  private lateRegistration = false;
+  /** A join request is between this SDK and the host (the armed window). */
+  private joinPending = false;
+  /** The HOST holds a session for this peer, whatever the local mirror says. */
+  private hostActive = false;
 
   constructor(
     relay: FakePortalsRelay,
@@ -222,35 +223,40 @@ class FakePortalsNet implements PortalsNet {
 
   async join(_options?: PortalsNetJoinOptions): Promise<PortalsNetSession> {
     this.relay.countJoinAttempt(this.selfPlayer.id);
+    this.joinPending = true;
+    // Two microtasks stand in for the postMessage round trip: one for the
+    // request crossing to the host, one for the answer crossing back. A
+    // leave() issued between them lands INSIDE the armed window, exactly the
+    // seam forceHostLeave threads in the real SDK.
+    await Promise.resolve();
+    await Promise.resolve();
+    this.joinPending = false;
     if (this.pendingJoinFailures > 0) {
       this.pendingJoinFailures -= 1;
-      if (this.registerLate) this.lateRegistration = true;
-      else this.halfJoined = true;
+      // The reply outlives the request window. Whether the host seated the
+      // join anyway is the registerLate knob.
+      if (this.registerLate) this.hostActive = true;
       throw new Error("join timed out");
     }
-    if (this.lateRegistration) {
-      // The timed-out join's registration lands NOW — after any leave() the
-      // caller ran in between — so this attempt is refused, but the session
-      // it refuses in favor of is REAL and live: the relay knows this peer,
-      // and self()/players()/getState() all work. Measured in the editor:
-      // leave() cannot clear this state, adoption is the only way in.
-      this.lateRegistration = false;
-      this.halfJoined = true;
-      this.joined = true;
-      this.relay.register(this);
-      throw new Error("a multiplayer session is already active — leave() first");
-    }
-    if (this.halfJoined) {
-      throw new Error("a multiplayer session is already active — leave() first");
+    if (this.hostActive && !this.joined) {
+      // Host-side refusal, verbatim from the editor logs: the session the
+      // timed-out join created is still there and leave() has not reached it.
+      throw new Error("A multiplayer session is already active — leave() first.");
     }
     this.joined = true;
+    this.hostActive = true;
     const players = this.relay.register(this);
     return { self: this.selfPlayer, players, state: this.relay.stateSnapshot() };
   }
 
   async leave(): Promise<void> {
-    this.halfJoined = false;
-    this.relay.unregister(this);
+    // sdk.js netLeave: the request reaches the host only while the local
+    // mirror or a pending join exists; otherwise it clears nothing anywhere.
+    if (this.joined || this.joinPending) {
+      this.hostActive = false;
+      this.relay.unregister(this);
+    }
+    this.joined = false;
   }
 
   send(data: unknown): void {

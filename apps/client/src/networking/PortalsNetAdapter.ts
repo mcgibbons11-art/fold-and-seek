@@ -406,24 +406,21 @@ export class PortalsNetAdapter implements NetworkAdapter {
   /**
    * The SDK's own join, with automatic recovery.
    *
-   * Measured in the Portals editor (2026-08-02, three separate logs): the
-   * first join of a session can time out while still registering internally,
-   * and the registration can land at any point AFTER our cleanup leave() has
-   * run. Two earlier cuts of this method tried to clear that late session
-   * with leave() and knock again — the editor logs proved leave() cannot
-   * reliably clear a session that is still settling, and every further join
-   * is refused with "a multiplayer session is already active — leave()
-   * first".
+   * The failure this survives, established by reading the injected sdk.js
+   * after three rounds of editor logs (2026-08-02): a join request the HOST
+   * answers after the SDK's 10 s request window leaves the host holding a
+   * live session while the SDK's local mirror stays empty — the late reply
+   * is dropped, self() returns null, and every further join is refused by
+   * the host with "a multiplayer session is already active". Crucially,
+   * leave() in that state is a LOCAL no-op (netLeave returns early when the
+   * mirror is empty and no join is pending), so leave-and-retry — the two
+   * previous cuts of this method — could never reach the host and the
+   * refusal repeated forever.
    *
-   * The standing insight: that refusal means the timed-out join SUCCEEDED.
-   * The session it registered is the one we asked for (same channel), so the
-   * right move is to adopt it — the SDK exposes self(), players(), and
-   * getState(), which is everything a join() result contains. Fighting the
-   * session with leave() is what loses.
-   *
-   * Timeout-style failures still get leave-wait-retry, three attempts in
-   * all; anything past that is reported, because a relay that keeps refusing
-   * is refusing for a reason knocking cannot fix.
+   * A host-side refusal therefore routes through forceHostLeave(), which is
+   * the only way to actually clear the host. Timeout-style failures keep
+   * plain retry (when the host never seated the join, a fresh knock just
+   * works); three attempts in all, then the failure is reported.
    */
   private async joinRelay(room: string): Promise<PortalsNetSession> {
     const options = room.length > 0 ? { channel: room } : undefined;
@@ -434,18 +431,16 @@ export class PortalsNetAdapter implements NetworkAdapter {
         return await this.net.join(options);
       } catch (error) {
         lastError = error;
-        if (/already active/i.test(String(error))) {
-          const adopted = this.adoptActiveSession();
-          if (adopted !== null) {
-            console.warn(
-              "[portals] the timed-out join registered late; adopting the live session",
-              error,
-            );
-            return adopted;
-          }
-          // Active with no self is a half-state worth one more clear-and-knock.
-        }
         if (attempt === attempts) break;
+        if (/already (active|in a session)/i.test(String(error))) {
+          console.warn(
+            "[portals] the host still holds the timed-out join's session; forcing it clear",
+            error,
+          );
+          const rescued = await this.forceHostLeave(options);
+          if (rescued !== null) return rescued;
+          continue;
+        }
         console.warn("[portals] relay join failed, clearing the session and retrying", error);
         await this.leaveQuietly();
         if (this.joinRetryDelayMs > 0) {
@@ -458,14 +453,28 @@ export class PortalsNetAdapter implements NetworkAdapter {
   }
 
   /**
-   * Rebuilds a join() result from the session the SDK already holds. Only
-   * meaningful right after an "already active" refusal, when the session that
-   * exists is the one this adapter just asked for.
+   * Clears a session the HOST holds for a join whose reply this SDK dropped.
+   *
+   * leave() only travels to the host while the local mirror or a pending
+   * join exists (sdk.js netLeave), and in this failure state neither does.
+   * So: start a join the host is expected to refuse, give the SDK one
+   * microtask to arm it (netJoinPending is set in a .then on the ready
+   * promise), and send the leave through that armed window — the host
+   * processes the doomed join, refuses it, then processes the leave and
+   * clears the session, and the NEXT attempt in the loop gets in clean. If
+   * the host happens to order them the other way, the "doomed" join comes
+   * back a real session and is returned rather than thrown away.
    */
-  private adoptActiveSession(): PortalsNetSession | null {
-    const self = this.net.self();
-    if (self === null) return null;
-    return { self, players: this.net.players(), state: this.net.getState() };
+  private async forceHostLeave(
+    options: { channel: string } | undefined,
+  ): Promise<PortalsNetSession | null> {
+    const doomed: Promise<PortalsNetSession | null> = this.net.join(options).then(
+      (session) => session,
+      () => null,
+    );
+    await Promise.resolve();
+    await this.leaveQuietly();
+    return doomed;
   }
 
   /** Best effort: after a failed join there may genuinely be nothing to leave. */

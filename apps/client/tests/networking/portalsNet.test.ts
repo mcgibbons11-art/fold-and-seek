@@ -985,12 +985,12 @@ describe("PortalsNetAdapter join retry", () => {
     const session = new Session(RECONNECT_SETTINGS);
     await session.addPeer("a", "Ada", { playerId: "account-a" });
 
-    // The user's own preview logs (2026-08-02): join times out, the adapter
-    // leaves and retries — and the retry is refused with "already active"
-    // because the SDK registered the dead join late, in a state leave()
-    // cannot clear. That refusal means the timed-out join actually
-    // succeeded, so the adapter must adopt the live session rather than
-    // knocking a third time.
+    // The user's own preview logs (2026-08-02): join times out, the retry is
+    // refused with "already active" because the HOST kept the timed-out
+    // join's session — and a plain leave() never reaches the host in that
+    // state (sdk.js netLeave early-returns on an empty mirror). The adapter
+    // must thread a leave through an armed join's pending window to clear
+    // the host, and the doomed join that arms it comes back the session.
     const slow = await session.addPeer("b", "Bex", {
       playerId: "account-b",
       failJoins: 1,
@@ -998,7 +998,7 @@ describe("PortalsNetAdapter join retry", () => {
     });
     session.advance(4);
 
-    expect(session.relay.joinAttempts.get("b")).toBe(2);
+    expect(session.relay.joinAttempts.get("b")).toBe(3);
     expect(slow.adapter.getConnection().status).toBe("connected");
     expect(slow.statuses.map((state) => state.status)).not.toContain("error");
     expect(session.peer("a").adapter.getSync().publicState?.players).toHaveLength(2);

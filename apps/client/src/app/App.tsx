@@ -346,29 +346,37 @@ export function App(): ReactElement {
       setRoundError(joinFailureCopy(opened.adapter.getConnection().detail, error));
     };
 
-    // The build yields the frame back between zones, so the loading screen
-    // below animates and the menu room keeps drawing behind it. It resolves
-    // null when the player left before the shop was ready.
-    host
-      .enterRoundMode(opened.adapter, opened.director, opened.spatial, setLoading)
-      .then(async (session) => {
-        if (session === null) {
-          opened.dispose();
-          loadingRef.current = false;
-          setLoading(null);
-          return;
-        }
-        const active: ActiveRound = { round: opened, session };
-        roundRef.current = active;
-        // The loopback has no transport to acquire and the Portals adapter
-        // waits on the SDK handshake, which has already happened by now.
-        await opened.adapter.connect();
-        await opened.adapter.join(opening.channel, opening.displayName);
+    // JOIN FIRST, BUILD SECOND — the order is load-bearing. The join is a
+    // 10-second-capped handshake with the host, and running it while the
+    // shop build holds the main thread was measured (editor, 2026-08-02)
+    // blocking the host's reply past that cap: the join "timed out", the
+    // host kept the seat, and every retry was refused. At the menu the reply
+    // has the thread to itself and a refused join surfaces in seconds, not
+    // after the whole load. The build then yields the frame back between
+    // zones, so the loading screen animates and the menu room keeps drawing
+    // behind it; enterRoundMode resolves null when the player left before
+    // the shop was ready.
+    (async () => {
+      await opened.adapter.connect();
+      await opened.adapter.join(opening.channel, opening.displayName);
+      const session = await host.enterRoundMode(
+        opened.adapter,
+        opened.director,
+        opened.spatial,
+        setLoading,
+      );
+      if (session === null) {
+        opened.dispose();
         loadingRef.current = false;
-        setRound(active);
         setLoading(null);
-      })
-      .catch(abandon);
+        return;
+      }
+      const active: ActiveRound = { round: opened, session };
+      roundRef.current = active;
+      loadingRef.current = false;
+      setRound(active);
+      setLoading(null);
+    })().catch(abandon);
   }, [portals]);
 
   const onLeaveRound = useCallback(() => {
