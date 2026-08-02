@@ -1,3 +1,58 @@
+/**
+ * Standing height of a player, in world metres. This is the one scale knob the
+ * giant-scale design turns: the shop keeps real furniture dimensions and the
+ * player shrinks until a table top is a storey, so every speed and every
+ * distance below is quoted against this number rather than written out.
+ *
+ * `WORLD_SCALE` in the client's `inspector/navData.ts` reads this constant, so
+ * the character controller, the camera rig and the match settings cannot drift
+ * apart.
+ */
+export const PLAYER_HEIGHT_M = 0.35;
+
+/**
+ * Inspector walking speed, in body lengths per second.
+ *
+ * Legged walkers of different sizes move alike at equal Froude number,
+ * v² / (g · L), where L is leg length. A 1.75 m person with a 0.9 m leg breaks
+ * from a walk into a run near 2.1 m/s, which is a Froude number of about 0.5.
+ * The same Froude number over a 0.35 m body, whose leg is roughly half its
+ * standing height, gives sqrt(0.5 · 9.81 · 0.175) = 0.93 m/s, or 2.6 body
+ * lengths a second. A small creature covers more of its own lengths per second
+ * than a person does, which is why this is 2.6 and not the human figure of 1.2.
+ *
+ * The result also sits in the right relation to the climb speeds the map is
+ * authored against, `WORLD_SCALE.mantleSpeed` 0.55 m/s and `ladderSpeed`
+ * 0.35 m/s: walking is a little under twice a vault. The previous 2.8 m/s was
+ * five times a vault, so an Inspector crossed the floor faster than they could
+ * ever climb the stool in front of them.
+ */
+const INSPECTOR_BODY_LENGTHS_PER_SECOND = 2.6;
+
+/**
+ * Hider creep speed, in body lengths per second. Half a body length a second is
+ * where a disguise still reads as furniture that moved while nobody was
+ * looking rather than as an object walking away, and it is under a fifth of the
+ * Inspector's walk, so creeping can never outrun a search. Over the full hunt a
+ * patient hider can still relocate the length of the shop.
+ */
+const HIDER_CREEP_BODY_LENGTHS_PER_SECOND = 0.5;
+
+/**
+ * Reticle reach and gun reach, in body heights, measured from the eye to the
+ * nearest point of the target's bounds.
+ *
+ * Six body heights is 2.1 m, which is what a 1.75 m person sees object detail
+ * at from 10.5 m: far enough to pick a suspicious shape out of the next aisle,
+ * well short of the 15 m the Curiosity Shop runs end to end. The gun reaches
+ * half as far again, so noticing something always costs a walk toward it and no
+ * shot ever crosses the room. The previous 8.0 m focus was twenty-three body
+ * heights, a human-scale equivalent of 40 m, which made most of the shop
+ * inspectable from wherever the Inspector happened to be standing.
+ */
+const FOCUS_BODY_HEIGHTS = 6;
+const ACCUSATION_BODY_HEIGHTS = 3;
+
 export const DEFAULT_MATCH_SETTINGS = {
   minPlayers: 2,
   maxPlayers: 12,
@@ -13,20 +68,20 @@ export const DEFAULT_MATCH_SETTINGS = {
   resultsMs: 15_000,
   rematchVoteMs: 12_000,
   warrantsBonus: 2,
-  inspectorMoveSpeed: 2.8,
+  inspectorMoveSpeed: PLAYER_HEIGHT_M * INSPECTOR_BODY_LENGTHS_PER_SECOND,
   /**
    * How fast a locked Mimic may creep, in metres per second. Hiders stay active
    * during the hunt, so root motion is allowed but far slower than an Inspector
    * walks: the disguise has to read as furniture that moved when nobody looked.
    */
-  hiderCreepSpeed: 0.6,
+  hiderCreepSpeed: PLAYER_HEIGHT_M * HIDER_CREEP_BODY_LENGTHS_PER_SECOND,
   /**
    * Cycle for the live missed-finds board during the hunt. The original shows
    * a visible countdown to the next update on roughly this period.
    */
   missedFindsUpdateMs: 20_000,
-  inspectorFocusDistance: 8.0,
-  accusationDistance: 5.5,
+  inspectorFocusDistance: PLAYER_HEIGHT_M * FOCUS_BODY_HEIGHTS,
+  accusationDistance: PLAYER_HEIGHT_M * ACCUSATION_BODY_HEIGHTS,
   accusationHoldMs: 450,
   wrongAccusationCooldownMs: 1_500,
   directLookMinMs: 650,

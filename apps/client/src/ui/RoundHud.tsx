@@ -1,5 +1,5 @@
 import { MatchPhase, type ResultVoteCategory } from "@foldseek/shared";
-import { useCallback, useSyncExternalStore, type ReactElement } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
 
 import type { RoundDirector } from "../gameplay/RoundDirector";
 import type { RoundSession } from "../gameplay/RoundSession";
@@ -11,6 +11,7 @@ import {
   HiderHud,
   InspectorHud,
   LobbyHud,
+  MissedFindsHud,
   PhaseTimer,
   ResultsHud,
   RevealHud,
@@ -33,6 +34,20 @@ const INSPECTION_PHASES: ReadonlySet<MatchPhase> = new Set([
   MatchPhase.Inspection,
   MatchPhase.FinalCountdown,
 ]);
+
+/**
+ * When the missed-finds board has anything to say. The authority reports during
+ * the hunt and publishes one exact board at the reveal, so it stays up through
+ * the reveal rather than vanishing at the moment the numbers stop being
+ * bucketed.
+ */
+const MISSED_FINDS_PHASES: ReadonlySet<MatchPhase> = new Set([
+  ...INSPECTION_PHASES,
+  MatchPhase.Reveal,
+]);
+
+/** Toggles the board, as in the original (docs/MECCHA_RESEARCH.md). */
+const MISSED_FINDS_KEY = "6";
 
 /** The loopback round is not a room anyone can be invited to. */
 const LOCAL_ROOM_CODE = "";
@@ -63,6 +78,25 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
   );
   const onRematch = useCallback((yes: boolean) => session.actions.voteRematch(yes), [session]);
 
+  const [boardOpen, setBoardOpen] = useState(false);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      // A hider paints through the hunt, and the paint panel has a hex field
+      // and numeric ones; a 6 typed into either is a colour, not a shortcut.
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+      // The Forge owns 1 through 5 for its tool modes, which is exactly why the
+      // original put this board on 6 and why it is free here as well.
+      if (event.key !== MISSED_FINDS_KEY || event.ctrlKey || event.metaKey || event.altKey) return;
+      setBoardOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, []);
+
   const forgeTools =
     engine.forge === null ? null : (
       <ForgeHud controller={engine.forge} onExit={onLeave} exitLabel="Leave the round" />
@@ -81,6 +115,7 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
         onVote,
         onRematch,
       })}
+      {boardOpen && MISSED_FINDS_PHASES.has(state.phase) ? <MissedFindsHud state={state} /> : null}
       {isInspecting ? null : <Toast entries={rejectionToasts(state)} />}
       {isInspecting && !engine.pointerLocked ? <PointerLockPrompt /> : null}
     </>

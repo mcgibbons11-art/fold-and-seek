@@ -1,9 +1,10 @@
 import type { PublicDisguiseView } from "@foldseek/game-sim";
+import { describe, expect, it, vi } from "vitest";
 import * as THREE from "three/webgpu";
-import { describe, expect, it } from "vitest";
 
 import { createBotDisguisePayload } from "../../src/gameplay/botDisguises";
 import { DisguiseTheatre } from "../../src/gameplay/disguiseTheatre";
+import { TAUNT_SOUND } from "../../src/gameplay/huntCues";
 import { decodeDisguiseState } from "../../src/mimic/poseWire";
 import { PaintLayer } from "../../src/paint/PaintLayer";
 import { qualitySettingsFor } from "../../src/rendering/quality";
@@ -220,5 +221,129 @@ describe("DisguiseTheatre", () => {
     expect(scene.children).toHaveLength(0);
 
     theatre.dispose();
+  });
+});
+
+/**
+ * A taunt is performed by the object, never by the player, which is the only
+ * reason a hider can bait an Inspector without confessing. These check that the
+ * gesture reaches the body, that every client animates it identically off the
+ * authority's seed, and that it does not drag the object's focus box with it.
+ */
+describe("DisguiseTheatre taunts", () => {
+  /** The disguise's own body transform, which is what a taunt displaces. */
+  function bodyOf(theatre: DisguiseTheatre, scene: THREE.Scene): THREE.Object3D {
+    const root = scene.getObjectByName("disguise-obj_a");
+    expect(root, "no body standing for obj_a").toBeDefined();
+    return root as THREE.Object3D;
+  }
+
+  function stagedTheatre(audio?: { play: (id: string, jitter?: number) => void }): {
+    theatre: DisguiseTheatre;
+    scene: THREE.Scene;
+  } {
+    const scene = new THREE.Scene();
+    const theatre = new DisguiseTheatre(scene, QUALITY, audio ?? null);
+    theatre.sync([publicDisguise("obj_a", createBotDisguisePayload(0))], null);
+    return { theatre, scene };
+  }
+
+  it("moves the object it names, then leaves it exactly where it stood", () => {
+    const play = vi.fn();
+    const { theatre, scene } = stagedTheatre({ play });
+    const body = bodyOf(theatre, scene);
+    expect(body.position.lengthSq()).toBe(0);
+
+    expect(theatre.taunt("obj_a", "shudder", 7)).toBe(true);
+    expect(play).toHaveBeenCalledWith(TAUNT_SOUND, expect.any(Number));
+    expect(play.mock.calls[0]?.[0]).toBe(TAUNT_SOUND);
+
+    theatre.update(120);
+    expect(body.position.lengthSq(), "the taunt never reached the body").toBeGreaterThan(0);
+
+    // A gesture that ended leaning would leave the disguise permanently askew.
+    theatre.update(5_000);
+    expect(body.position.lengthSq()).toBe(0);
+    expect(body.rotation.y).toBe(0);
+    expect(body.rotation.z).toBe(0);
+
+    theatre.dispose();
+  });
+
+  it("plays the same gesture on every client from the same seed", () => {
+    const first = stagedTheatre();
+    const second = stagedTheatre();
+    const third = stagedTheatre();
+
+    first.theatre.taunt("obj_a", "rattle", 12_345);
+    second.theatre.taunt("obj_a", "rattle", 12_345);
+    third.theatre.taunt("obj_a", "rattle", 12_346);
+    for (const staged of [first, second, third]) staged.theatre.update(180);
+
+    const a = bodyOf(first.theatre, first.scene);
+    const b = bodyOf(second.theatre, second.scene);
+    const c = bodyOf(third.theatre, third.scene);
+
+    expect(b.position.toArray()).toEqual(a.position.toArray());
+    expect(b.rotation.toArray()).toEqual(a.rotation.toArray());
+    // A different seed is a different performance, or the seed is doing nothing.
+    expect(c.position.toArray()).not.toEqual(a.position.toArray());
+
+    for (const staged of [first, second, third]) staged.theatre.dispose();
+  });
+
+  it("gives each gesture its own shape and its own length", () => {
+    const shudder = stagedTheatre();
+    const tick = stagedTheatre();
+    shudder.theatre.taunt("obj_a", "shudder", 3);
+    tick.theatre.taunt("obj_a", "tick_tock", 3);
+    shudder.theatre.update(200);
+    tick.theatre.update(200);
+
+    const shudderBody = bodyOf(shudder.theatre, shudder.scene);
+    const tickBody = bodyOf(tick.theatre, tick.scene);
+    expect(tickBody.position.toArray()).not.toEqual(shudderBody.position.toArray());
+
+    // shudder is the short one; tick_tock is still swinging when it is over.
+    shudder.theatre.update(500);
+    tick.theatre.update(500);
+    expect(shudderBody.position.lengthSq()).toBe(0);
+    expect(Math.abs(tickBody.rotation.z)).toBeGreaterThan(0);
+
+    shudder.theatre.dispose();
+    tick.theatre.dispose();
+  });
+
+  it("refuses a taunt for an object it is not drawing", () => {
+    const play = vi.fn();
+    const { theatre } = stagedTheatre({ play });
+
+    // The viewer's own disguise looks exactly like this: the Forge holds it, so
+    // the theatre has no body to perform with and says so rather than pretending.
+    expect(theatre.taunt("obj_mine", "puff", 1)).toBe(false);
+    expect(play).not.toHaveBeenCalled();
+
+    theatre.dispose();
+  });
+
+  it("keeps the focus box on the pose rather than on the wobble", () => {
+    const { theatre, scene } = stagedTheatre();
+    const still = new THREE.Scene();
+    const reference = new DisguiseTheatre(still, QUALITY);
+
+    theatre.taunt("obj_a", "settle_creak", 5);
+    theatre.update(300);
+    expect(bodyOf(theatre, scene).position.lengthSq()).toBeGreaterThan(0);
+
+    // The same creep arriving mid-gesture: the box the reticle brackets and the
+    // authority shoots against has to describe where the pose puts the body,
+    // not where the taunt has thrown it this frame.
+    const crept = publicDisguise("obj_a", createBotDisguisePayload(2));
+    theatre.sync([crept], null);
+    reference.sync([crept], null);
+    expect(theatre.boundsOf("obj_a")?.equals(reference.boundsOf("obj_a") as THREE.Box3)).toBe(true);
+
+    theatre.dispose();
+    reference.dispose();
   });
 });

@@ -1,7 +1,8 @@
-import type { MatchCommand } from "@foldseek/game-sim";
+import type { MatchCommand, SimEvent } from "@foldseek/game-sim";
 import { DEFAULT_MATCH_SETTINGS, MatchPhase, type MatchSettings } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
 
+import { AudioPlayer, type SoundId } from "../forge/AudioPlayer";
 import { ForgeController } from "../forge/ForgeController";
 import { SHOP_FORGE_WORKSPACE } from "../world/ShopWorld";
 import {
@@ -12,6 +13,7 @@ import {
   type InspectorSystem,
 } from "../inspector";
 import { NAV_DATA } from "../world/maps/nav";
+import { WORLD_SCALE } from "../inspector/navData";
 import { CURIOSITY_SHOP_OBJECTS } from "../world/maps/registry";
 import { encodeDisguiseState } from "../mimic/poseWire";
 import type { NetworkAdapter, Unsubscribe } from "../networking/NetworkAdapter";
@@ -19,7 +21,8 @@ import { Signal } from "../networking/signal";
 import type { QualitySettings } from "../rendering/quality";
 import type { InspectorGunView } from "../ui/rounds/InspectorHud";
 import { humanMimicSpawn } from "./botDisguises";
-import { DisguiseTheatre } from "./disguiseTheatre";
+import { DisguiseTheatre, TAUNT_PITCH_JITTER } from "./disguiseTheatre";
+import { CATCH_SOUND, ReactionTheatre, TAUNT_SOUND, WRONG_ACCUSATION_SOUND } from "./huntCues";
 import { RoundActions } from "./RoundActions";
 import type { RoundDirector } from "./RoundDirector";
 import type { RoundSpatialBridge } from "./roundSpatial";
@@ -79,6 +82,14 @@ const SURVEY_FOV_DEG = 55;
 /** What the Forge says once the disguise is standing in the room (override 2). */
 const HUNT_EDIT_HINT = "Your disguise is in the room. Keep shaping it, and creep slowly.";
 
+/** The shop door, opened once as the Inspector is let in. */
+const DOOR_SOUND: SoundId = "door_open";
+/** One footfall per this share of body height travelled. */
+const FOOTSTEP_STRIDE_FACTOR = 0.62;
+/** Below this share of body height per second, nobody is walking. */
+const MIN_FOOTSTEP_SPEED_FACTOR = 0.3;
+const FOOTSTEP_PITCH_JITTER = 0.12;
+
 const IDLE_GUN: InspectorGunView = {
   state: "idle",
   targetObjectId: null,
@@ -112,7 +123,9 @@ export class RoundSession {
   /** Survey and Inspector share one camera; the Forge brings its own. */
   private readonly viewCamera: THREE.PerspectiveCamera;
   private readonly options: RoundSessionOptions;
+  private readonly audio = new AudioPlayer();
   private readonly theatre: DisguiseTheatre;
+  private readonly reactions: ReactionTheatre;
   private readonly changed = new Signal<RoundEngineState>();
   private readonly subscriptions: Unsubscribe[] = [];
 
@@ -137,7 +150,8 @@ export class RoundSession {
     this.options = options;
     this.quality = options.quality;
     this.actions = new RoundActions(options.adapter, options.director);
-    this.theatre = new DisguiseTheatre(options.scene, options.quality);
+    this.theatre = new DisguiseTheatre(options.scene, options.quality, this.audio);
+    this.reactions = new ReactionTheatre(options.scene, this.audio);
     options.spatial.setDisguiseBounds((objectId) => this.theatre.boundsOf(objectId));
 
     this.viewCamera = new THREE.PerspectiveCamera(SURVEY_FOV_DEG, 1, 0.01, 60);
@@ -145,9 +159,7 @@ export class RoundSession {
 
     this.subscriptions.push(
       options.adapter.onEvent((event) => {
-        if (event.type !== "accusation_resolved") return;
-        if (event.inspectorPublicId !== this.state().self.publicPlayerId) return;
-        this.inspector?.handleAccusationResolved(event.correct);
+        this.presentEvent(event);
       }),
       options.adapter.onRejection((rejection) => {
         this.inspector?.handleRejection(rejection);
@@ -178,6 +190,9 @@ export class RoundSession {
       this.options.adapter.getSync().publicState?.disguises ?? [],
       this.forge === null ? null : (state.self.ownDisguise?.publicObjectId ?? null),
     );
+    // After the sync, which puts every body back where its pose says it stands.
+    this.theatre.update(dtMs);
+    this.reactions.update(dtMs);
 
     switch (this.mode) {
       case "forge":
@@ -219,8 +234,51 @@ export class RoundSession {
     this.closeForge();
     this.closeInspector();
     this.theatre.dispose();
+    this.reactions.dispose();
+    this.audio.dispose();
     this.options.spatial.setDisguiseBounds(() => null);
     this.changed.clear();
+  }
+
+  // -------------------------------------------------------------- presentation
+
+  /**
+   * Gives the hunt's public events a body and a voice. Every one of these is
+   * broadcast to the whole room, so the presentation is the same for everybody:
+   * a taunt is performed by the object, an innocent object answers a wasted
+   * warrant where it stands, and a catch and a miss each have their own sting.
+   *
+   * `disguise_updated` is deliberately absent. It carries no geometry, only the
+   * news that some object changed; the pose and the paint travel in public
+   * state, which `update` re-reads every frame, so a creep and a brushstroke
+   * already reach the screen without anything here listening for them.
+   */
+  private presentEvent(event: SimEvent): void {
+    switch (event.type) {
+      case "taunt_performed":
+        // A hider's own disguise is drawn by their Forge rather than by the
+        // theatre, so their own taunt has no body here and only the sound
+        // reaches them.
+        if (!this.theatre.taunt(event.publicObjectId, event.tauntId, event.seed)) {
+          this.audio.play(TAUNT_SOUND, TAUNT_PITCH_JITTER);
+        }
+        break;
+
+      case "innocent_reaction":
+        this.reactions.play(event.objectId, event.reactionId);
+        break;
+
+      case "accusation_resolved":
+        this.audio.play(event.correct ? CATCH_SOUND : WRONG_ACCUSATION_SOUND);
+        // The recoil and the reticle belong to the Inspector who fired.
+        if (event.inspectorPublicId === this.state().self.publicPlayerId) {
+          this.inspector?.handleAccusationResolved(event.correct);
+        }
+        break;
+
+      default:
+        break;
+    }
   }
 
   // ------------------------------------------------------------------ phases
@@ -278,6 +336,12 @@ export class RoundSession {
       // room gets. The authority auto-locks a Mimic who sends nothing, so this
       // only decides whether it locks the authored pose or the recovered one.
       this.forge.lock();
+    }
+    if (phase === MatchPhase.InspectionIntro) {
+      // The shop door. Every role hears it, because it is the moment the room
+      // stops being a workshop and becomes a hunt, and a hider hearing the
+      // Inspector let in is the whole tension of the phase opening.
+      this.audio.play(DOOR_SOUND);
     }
     if (phase === MatchPhase.InspectionIntro && this.forge !== null && this.forge.snapshot().locked) {
       // The disguise is already the room's; the editor goes back to editable so
@@ -413,11 +477,25 @@ export class RoundSession {
     inspector.enabled = state.phase !== MatchPhase.InspectionIntro;
     inspector.setAmmo(state.self.warrantsRemaining ?? state.warrantsRemaining ?? 0);
     inspector.update(dtMs, nowMs);
+    this.stepFootsteps(inspector);
 
     // The authority checks range and line of sight itself, and the eye it
     // checks from is this one: without it every accusation is refused.
     const selfId = this.options.adapter.getSelfId();
     if (selfId !== null) this.options.spatial.setInspectorEye(selfId, inspector.cameraRig.eye);
+  }
+
+  /**
+   * The Inspector's own boards underfoot. The cadence comes from the speed the
+   * controller actually achieved and from a stride quoted against player height,
+   * so it neither drums at a standstill nor keeps a human cadence for a body
+   * this size. Below a crawl there is no footfall to play.
+   */
+  private stepFootsteps(inspector: InspectorSystem): void {
+    const { speed, grounded } = inspector.controller;
+    if (!grounded || speed < MIN_FOOTSTEP_SPEED_FACTOR * WORLD_SCALE.playerHeight) return;
+    const strideM = FOOTSTEP_STRIDE_FACTOR * WORLD_SCALE.playerHeight;
+    this.audio.playThrottled("footstep_wood", (strideM / speed) * 1_000, FOOTSTEP_PITCH_JITTER);
   }
 
   private buildInspectables(): InspectableSet {

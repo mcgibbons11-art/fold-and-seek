@@ -1,4 +1,4 @@
-import { MAX_PANELS, PANEL_SOCKET_NAMES, type PanelSocketName } from "./rig";
+import { MAX_PANELS, PANEL_SOCKET_NAMES, RIG_TO_WORLD, type PanelSocketName } from "./rig";
 
 /**
  * Deployable mimic panels (bible §7.4 Layer 3, §24.4). Panels are body parts
@@ -10,12 +10,16 @@ export const PANEL_PROFILE_IDS = ["rectangle", "rounded_rect", "triangle"] as co
 
 export type PanelProfileId = (typeof PANEL_PROFILE_IDS)[number];
 
-/** Panel width and height in metres at normalized 0 and 1. */
-export const PANEL_SIZE_MIN_M = 0.06;
-export const PANEL_SIZE_MAX_M = 0.9;
+/**
+ * Panel width and height in metres at normalized 0 and 1. Quoted against the
+ * body the way the bone table is, so the largest panel is most of the creature
+ * and the smallest is a stud, then converted with it.
+ */
+export const PANEL_SIZE_MIN_M = 0.06 * RIG_TO_WORLD;
+export const PANEL_SIZE_MAX_M = 0.9 * RIG_TO_WORLD;
 
 /** Telescoping travel in metres at `extension = 1`. */
-export const PANEL_MAX_EXTENSION_M = 0.45;
+export const PANEL_MAX_EXTENSION_M = 0.45 * RIG_TO_WORLD;
 
 export const PANEL_MIN_HINGE_DEG = -180;
 export const PANEL_MAX_HINGE_DEG = 180;

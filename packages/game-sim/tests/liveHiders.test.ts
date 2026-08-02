@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEFAULT_MATCH_SETTINGS,
   MatchPhase,
   PrivateSimEventSchema,
   SimEventSchema,
@@ -22,6 +23,15 @@ import { Harness } from "./harness";
  * design override in CLAUDE.md): a manifested disguise can still be reshaped and
  * can creep, slowly, under server validation.
  */
+
+/**
+ * Metres a creeping hider earns by waiting, at whatever creep speed ships. The
+ * distances below are quoted through this rather than written out, so retuning
+ * the setting cannot quietly turn "a teleport" into "a legal creep".
+ */
+function creepBudget(waitedMs: number): number {
+  return (DEFAULT_MATCH_SETTINGS.hiderCreepSpeed * waitedMs) / 1_000;
+}
 
 /** A pose at a chosen root position, so a test can drive movement precisely. */
 function poseAt(x: number, revision: number, y = 0, z = 0): string {
@@ -55,10 +65,12 @@ describe("post-lock adjustments", () => {
     const updates = harness.eventsOfType("disguise_updated");
     expect(updates.at(-1)).toMatchObject({ publicObjectId: objectId, revision: 2, moved: false });
 
-    // 0.6 m/s for two seconds allows 1.2 m; half a metre is comfortably legal.
+    // Two seconds of waiting buys more than this on its own, so the creep is
+    // legal with margin however the speed is tuned.
+    const step = creepBudget(2_000) / 2;
     harness.tick(2_000);
     const crept = harness.record(
-      harness.sim.recordForgeSnapshot(mimicId, poseAt(0.5, 3), 3, harness.now),
+      harness.sim.recordForgeSnapshot(mimicId, poseAt(step, 3), 3, harness.now),
     );
     expect(crept.accepted).toBe(true);
     expect(harness.eventsOfType("disguise_updated").at(-1)).toMatchObject({
@@ -70,17 +82,21 @@ describe("post-lock adjustments", () => {
     const view = harness.sim
       .getPublicState()
       .disguises.find((entry) => entry.publicObjectId === objectId);
-    expect(view?.encodedPose).toBe(poseAt(0.5, 3));
-    expect(harness.sim.getPrivateStateFor(mimicId)?.ownDisguise?.encodedPose).toBe(poseAt(0.5, 3));
+    expect(view?.encodedPose).toBe(poseAt(step, 3));
+    expect(harness.sim.getPrivateStateFor(mimicId)?.ownDisguise?.encodedPose).toBe(poseAt(step, 3));
   });
 
   it("refuses a creep faster than hiderCreepSpeed", () => {
     const harness = huntHarness(1_303);
     const mimicId = harness.mimicIds()[0] as string;
 
-    // One second buys 0.6 m; ten metres is a teleport.
+    // A distance that takes forty seconds of creeping to earn, attempted one
+    // second in. The disguise has been standing still since it locked, so its
+    // budget is the few seconds of lock grace and intro, nowhere near enough.
+    const WAIT_MS = 40_000;
+    const bolt = creepBudget(WAIT_MS);
     harness.tick(1_000);
-    const bolted = harness.sim.recordForgeSnapshot(mimicId, poseAt(10, 2), 2, harness.now);
+    const bolted = harness.sim.recordForgeSnapshot(mimicId, poseAt(bolt, 2), 2, harness.now);
     expect(bolted.accepted).toBe(false);
     expect(bolted.reason).toBe("moved_too_fast");
     expect(bolted.detail).toContain("m/s");
@@ -94,9 +110,9 @@ describe("post-lock adjustments", () => {
     expect(harness.eventsOfType("disguise_updated")).toHaveLength(0);
 
     // The same distance is legal once enough time has passed.
-    harness.tick(30_000);
+    harness.tick(WAIT_MS);
     expect(
-      harness.sim.recordForgeSnapshot(mimicId, poseAt(10, 3), 3, harness.now).accepted,
+      harness.sim.recordForgeSnapshot(mimicId, poseAt(bolt, 3), 3, harness.now).accepted,
     ).toBe(true);
   });
 

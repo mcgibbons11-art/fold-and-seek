@@ -5,6 +5,14 @@ export { RoundDirector, type RoundDirectorOptions } from "./RoundDirector";
 export { RoundActions, DEFAULT_TAUNT_ID, type ActionOutcome } from "./RoundActions";
 export { RoundSpatialBridge } from "./roundSpatial";
 export { DisguiseTheatre } from "./disguiseTheatre";
+export {
+  ReactionTheatre,
+  REACTION_SOUNDS,
+  CATCH_SOUND,
+  TAUNT_SOUND,
+  WRONG_ACCUSATION_SOUND,
+  type SoundCue,
+} from "./huntCues";
 export { createBotDisguise, createBotDisguisePayload } from "./botDisguises";
 export {
   RoundSession,

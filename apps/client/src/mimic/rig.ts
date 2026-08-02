@@ -1,3 +1,4 @@
+import { PLAYER_HEIGHT_M } from "@foldseek/shared";
 import { Quaternion, Vector3 } from "three";
 
 /**
@@ -19,6 +20,24 @@ export const RAD_TO_DEG = 180 / Math.PI;
 
 /** Below this squared magnitude a vector or quaternion vector part is treated as degenerate. */
 const EPSILON_SQ = 1e-12;
+
+/**
+ * Standing height the bone table below is authored against, in its own units.
+ * The proportions read far better at this size than in world metres, so they
+ * are written out at creature scale and converted once.
+ */
+export const RIG_AUTHORED_HEIGHT = 1.1;
+
+/**
+ * World metres per authored unit. The shop keeps real furniture dimensions and
+ * the player shrinks into it, so a body that stands 1.1 units tall in the table
+ * below stands `PLAYER_HEIGHT_M` in the room. Everything that turns rig units
+ * into scene geometry multiplies by this: the bone lengths and offsets here,
+ * the shell cross-sections in `visual/MimicVisual.ts`, and the panel size range
+ * in `panels.ts`. Pose data on the wire is unaffected, because segment forms are
+ * unitless multipliers and the root position is already in world metres.
+ */
+export const RIG_TO_WORLD = PLAYER_HEIGHT_M / RIG_AUTHORED_HEIGHT;
 
 export const BONE_NAMES = [
   "root",
@@ -437,14 +456,20 @@ export const BONES: readonly BoneDef[] = BONE_SOURCES.map((source, index) => {
   if (source.parent !== null && parentIndex >= index) {
     throw new Error(`Bone ${source.name} must appear after its parent ${source.parent}`);
   }
+  // The one place authored units become world metres. Angles, axes and limits
+  // are dimensionless and pass through untouched.
   return {
     name: source.name,
     index,
     parent: source.parent,
     parentIndex,
-    localPosition: source.localPosition,
+    localPosition: [
+      source.localPosition[0] * RIG_TO_WORLD,
+      source.localPosition[1] * RIG_TO_WORLD,
+      source.localPosition[2] * RIG_TO_WORLD,
+    ],
     axis: source.axis,
-    length: source.length,
+    length: source.length * RIG_TO_WORLD,
     limit: source.limit,
   };
 });

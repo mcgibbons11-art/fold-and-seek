@@ -111,7 +111,11 @@ describe("InspectorController movement", () => {
 
   it("slides along a blocker when the movement is diagonal into it", () => {
     const controller = spawned();
-    walk(controller, 60, { forward: 1, strafe: 1 });
+    walkUntil(
+      controller,
+      { forward: 1, strafe: 1 },
+      (c) => c.lastResolution === "slid" && c.position.z > 0.5,
+    );
 
     expect(controller.position.x).toBeLessThan(WALL.min.x - INSPECTOR_RADIUS_M);
     expect(controller.position.z).toBeGreaterThan(0.5);
@@ -155,7 +159,7 @@ describe("InspectorController falling", () => {
     const controller = spawned(testNavData(), YAW_TOWARD_TABLE, -2.9, 0, 0.75);
     expect(controller.position.y).toBeCloseTo(TABLE_TOP.bounds.max.y, 6);
 
-    walk(controller, 6, { forward: 1 });
+    walkUntil(controller, { forward: 1 }, (c) => !c.grounded);
     expect(controller.position.x).toBeLessThan(-3);
     expect(controller.grounded).toBe(false);
     expect(controller.position.y).toBeLessThan(TABLE_TOP.bounds.max.y);
@@ -168,7 +172,7 @@ describe("InspectorController falling", () => {
 
   it("accelerates while falling rather than dropping at a fixed rate", () => {
     const controller = spawned(testNavData(), YAW_TOWARD_TABLE, -2.9, 0, 0.75);
-    walk(controller, 6, { forward: 1 });
+    walkUntil(controller, { forward: 1 }, (c) => !c.grounded);
 
     const first = controller.position.y;
     walk(controller, 3, { forward: 0 });

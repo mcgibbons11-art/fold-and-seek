@@ -15,6 +15,8 @@
  * `WORLD_SCALE` instead of being written into the code.
  */
 
+import { PLAYER_HEIGHT_M } from "@foldseek/shared";
+
 export interface Vec3Like {
   readonly x: number;
   readonly y: number;
@@ -38,22 +40,36 @@ export interface AABB {
  * Every body dimension in one place, in world metres. The shop keeps its real
  * dimensions and the player shrinks, so a 0.75 m table stands more than twice
  * the player's height above the floor.
+ *
+ * `playerHeight` is the scale knob and it lives in `@foldseek/shared`, because
+ * the match settings derive their speeds and distances from the same number and
+ * the shared package cannot import client code.
  */
 export const WORLD_SCALE = {
-  playerHeight: 0.35,
-  playerRadius: 0.12,
-  eyeHeight: 0.32,
+  playerHeight: PLAYER_HEIGHT_M,
+  /** Half the shoulder width of the Mimic body, which is the same creature. */
+  playerRadius: PLAYER_HEIGHT_M * 0.35,
+  eyeHeight: PLAYER_HEIGHT_M * 0.9,
   /** Lip a walker crosses without a climb link. Proportional to the body. */
-  stepHeight: 0.07,
+  stepHeight: PLAYER_HEIGHT_M * 0.2,
   /** Drop absorbed without leaving the ground. Anything deeper is a fall. */
-  groundSnap: 0.12,
+  groundSnap: PLAYER_HEIGHT_M * 0.35,
+  /**
+   * Gravity and the fall cap are properties of the room, not of the body: the
+   * shop's ledges are real heights and a body falling off one accelerates at
+   * the real rate, so neither is scaled.
+   */
   gravity: 9.81,
   terminalFallSpeed: 6,
-  /** Along-path speeds for the two climb kinds, metres per second. */
-  mantleSpeed: 0.55,
-  ladderSpeed: 0.35,
+  /**
+   * Along-path speeds for the two climb kinds, in body lengths per second. A
+   * vault is a little over one and a half body lengths a second and a ladder
+   * exactly one, both well under the walk in `DEFAULT_MATCH_SETTINGS`.
+   */
+  mantleSpeed: PLAYER_HEIGHT_M * 1.6,
+  ladderSpeed: PLAYER_HEIGHT_M * 1.0,
   /** How near a link's endpoint the player must be to start climbing. */
-  climbActivationRadius: 0.15,
+  climbActivationRadius: PLAYER_HEIGHT_M * 0.43,
 } as const;
 
 export const INSPECTOR_RADIUS_M = WORLD_SCALE.playerRadius;

@@ -17,7 +17,8 @@ function focusOn(objectId: string, overrides: Partial<FocusMetadata> = {}): Focu
     objectId,
     categoryId: "lamp",
     phase: "hover",
-    distanceM: 1.2,
+    // Comfortably inside the gun's reach, whatever that is tuned to.
+    distanceM: testSettings().accusationDistance / 2,
     holdMs: 0,
     visible: true,
     accusable: true,

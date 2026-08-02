@@ -6,6 +6,116 @@ Phase 3 — playable local round. The wiring described under "Phase 3 wiring" be
 place: "Play a round" on the main menu now runs a whole match in one tab against the
 Curiosity Shop, with no network.
 
+## Live-hunt presentation (2026-08-02)
+
+Three sim events the audits found produced but never consumed now reach the
+player. Nothing in the simulation or in `@foldseek/shared` changed.
+
+**The missed-finds board** (the original's Missed-Spot Ranking, key 6).
+`RoundDirector` was dropping `missed_finds_update` in its default branch; it now
+holds the last board and publishes a `MissedFindsView` slice on `RoundViewState`
+with ranked rows, the viewer's own row marked, and the "next update Ns" countdown
+derived from `nextUpdateAtMs` against the director's corrected server clock.
+`MissedFindsHud` renders it top-right through the inspection phases and the
+reveal, toggled on key 6 by `RoundHud`, for both roles — that shared visibility
+is the original's behaviour and is what makes being seen worth playing for. The
+key listener ignores keystrokes aimed at an input, because the paint panel's hex
+and numeric fields are live while a hider paints during the hunt.
+
+There is **no state fallback**: the ranking exists only as an event, so a player
+who joins mid-round has no board until the next report, and the view says
+`received: false` rather than showing an empty ranking that would read as
+"nobody has scored". The board is cleared with the round.
+
+**Taunt presentation.** `DisguiseTheatre.taunt` performs the gesture on the
+disguise the event names, never on a player. Five motions, one per `TauntId`,
+are described as shares of the body's own measured height rather than in metres,
+so they survive the scale retune; the event's seed picks the starting phase and
+the lean direction, so every client animates the same taunt identically. The
+envelope opens and closes on zero, so a gesture cannot leave an object askew.
+The focus box is deliberately measured with the body at rest: it is what the
+reticle brackets and what the authority shoots against, and letting it follow a
+cosmetic wobble would make a taunting object unshootable where it appears.
+`taunt` returns false for an object this theatre is not drawing, which is how a
+hider's own disguise looks from here while the Forge holds it — `RoundSession`
+still plays them the sound.
+
+**Audio.** `ForgeSoundId` is now `SoundId` and carries the hunt clips.
+`gameplay/huntCues.ts` is the explicit crossing between the simulation's
+vocabulary and the bundle's filenames (`clock_chimes` → `clock_chime.mp3`),
+written out rather than derived, so a reaction added upstream breaks the build
+instead of playing nothing. Taunt uses `unfold_reveal`, a catch `caught_sting`,
+a wrong accusation `wrong_horn`, and each `InnocentReactionId` its own clip.
+
+**Innocent reactions in the world.** The shop's props are merged and instanced
+into shared draw calls, so an individual chair cannot be squeaked by moving it.
+`ReactionTheatre` instead raises a short coloured flare at the prop's own
+published focus bounds, with a point light for the reactions that are lights,
+and fades it out; an object the map does not publish is heard but not seen
+rather than given an invented position.
+
+**Verified** (`pnpm -r typecheck`, `pnpm -r test`, `pnpm -r build` all green;
+418 client, 161 sim, 46 shared, 21 server):
+
+- `missedFinds.test.ts` drives real rounds at the simulation's own uncompressed
+  ~20 s report cycle (it is not host-settable) and checks the empty state before
+  the first report, the ranking and its 25-point buckets, a countdown that
+  actually falls, a hider's own row, the exact board at the reveal, and the
+  clear on rematch.
+- `disguiseTheatre.test.ts` gained taunt coverage: the gesture reaches the body
+  and returns it to rest, three theatres given the same seed agree exactly while
+  a different seed diverges, gestures differ from one another in shape and
+  length, an unknown object is refused without a sound, and a creep arriving
+  mid-taunt produces exactly the bounds a theatre with no taunt running produces.
+- `huntPresentation.test.ts` covers task 3 end to end: a hider creeps, the
+  authority accepts it and emits `disguise_updated { moved: true }`, and an
+  observer's theatre re-measures the body 0.05 m along; the same for paint, which
+  arrives as `painted: true` and puts bound paint materials on the body. Also
+  checks that every `INNOCENT_REACTION_ID` names a bundled sound.
+
+`disguise_updated` is intentionally **not** consumed as an event. It carries no
+geometry, only the news that some object changed; pose and paint travel in public
+state, which `RoundSession.update` re-reads every frame, so the visual was
+already correct and the tests now hold it that way.
+
+### Deception score feedback, and the last two SFX (second pass)
+
+**`direct_look_escape` and `close_pass` now reach the hider who earned them**, as
+a `DeceptionView` slice on `RoundViewState` and a readout in `HiderHud`: the
+running total, the two counts, and the latest event named in words. Point values
+come from `SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE` and `SCORE_MIMIC_PER_CLOSE_PASS`
+rather than being written out again in the client.
+
+The guard on this is not cosmetic. Both events are **broadcast** and name a
+public object, and the only client that can turn that object into a person is
+the one wearing it. `RoundDirector.recordDeception` therefore drops any event
+whose object is not the viewer's own disguise, so an Inspector is never told
+that the thing they just stared at was a Mimic, and a hider cannot count another
+hider's escapes and correlate them against where the Inspector was standing.
+`deceptionFeedback.test.ts` drives real focus commands through the loopback,
+asserts the escape was actually broadcast, and then asserts the Inspector's and
+the bystanding hider's view states stay empty. Deleting the guard fails exactly
+those two tests, which was checked by hand rather than assumed.
+
+**`door_open`** plays once on entering InspectionIntro, for every role: it is the
+moment the room stops being a workshop, and a hider hearing the Inspector let in
+is the phase opening. This is an interpretation of the §5 walk-out beat, not a
+door prop the map has — there is no door interaction to hang it on.
+
+**`footstep_wood`** is the Inspector's own locomotion, throttled from the speed
+`InspectorController` actually achieved, with the stride quoted against
+`WORLD_SCALE.playerHeight` so it neither drums at a standstill nor keeps a human
+cadence for a 0.35 m body. All nine hunt clips are now wired.
+
+**Producer gap, not fixed here: `close_pass` can never fire in play.**
+`MatchSimulation.recordClosePass` has no caller anywhere in the client — only the
+simulation's own tests call it. Nothing detects an Inspector physically passing
+close to a disguise and reports it, so half of the deception score is dead in a
+real round. The consumer is built and symmetrical with the escape path, and is
+covered only as far as an unreachable event allows. Closing this needs a producer
+on the Inspector side plus a way to report it to the authority, which is a new
+verb on `NetworkAdapter` and therefore a `packages/shared` change.
+
 ## Art pass (2026-08-02, landed UNREPORTED — agent terminated before its writeup)
 
 The art agent's changes are in this commit but it never delivered its gap analysis:
@@ -15,9 +125,14 @@ edits to `world/maps/lighting.ts`, `props/{batch,furniture,geometry,materials}.t
 and the round runs at ~54 fps on WebGPU against them, but WHAT was improved and what
 remains is undocumented. The next critic pass must judge the art bar visually against
 `assets-source/references/` and the og screenshots rather than trusting any claim here.
-Caution from this session: the agent's live editing was itself the cause of the earlier
-"WebGPU under 1 fps" scare (continuous shader recompilation under HMR churn) — measure
-performance only on a settled tree.
+CORRECTION (critic pass, same night): the earlier attribution of the "WebGPU under
+1 fps" scare to HMR churn is REFUTED as a complete explanation. The critic reproduced
+0.14 fps in the shop on a frozen production build (menu 39 fps, WebGL2 shop 21 fps,
+same session), while the lead measured 54 fps on WebGPU in the hunt on the settled dev
+tree the same evening. The two measurements conflict and neither is trusted; WebGPU
+performance in the shop is an OPEN defect needing a controlled bisect (suspects: the
+17 practicals + 2 shadowed lights driving per-frame pipeline/bind-group rebuilds in
+the node-material path). Until it is understood, treat WebGL2 as the reliable backend.
 
 ## Phase 3 wiring (2026-08-02)
 
@@ -95,23 +210,121 @@ shop prop is.
   wall-mounting and hanging are legal disguises. `localRound.test.ts` guards the regression:
   several authored Mimic spawns fall outside the old box.
 
-### Giant scale: where the knob is
+### Giant scale: the knob and the four numbers derived from it (2026-08-02)
 
-Player scale already lives in one place, `inspector/navData.ts` `WORLD_SCALE`
-(`playerHeight` 0.35, `eyeHeight` 0.32, `stepHeight` 0.07, `groundSnap` 0.12,
-`climbActivationRadius` 0.15, `mantleSpeed` 0.55, `ladderSpeed` 0.35). `InspectorCamera`
-already derives its boom, shoulder offset and bob from `WORLD_SCALE.playerHeight`, and the
-Forge's §7.6 preview cameras now do the same: `INSPECTOR_EYE_HEIGHT_M` was a hard-coded
-1.6 m, a human-scale duplicate that showed a preview from five times the height any player
-in the match can ever stand at. It reads `WORLD_SCALE.eyeHeight` now, and the stand-back
-distance is a share of body height.
+**One source of truth.** `PLAYER_HEIGHT_M = 0.35` now lives in
+`packages/shared/src/config.ts`, and `inspector/navData.ts` `WORLD_SCALE.playerHeight`
+reads it. Shared cannot import client code, and the match settings need the same number
+the character controller uses, so shared owns it and the client borrows it.
+`InspectorCamera` and the Forge's §7.6 preview cameras already derive from it.
 
-What is *not* yet scale-derived, and is the retune pass's real work, is four numbers in
-`DEFAULT_MATCH_SETTINGS`: `inspectorMoveSpeed` 2.8, `hiderCreepSpeed` 0.6,
-`inspectorFocusDistance` 8.0 and `accusationDistance` 5.5. At 0.35 m tall an Inspector
-crossing the floor at 2.8 m/s covers eight body lengths a second. The workspace and the
-survey camera are room-sized rather than player-sized and should track the map, not the
-scale factor.
+The rest of `WORLD_SCALE` is now written as shares of that height rather than as loose
+literals: `playerRadius` and `groundSnap` 0.35 of it, `eyeHeight` 0.9, `stepHeight` 0.2,
+`climbActivationRadius` 0.43, `mantleSpeed` 1.6 body lengths a second and `ladderSpeed`
+exactly one. Every value moves by at most 5 mm from what it was, so this is a change of
+authorship rather than of behaviour. `gravity` and `terminalFallSpeed` stay absolute on
+purpose: the shop's ledges are real heights and a body falling off one accelerates at the
+real rate.
+
+**The four settings are derived rather than written out**, each with its arithmetic beside
+the constant in `config.ts`:
+
+| Setting | Was | Now | Derivation |
+|---|---|---|---|
+| `inspectorMoveSpeed` | 2.8 m/s | 0.91 m/s | 2.6 body lengths/s |
+| `hiderCreepSpeed` | 0.6 m/s | 0.175 m/s | 0.5 body lengths/s |
+| `inspectorFocusDistance` | 8.0 m | 2.1 m | 6 body heights |
+| `accusationDistance` | 5.5 m | 1.05 m | 3 body heights |
+
+*Walk speed* comes from Froude scaling: geometrically similar legged walkers move alike at
+equal v²/(g·L). A 1.75 m person breaks from a walk into a run near 2.1 m/s, a Froude
+number of about 0.5; the same number over a 0.35 m body with a 0.175 m leg gives 0.93 m/s,
+which is 2.6 body lengths a second. Small creatures cover more of their own lengths per
+second than people do, so this is deliberately not the human figure of 1.2. It also lands
+in the right relation to the climb speeds the map is already authored against: walking is
+a little under twice a vault, where 2.8 m/s was five times a vault and an Inspector
+crossed the floor faster than they could climb the stool in front of them.
+
+*Creep* at half a body length a second is the speed at which a disguise still reads as
+furniture that moved while nobody was looking. It is under a fifth of the walk, so creeping
+can never outrun a search, and over a full hunt a patient hider can still relocate about
+the length of the shop.
+
+*Focus and gun reach.* Six body heights is 2.1 m, the human-scale equivalent of seeing
+object detail at 10.5 m: enough to pick a shape out of the next aisle, well short of the
+15 m the shop runs end to end. The gun reaches half that, so noticing something always
+costs a walk toward it. The old 8.0 m focus was 23 body heights, a human equivalent of
+40 m, which made most of the shop inspectable from wherever the Inspector stood.
+
+**Tests.** `apps/client/tests/maps/giantScale.test.ts` is new: every starter arrangement,
+normalised to player height, fits under three real anchor surfaces (`crawl_workbench`,
+`crawl_office_desk`, `shelving_board_2` with the board above it), measured by box and by
+orientation-free bounding sphere, with the headroom read out of `NAV_BLOCKERS` rather than
+trusted from the surface's `clearance` note. It also pins `accusationDistance` under a
+quarter of the shop's long axis, orders accusation < focus < half the short axis, and
+checks `WORLD_SCALE.playerHeight === PLAYER_HEIGHT_M`.
+
+Four existing suites had human-scale numbers baked into their fixtures and were rewritten
+to derive them, which strengthens rather than weakens what they prove:
+`liveHiders.test.ts` now states creep distances through a `creepBudget(ms)` helper, so a
+retune cannot turn "a teleport" into "a legal creep"; `spatialValidator.test.ts` had an eye
+at y = 1.6 m and targets placed in absolute metres and is now built entirely from shares of
+the two reaches under test; `shooting.test.ts` took a literal 1.2 m focus distance and now
+takes half the gun's reach; `controller.test.ts` had frame counts that assumed 2.8 m/s and
+now uses the existing `walkUntil` helper. `roundAccusation.test.ts`'s wall shot could no
+longer be built against a bot disguise at 1.05 m reach, so it now searches the map's own
+geometry for an accusable prop with cover in front of it, which keeps the refusal a
+line-of-sight refusal rather than a range one.
+
+### The Mimic body is now at player scale (2026-08-02, closes the earlier P0)
+
+The rig was authored in its own units and nothing converted them, so a Mimic stood
+1.68–2.16 m tall in a shop where the Inspector is 0.35 m. It now converts once.
+
+`mimic/rig.ts` publishes `RIG_AUTHORED_HEIGHT = 1.1` and
+`RIG_TO_WORLD = PLAYER_HEIGHT_M / RIG_AUTHORED_HEIGHT`, and the `BONE_SOURCES` → `BONES`
+map is the single place authored units become world metres, multiplying every
+`localPosition` and `length`. Angles, axes and joint limits are dimensionless and pass
+through untouched. The bone table stays written at creature scale, where the proportions
+are readable, which is why the conversion lives at the seam rather than in the literals.
+
+Everything else that turns rig units into geometry multiplies by the same constant:
+`SEGMENT_DIMENSIONS` and `PANEL_THICKNESS_M` in `visual/MimicVisual.ts`, the panel size
+and extension range in `mimic/panels.ts`, `IK_TOLERANCE` in `mimic/ikSolver.ts`, the
+anchor snap/release/gap radii and position tolerance in `forge/anchors.ts`, and the
+Forge's orbit distances, handle clamps, wall-mount standoff, wall search range,
+auto-anchor radius and perch sampling. `HANDLE_SCREEN_RADIUS` is deliberately **not**
+converted: it multiplies the camera distance, which already shrank, so converting it too
+would shrink the handles twice.
+
+`IK_TOLERANCE` is worth calling out. Left at an absolute 2 mm it would have become a
+three-times looser solve relative to the body, so a pose would report converged while
+sitting visibly off its target. It is quoted in authored units and converted with
+everything else, which keeps the solver's precision scale-invariant.
+
+Measured after the change: the rest pose stands with the crown at exactly 0.350 m, and the
+starter arrangements run 0.17–0.47 m tall by 0.07–0.39 m across. Nothing on the wire
+changed, because segment forms are unitless multipliers and the root position was always
+in world metres; `poseWire.test.ts` still round-trips every starter arrangement.
+
+**A separate bug came out of measuring this.** `MimicVisual` left the plate of a stowed or
+absent panel at its build scale of one unit, and `Box3.setFromObject` measures hidden
+children, so every disguise published focus bounds about a metre across regardless of its
+actual size. That box is what the reticle brackets and what `SpatialValidatorImpl` checks a
+shot against, so an Inspector was shooting a phantom slab rather than the object. A plate
+that is not visible now has zero scale. `panelTipWorld` already refused invisible plates,
+so nothing that reads panel geometry is affected.
+
+`giantScale.test.ts` now measures real bodies in world metres with no normalisation: every
+starter arrangement fits under all three anchor surfaces, the crown of the unfolded body is
+`PLAYER_HEIGHT_M` exactly, and a new case pins each arrangement's published bounds to
+within 1.25x of its own shells, which is what would have caught the panel-plate slab.
+
+Not changed, and worth a look from whoever owns presentation: `WALL_MOUNT_HEIGHT_M` (1.15)
+and `DOORWAY_POSITION` (y 1.62) in `ForgeController` are still human-scale heights. Both
+are arguably room dimensions rather than body dimensions — a picture really does hang at
+1.15 m in a real shop — but the doorway preview camera in particular now sits at nearly
+five player heights, which is not a view anybody in the match can have.
 
 ### Stubbed, unverified or broken
 

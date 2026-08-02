@@ -11,6 +11,7 @@ export {
   type InspectorHudProps,
 } from "./InspectorHud";
 export { HiderHud, type HiderHudProps } from "./HiderHud";
+export { MissedFindsHud, type MissedFindsHudProps } from "./MissedFindsHud";
 export { SpectatorHud, type SpectatorHudProps, type SpectatorTarget } from "./SpectatorHud";
 export { RevealHud, type RevealHudProps } from "./RevealHud";
 export { ResultsHud, type ResultsHudProps } from "./ResultsHud";

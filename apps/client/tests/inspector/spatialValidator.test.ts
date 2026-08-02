@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AABB, Vec3Like } from "../../src/inspector/navData";
+import { WORLD_SCALE } from "../../src/inspector/navData";
 import { SpatialValidatorImpl } from "../../src/inspector/SpatialValidatorImpl";
 import { box, SHOP_FLOOR, testSettings, WALL } from "./navFixture";
 
@@ -8,19 +9,45 @@ import { box, SHOP_FLOOR, testSettings, WALL } from "./navFixture";
  * The truth table the authoritative validator must satisfy (§28.4, §28.5). It
  * replaces PERMISSIVE_SPATIAL_VALIDATOR, which answered yes to everything, so
  * these cases are the whole of what the simulation now relies on.
+ *
+ * Every distance here is a share of the two reaches under test rather than a
+ * number of metres, so a case that is meant to fail on line of sight cannot
+ * quietly start failing on range when the scale is retuned.
  */
 
 const settings = testSettings();
-const EYE: Vec3Like = { x: 0, y: 1.6, z: 0 };
+const ACCUSE_M = settings.accusationDistance;
+const FOCUS_M = settings.inspectorFocusDistance;
+
+const EYE: Vec3Like = { x: 0, y: WORLD_SCALE.eyeHeight, z: 0 };
+
+/**
+ * A prop the size of a player, standing due south of the eye. Its nearest face
+ * is exactly `metres` away, because the eye's own height falls inside the box's
+ * height range.
+ */
+function propSouth(metres: number): AABB {
+  const half = WORLD_SCALE.playerRadius;
+  return box(-half, 0, metres, half, WORLD_SCALE.playerHeight, metres + 2 * half);
+}
 
 /** Both furniture and an inspectable, which must not occlude itself. */
-const CABINET = box(-2.2, 0, -0.3, -1.6, 1.1, 0.3);
+const CABINET = box(-ACCUSE_M * 0.6, 0, -0.12, -ACCUSE_M * 0.4, WORLD_SCALE.playerHeight, 0.12);
+
+/** Just past the wall, which stands between x = 1 and x = 1.2. */
+const BEHIND_WALL = box(1.25, 0, -0.12, 1.45, WORLD_SCALE.playerHeight, 0.12);
+
+/**
+ * Close enough to the wall that the gun reaches the far side of it, so a
+ * refusal there is the wall talking and not the range.
+ */
+const EYE_AT_WALL: Vec3Like = { x: BEHIND_WALL.min.x - ACCUSE_M * 0.6, y: EYE.y, z: 0 };
 
 const TARGETS: Readonly<Record<string, AABB>> = {
-  adjacent: box(0.4, 0.6, -0.3, 0.7, 1.4, 0.3),
-  behindWall: box(2, 0.6, -0.3, 2.3, 1.4, 0.3),
-  beyondAccusation: box(-6.6, 0.6, -0.3, -6.3, 1.4, 0.3),
-  beyondFocus: box(-9.6, 0.6, -0.3, -9.3, 1.4, 0.3),
+  adjacent: propSouth(ACCUSE_M * 0.5),
+  behindWall: BEHIND_WALL,
+  beyondAccusation: propSouth((ACCUSE_M + FOCUS_M) / 2),
+  beyondFocus: propSouth(FOCUS_M * 1.5),
   cabinet: CABINET,
 };
 
@@ -41,7 +68,7 @@ describe("SpatialValidatorImpl.canAccuse", () => {
   });
 
   it("refuses a target behind a wall", () => {
-    expect(validator().canAccuse("inspector-1", "behindWall")).toEqual({
+    expect(validator(EYE_AT_WALL).canAccuse("inspector-1", "behindWall")).toEqual({
       ok: false,
       reason: "no_line_of_sight",
     });
@@ -77,7 +104,7 @@ describe("SpatialValidatorImpl.canAccuse", () => {
   });
 
   it("lets an inspector who walked around the wall accuse what it hid", () => {
-    const beside = validator({ x: 1.6, y: 1.6, z: 0 });
+    const beside = validator({ x: BEHIND_WALL.max.x + ACCUSE_M * 0.4, y: EYE.y, z: 0 });
     expect(beside.canAccuse("inspector-1", "behindWall")).toEqual({ ok: true });
   });
 });
@@ -106,7 +133,8 @@ describe("SpatialValidatorImpl.canOccupy", () => {
   });
 
   it("accepts a root resting on top of furniture", () => {
-    expect(validator().canOccupy("player-7", [-1.9, CABINET.max.y, 0])).toEqual({ ok: true });
+    const onTop = (CABINET.min.x + CABINET.max.x) / 2;
+    expect(validator().canOccupy("player-7", [onTop, CABINET.max.y, 0])).toEqual({ ok: true });
   });
 
   it("refuses a root buried inside a wall", () => {

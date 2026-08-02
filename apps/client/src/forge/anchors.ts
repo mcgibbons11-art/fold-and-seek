@@ -2,6 +2,7 @@ import * as THREE from "three/webgpu";
 
 import type { AnchorState } from "../mimic/disguiseState";
 import type { IkTargetName } from "../mimic/ikSolver";
+import { RIG_TO_WORLD } from "../mimic/rig";
 
 /**
  * Surface contact anchors (bible §7.4 Layer 4, §24.6, §24.7).
@@ -57,16 +58,23 @@ export const CONTACT_FACE_REVERSIBLE: Partial<Record<AnchorableBone, boolean>> =
   hand_R: true,
 };
 
+/**
+ * Reach and tolerance for contact anchoring, all of them distances measured
+ * against the body rather than against the room, so they are quoted in the
+ * rig's authored units and converted with it. Left absolute, a snap radius of
+ * 0.18 m would cover half a player-height body and catch every surface near it.
+ */
+
 /** How close a dragged contact point must come to a surface before it snaps. */
-export const ANCHOR_SNAP_RADIUS_M = 0.18;
+export const ANCHOR_SNAP_RADIUS_M = 0.18 * RIG_TO_WORLD;
 
 /** How far it must be pulled back before the anchor lets go. */
-export const ANCHOR_RELEASE_RADIUS_M = 0.32;
+export const ANCHOR_RELEASE_RADIUS_M = 0.32 * RIG_TO_WORLD;
 
 /** Contact points rest this far off the surface, so shells do not z-fight it. */
-export const ANCHOR_GAP_M = 0.012;
+export const ANCHOR_GAP_M = 0.012 * RIG_TO_WORLD;
 
-export const DEFAULT_POSITION_TOLERANCE_M = 0.02;
+export const DEFAULT_POSITION_TOLERANCE_M = 0.02 * RIG_TO_WORLD;
 export const DEFAULT_ANGULAR_TOLERANCE_DEG = 12;
 
 const AXIS_Y = new THREE.Vector3(0, 1, 0);

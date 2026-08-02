@@ -8,6 +8,7 @@ import {
   clampBoneRotation,
   DEG_TO_RAD,
   getBone,
+  RIG_TO_WORLD,
   segmentSlotOfBone,
   SEGMENT_BONES,
   type BoneName,
@@ -45,8 +46,13 @@ const FABRIK_PASSES = 6;
  */
 const LIMB_PASSES = 3;
 
-/** Convergence distance in metres. */
-export const IK_TOLERANCE = 0.002;
+/**
+ * How near a target counts as reached, in world metres. Quoted in the rig's
+ * authored units and converted with it: an absolute tolerance would mean a
+ * three-times looser solve once the body shrank to player scale, so the same
+ * pose would report converged while sitting visibly further off its target.
+ */
+export const IK_TOLERANCE = 0.002 * RIG_TO_WORLD;
 
 const EPSILON_SQ = 1e-14;
 

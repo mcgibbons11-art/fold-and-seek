@@ -1,7 +1,10 @@
 import {
   phaseDurationMs,
+  SCORE_MIMIC_PER_CLOSE_PASS,
+  SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE,
   type DisguiseOwnership,
   type InnocentReactionId,
+  type MissedFindsEntry,
   type PrivateSimEvent,
   type ResultVoteCategory,
   type SimEvent,
@@ -22,6 +25,10 @@ import { computeAvailability } from "./actionAvailability";
 import { correctAccusationStamp, phaseLabel, wrongAccusationStamp } from "./copy";
 import type {
   AccusationFeedEntry,
+  DeceptionEventView,
+  DeceptionView,
+  MissedFindsRowView,
+  MissedFindsView,
   RejectionView,
   ResultRowView,
   RevealEntryView,
@@ -45,7 +52,21 @@ import type {
 
 const DEFAULT_ACCUSATION_FEED_LIMIT = 6;
 const DEFAULT_REJECTION_FEED_LIMIT = 4;
+const DEFAULT_DECEPTION_FEED_LIMIT = 4;
 const DEFAULT_TICK_INTERVAL_MS = 200;
+
+/** What each deception term is worth, taken from the simulation's own weights. */
+const DECEPTION_POINTS: Readonly<Record<DeceptionEventView["kind"], number>> = {
+  direct_look_escape: SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE,
+  close_pass: SCORE_MIMIC_PER_CLOSE_PASS,
+};
+
+const EMPTY_DECEPTION: DeceptionView = {
+  recent: [],
+  directLookEscapes: 0,
+  closePasses: 0,
+  points: 0,
+};
 
 /**
  * How fast the clock estimate follows a sample below it. Every sample
@@ -63,6 +84,7 @@ export interface RoundDirectorOptions {
   readonly tickIntervalMs?: number;
   readonly accusationFeedLimit?: number;
   readonly rejectionFeedLimit?: number;
+  readonly deceptionFeedLimit?: number;
 }
 
 /** One accusation as it happened, projected into a feed entry on publish. */
@@ -115,6 +137,7 @@ export class RoundDirector {
   private readonly localNow: () => number;
   private readonly accusationFeedLimit: number;
   private readonly rejectionFeedLimit: number;
+  private readonly deceptionFeedLimit: number;
   private readonly subscriptions: Unsubscribe[] = [];
   private readonly changed = new Signal<RoundViewState>();
 
@@ -145,6 +168,22 @@ export class RoundDirector {
   private catchCount = 0;
   private readonly caughtByObject = new Map<string, CaughtRecord>();
 
+  /**
+   * The last missed-finds board. Null until the first one arrives, which is not
+   * the same as an empty board: nothing in the match state carries the ranking,
+   * so a mid-round joiner genuinely has nothing to show until the next report.
+   */
+  private missedFinds: {
+    entries: readonly MissedFindsEntry[];
+    nextUpdateAtServerMs: number;
+    final: boolean;
+  } | null = null;
+
+  /** Deception events for this player's own disguise. Never anybody else's. */
+  private deceptionEvents: DeceptionEventView[] = [];
+  private directLookEscapes = 0;
+  private closePasses = 0;
+
   private myVotes: Record<ResultVoteCategory, string | null> = { ...EMPTY_VOTES };
   private rematchYesVotes = 0;
   private rematchTotalVoters = 0;
@@ -172,6 +211,7 @@ export class RoundDirector {
     this.localNow = options.now ?? (() => performance.now());
     this.accusationFeedLimit = options.accusationFeedLimit ?? DEFAULT_ACCUSATION_FEED_LIMIT;
     this.rejectionFeedLimit = options.rejectionFeedLimit ?? DEFAULT_REJECTION_FEED_LIMIT;
+    this.deceptionFeedLimit = options.deceptionFeedLimit ?? DEFAULT_DECEPTION_FEED_LIMIT;
 
     this.connection = adapter.getConnection();
     this.transportRoster = adapter.getRoster();
@@ -305,6 +345,19 @@ export class RoundDirector {
         break;
       }
 
+      case "direct_look_escape":
+      case "close_pass":
+        this.recordDeception(event.type, event.publicObjectId, event.seq, event.at);
+        break;
+
+      case "missed_finds_update":
+        this.missedFinds = {
+          entries: event.entries,
+          nextUpdateAtServerMs: event.nextUpdateAtMs,
+          final: event.final,
+        };
+        break;
+
       case "mimic_caught":
         this.caughtByObject.set(event.publicObjectId, {
           publicPlayerId: event.publicPlayerId,
@@ -354,6 +407,39 @@ export class RoundDirector {
         break;
     }
     this.publish();
+  }
+
+  /**
+   * Banks one deception event, if it belongs to this player.
+   *
+   * Both events are broadcast and name a public object rather than a player,
+   * and the only client that can turn that object into a name is the one
+   * wearing it. Telling an Inspector that the vase they just walked past was a
+   * person would hand them what the whole round is spent guessing, so an event
+   * for anything but the viewer's own disguise is dropped here rather than
+   * filtered further up.
+   */
+  private recordDeception(
+    kind: DeceptionEventView["kind"],
+    publicObjectId: string,
+    seq: number,
+    atServerMs: number,
+  ): void {
+    const own = this.sync.privateState?.ownDisguise ?? null;
+    if (own === null || own.publicObjectId !== publicObjectId) return;
+
+    if (kind === "direct_look_escape") {
+      this.directLookEscapes += 1;
+    } else {
+      this.closePasses += 1;
+    }
+    const entry: DeceptionEventView = {
+      id: seq,
+      atServerMs,
+      kind,
+      points: DECEPTION_POINTS[kind],
+    };
+    this.deceptionEvents = [entry, ...this.deceptionEvents].slice(0, this.deceptionFeedLimit);
   }
 
   private applyRejection(rejection: CommandRejection): void {
@@ -407,6 +493,10 @@ export class RoundDirector {
     this.accusationRecords = [];
     this.catchCount = 0;
     this.caughtByObject.clear();
+    this.missedFinds = null;
+    this.deceptionEvents = [];
+    this.directLookEscapes = 0;
+    this.closePasses = 0;
     this.owners.clear();
     this.myVotes = { ...EMPTY_VOTES };
     this.rematchYesVotes = 0;
@@ -482,6 +572,20 @@ export class RoundDirector {
       warrantsTotal: publicState ? publicState.warrantsTotal : null,
       mimicsRemaining: publicState?.mimicsRemaining ?? 0,
       accusations: this.buildAccusations(roster, selfPublicId),
+      missedFinds: this.buildMissedFinds(selfPublicId, serverNowMs),
+      deception:
+        this.deceptionEvents.length === 0 &&
+        this.directLookEscapes === 0 &&
+        this.closePasses === 0
+          ? EMPTY_DECEPTION
+          : {
+              recent: this.deceptionEvents,
+              directLookEscapes: this.directLookEscapes,
+              closePasses: this.closePasses,
+              points:
+                this.directLookEscapes * SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE +
+                this.closePasses * SCORE_MIMIC_PER_CLOSE_PASS,
+            },
       reveal,
       results: this.buildResults(selfPublicId, roster, voteCandidates),
       rematch: {
@@ -629,6 +733,44 @@ export class RoundDirector {
         warrantsRemaining: record.warrantsRemaining,
       };
     });
+  }
+
+  /**
+   * The board as the HUD prints it. The authority already ranked the entries
+   * and already decided how precise the points may be, so this only numbers the
+   * rows, marks the viewer's own, and turns the next-report deadline into the
+   * countdown the original shows beside the ranking.
+   */
+  private buildMissedFinds(selfPublicId: string | null, serverNowMs: number): MissedFindsView {
+    const board = this.missedFinds;
+    if (board === null) {
+      return {
+        received: false,
+        rows: [],
+        nextUpdateAtServerMs: 0,
+        secondsToNextUpdate: null,
+        final: false,
+      };
+    }
+
+    const rows: MissedFindsRowView[] = board.entries.map((entry, index) => ({
+      rank: index + 1,
+      publicPlayerId: entry.publicPlayerId,
+      displayName: entry.displayName,
+      points: entry.points,
+      isSelf: selfPublicId !== null && entry.publicPlayerId === selfPublicId,
+    }));
+
+    return {
+      received: true,
+      rows,
+      nextUpdateAtServerMs: board.nextUpdateAtServerMs,
+      secondsToNextUpdate:
+        board.nextUpdateAtServerMs > 0
+          ? Math.max(0, Math.ceil((board.nextUpdateAtServerMs - serverNowMs) / 1_000))
+          : null,
+      final: board.final,
+    };
   }
 
   private buildReveal(): RevealView {

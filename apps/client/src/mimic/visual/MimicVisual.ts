@@ -7,6 +7,7 @@ import {
   boneIndex,
   BONES,
   PANEL_SOCKET_NAMES,
+  RIG_TO_WORLD,
   SEGMENT_BONES,
   SEGMENT_BONE_INDICES,
   segmentSlotOfBone,
@@ -44,8 +45,13 @@ import {
  * is rewritten only when a segment's form parameters actually change.
  */
 
-/** Nominal cross-section of each segment at form scale 1, in metres. */
-const SEGMENT_DIMENSIONS: Readonly<Record<SegmentBoneName, readonly [number, number]>> = {
+/**
+ * Nominal cross-section of each segment at form scale 1, in the same authored
+ * units as the bone table, converted to metres by `SEGMENT_DIMENSIONS` below.
+ */
+const AUTHORED_SEGMENT_DIMENSIONS: Readonly<
+  Record<SegmentBoneName, readonly [number, number]>
+> = {
   pelvis: [0.26, 0.2],
   torso_lower: [0.3, 0.22],
   torso_upper: [0.32, 0.23],
@@ -67,7 +73,14 @@ const SEGMENT_DIMENSIONS: Readonly<Record<SegmentBoneName, readonly [number, num
   foot_R: [0.12, 0.09],
 };
 
-const PANEL_THICKNESS_M = 0.018;
+const SEGMENT_DIMENSIONS = Object.fromEntries(
+  Object.entries(AUTHORED_SEGMENT_DIMENSIONS).map(([bone, [width, depth]]) => [
+    bone,
+    [width * RIG_TO_WORLD, depth * RIG_TO_WORLD] as const,
+  ]),
+) as Readonly<Record<SegmentBoneName, readonly [number, number]>>;
+
+const PANEL_THICKNESS_M = 0.018 * RIG_TO_WORLD;
 
 /** A panel swings from flush with its parent to square out of it. */
 const PANEL_DEPLOY_ANGLE_RAD = Math.PI / 2;
@@ -517,13 +530,22 @@ export class MimicVisual {
         panel.present = false;
         panel.angle = 0;
         panel.plate.visible = false;
+        // A plate nobody can see still has a size, and `Box3.setFromObject`
+        // measures hidden children. Left at its build scale it put a metre-wide
+        // slab around every disguise, which is the box the reticle brackets and
+        // the gun is checked against.
+        panel.plate.scale.setScalar(0);
         continue;
       }
       const resolved = resolvePanel(state, resolvedPanelScratch);
       panel.present = true;
       panel.angle = resolved.deployed * PANEL_DEPLOY_ANGLE_RAD + resolved.hingeRad;
       panel.plate.visible = resolved.deployed > PANEL_VISIBLE_DEPLOY;
-      panel.plate.scale.set(resolved.widthM, resolved.heightM, 1);
+      if (panel.plate.visible) {
+        panel.plate.scale.set(resolved.widthM, resolved.heightM, 1);
+      } else {
+        panel.plate.scale.setScalar(0);
+      }
       panel.plate.position.set(0, resolved.extensionM, 0);
       const geometry = this.panelGeometries.get(resolved.profileId);
       if (geometry !== undefined && panel.plate.geometry !== geometry) {

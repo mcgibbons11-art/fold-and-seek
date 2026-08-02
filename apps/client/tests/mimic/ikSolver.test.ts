@@ -1,3 +1,4 @@
+import { PLAYER_HEIGHT_M } from "@foldseek/shared";
 import { Vector3 } from "three";
 import { describe, expect, it } from "vitest";
 
@@ -18,6 +19,7 @@ import {
   boneIndex,
   boneRotationViolation,
   REST_HEIGHT,
+  RIG_TO_WORLD,
   SEGMENT_BONES,
 } from "../../src/mimic/rig";
 import { normalizedFromScale, segmentRange } from "../../src/mimic/segmentForm";
@@ -94,15 +96,18 @@ function worstJointViolation(pose: PoseState): { bone: number; violation: number
 }
 
 describe("rest pose", () => {
-  it("stands 1.10 m tall with both soles near the floor", () => {
+  it("stands exactly one player height tall with both soles near the floor", () => {
     const pose = createPoseState();
     const tip = new Vector3();
     boneTipWorld(pose, boneIndex("head"), tip);
 
-    expect(REST_HEIGHT).toBeCloseTo(1.1, 6);
-    expect(tip.y).toBeCloseTo(1.1, 6);
-    expect(pose.worldPositions[boneIndex("foot_L")]!.y).toBeCloseTo(0.05, 6);
-    expect(pose.worldPositions[boneIndex("foot_R")]!.y).toBeCloseTo(0.05, 6);
+    // The rig is authored at RIG_AUTHORED_HEIGHT and converted once, so the
+    // body a Mimic starts from is the same height as the Inspector beside it.
+    expect(REST_HEIGHT).toBeCloseTo(PLAYER_HEIGHT_M, 6);
+    expect(tip.y).toBeCloseTo(PLAYER_HEIGHT_M, 6);
+    const ankleY = 0.05 * RIG_TO_WORLD;
+    expect(pose.worldPositions[boneIndex("foot_L")]!.y).toBeCloseTo(ankleY, 6);
+    expect(pose.worldPositions[boneIndex("foot_R")]!.y).toBeCloseTo(ankleY, 6);
     expect(isPoseFinite(pose)).toBe(true);
   });
 });
@@ -257,10 +262,13 @@ describe("segment form drives the skeleton", () => {
     refreshRigMetrics(pose);
     updateWorldTransforms(pose);
 
+    // torso_lower is authored 0.13 units long, which is that in world metres.
     const stretchedOffset = pose.effectiveOffsets[boneIndex("torso_upper")]!.length();
-    expect(stretchedOffset).toBeCloseTo(0.13 * range.maxLengthScale, 6);
+    expect(stretchedOffset).toBeCloseTo(0.13 * RIG_TO_WORLD * range.maxLengthScale, 6);
     expect(pose.worldPositions[boneIndex("shoulder_L")]!.y).toBeGreaterThan(baselineShoulder);
-    expect(pose.worldPositions[boneIndex("head")]!.y).toBeGreaterThan(baselineHead + 0.1);
+    expect(pose.worldPositions[boneIndex("head")]!.y).toBeGreaterThan(
+      baselineHead + 0.1 * RIG_TO_WORLD,
+    );
   });
 
   it("keeps solving to reachable targets after the body is re-proportioned", () => {

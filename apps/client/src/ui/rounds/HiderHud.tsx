@@ -1,6 +1,11 @@
 import type { ReactElement, ReactNode } from "react";
 
-import { HIDER_CREEP_HINT, TAUNT_LABEL } from "../../gameplay/copy";
+import {
+  DECEPTION_TITLE,
+  deceptionLabel,
+  HIDER_CREEP_HINT,
+  TAUNT_LABEL,
+} from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { PhaseTimer } from "./PhaseTimer";
 import {
@@ -43,6 +48,10 @@ export function HiderHud({ state, onTaunt, children }: HiderHudProps): ReactElem
   const accent = level === 2 ? ALARM : BRASS;
   const tauntGate = state.actions.taunt;
   const cooldownSeconds = Math.ceil(state.self.tauntCooldownMs / 1_000);
+  // Only ever this hider's own score: the director fills it in for the owner of
+  // the disguise and for nobody else, which is what keeps it from being a hint.
+  const deception = state.deception;
+  const latest = deception.recent[0];
 
   return (
     <div style={overlayStyle}>
@@ -84,6 +93,23 @@ export function HiderHud({ state, onTaunt, children }: HiderHudProps): ReactElem
         <div style={{ ...labelStyle, marginTop: 4, color: level === 2 ? ALARM : undefined }}>
           {WATCHED_COPY[level]}
         </div>
+
+        {deception.points > 0 ? (
+          <>
+            <div style={{ ...labelStyle, marginTop: 14 }}>{DECEPTION_TITLE}</div>
+            <div style={{ font: "600 22px/1.2 system-ui, sans-serif", color: BRASS }}>
+              {deception.points}
+            </div>
+            {latest === undefined ? null : (
+              <div style={{ ...labelStyle, marginTop: 2, color: BRASS }}>
+                {deceptionLabel(latest.kind)} +{latest.points}
+              </div>
+            )}
+            <div style={{ ...labelStyle, marginTop: 4 }}>
+              {deception.directLookEscapes} seen · {deception.closePasses} passed
+            </div>
+          </>
+        ) : null}
       </div>
 
       {state.capabilities.taunt ? (

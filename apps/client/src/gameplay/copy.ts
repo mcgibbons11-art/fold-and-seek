@@ -1,6 +1,8 @@
 import type { InnocentReactionId, ResultVoteCategory } from "@foldseek/game-sim";
 import { MatchPhase, type PlayerRole } from "@foldseek/shared";
 
+import type { DeceptionEventKind } from "./roundView";
+
 /**
  * The §41 copy deck, verbatim. Nothing here is generated or paraphrased: a
  * string the deck does not supply is absent rather than invented, which is why
@@ -108,6 +110,35 @@ export const AMMO_NO_TARGET_PROMPT = "NO TARGET";
  */
 export const HIDER_CREEP_HINT = "Move slowly. Movement is how they catch you.";
 export const TAUNT_LABEL = "TAUNT";
+
+/**
+ * Deception score feedback, for the hider who earned it and nobody else. Being
+ * looked straight at and surviving it is the point of the disguise, so the two
+ * events that pay for it are named plainly rather than as statistics.
+ */
+export const DECEPTION_TITLE = "Deception";
+export const DECEPTION_ESCAPE_LABEL = "SEEN AND MISSED";
+export const DECEPTION_CLOSE_PASS_LABEL = "CLOSE PASS";
+
+export function deceptionLabel(kind: DeceptionEventKind): string {
+  return kind === "direct_look_escape" ? DECEPTION_ESCAPE_LABEL : DECEPTION_CLOSE_PASS_LABEL;
+}
+
+/**
+ * The missed-finds board, carrying the original's own English name for it
+ * (docs/MECCHA_RESEARCH.md). It reports on a cycle rather than continuously, so
+ * a player who has just joined is told the board is coming rather than shown an
+ * empty ranking they would read as "nobody has scored".
+ */
+export const MISSED_FINDS_TITLE = "Missed-Spot Ranking";
+export const MISSED_FINDS_TOGGLE_HINT = "6";
+export const MISSED_FINDS_AWAITING = "Awaiting the first report.";
+export const MISSED_FINDS_FINAL_NOTE = "final";
+
+export function missedFindsCountdown(secondsToNextUpdate: number | null): string {
+  if (secondsToNextUpdate === null) return MISSED_FINDS_FINAL_NOTE;
+  return `next update ${secondsToNextUpdate}s`;
+}
 
 /** §41.5 correct-accusation stamps, cycled so a run of catches does not repeat. */
 export const CORRECT_ACCUSATION_STAMPS = [

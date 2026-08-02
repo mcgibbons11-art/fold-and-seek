@@ -147,6 +147,64 @@ export interface AccusationFeedEntry {
   readonly warrantsRemaining: number;
 }
 
+/** The two things a hider earns by being looked at and surviving it (§6.2). */
+export type DeceptionEventKind = "direct_look_escape" | "close_pass";
+
+export interface DeceptionEventView {
+  /** Event sequence number, stable across republishes, usable as a React key. */
+  readonly id: number;
+  readonly atServerMs: number;
+  readonly kind: DeceptionEventKind;
+  /** What the simulation's own scoring weight pays for it. */
+  readonly points: number;
+}
+
+/**
+ * Score feedback for the viewer's own disguise, and only ever for that.
+ *
+ * `direct_look_escape` and `close_pass` are broadcast events naming a public
+ * object, and the one client that can say whose object it is, is its owner.
+ * Showing either to an Inspector would tell them that the thing they just
+ * walked past was a person, which is the answer they are paying warrants for,
+ * so RoundDirector fills this in for a hider and leaves it empty for everyone
+ * else.
+ */
+export interface DeceptionView {
+  /** Most recent first, capped by the director's feed limit. */
+  readonly recent: readonly DeceptionEventView[];
+  readonly directLookEscapes: number;
+  readonly closePasses: number;
+  /** Points these two terms have earned so far this round. */
+  readonly points: number;
+}
+
+export interface MissedFindsRowView {
+  /** Position on the board, counting from one, which is what the HUD prints. */
+  readonly rank: number;
+  readonly publicPlayerId: string;
+  readonly displayName: string;
+  /** Bucketed while the round runs, exact on the board published at the reveal. */
+  readonly points: number;
+  readonly isSelf: boolean;
+}
+
+/**
+ * The live missed-finds board (the original's Missed-Spot Ranking). It arrives
+ * only as an event on a jittered cycle: there is no field in the match state
+ * carrying it, so a player who joins mid-round has no board until the next
+ * report lands, and `received` is what says so.
+ */
+export interface MissedFindsView {
+  readonly received: boolean;
+  readonly rows: readonly MissedFindsRowView[];
+  /** Deadline for the next board in the authority's clock. Zero when none is due. */
+  readonly nextUpdateAtServerMs: number;
+  /** Seconds until that board, or null once no further one is coming. */
+  readonly secondsToNextUpdate: number | null;
+  /** True for the exact board published at the reveal. */
+  readonly final: boolean;
+}
+
 export interface RevealEntryView {
   readonly publicObjectId: string;
   readonly encodedPose: string;
@@ -240,6 +298,9 @@ export interface RoundViewState {
   readonly mimicsRemaining: number;
   /** Most recent first, capped by the director's feed limit. */
   readonly accusations: readonly AccusationFeedEntry[];
+  readonly missedFinds: MissedFindsView;
+  /** This player's own deception score as it happens. Empty for an Inspector. */
+  readonly deception: DeceptionView;
   readonly reveal: RevealView;
   readonly results: ResultsView | null;
   readonly rematch: RematchView;

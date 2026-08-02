@@ -1,15 +1,25 @@
 import type { MatchSettingsPatch, SimEvent } from "@foldseek/game-sim";
-import { MatchPhase } from "@foldseek/shared";
+import { DEFAULT_MATCH_SETTINGS, MatchPhase } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createBotDisguisePayload } from "../../src/gameplay/botDisguises";
 import { DisguiseTheatre } from "../../src/gameplay/disguiseTheatre";
 import { RoundSpatialBridge } from "../../src/gameplay/roundSpatial";
+import {
+  boundsVisibleFrom,
+  distanceToBounds,
+  SIGHT_LINE_EPSILON_M,
+} from "../../src/inspector/geometry";
+import type { Vec3Like } from "../../src/inspector/navData";
 import { LocalLoopbackAdapter, LOCAL_SELF_ID } from "../../src/networking/LocalLoopbackAdapter";
 import { qualitySettingsFor } from "../../src/rendering/quality";
-import { buildObjectRegistry, mapObject } from "../../src/world/maps/registry";
-import { SHOP_MAX_Z } from "../../src/world/maps/zones";
+import { NAV_BLOCKERS } from "../../src/world/maps/nav";
+import {
+  buildObjectRegistry,
+  CURIOSITY_SHOP_OBJECTS,
+  mapObject,
+} from "../../src/world/maps/registry";
 
 /**
  * The Inspector's gun is the accusation, and the authority only allows one when
@@ -33,6 +43,41 @@ const FAST_SETTINGS: MatchSettingsPatch = {
 };
 
 const STEP_MS = 100;
+
+/**
+ * A stand from which the gun reaches an accusable shop prop but cannot see it,
+ * found by sweeping positions around each prop at the edge of the gun's reach
+ * and keeping the first the map's own blockers occlude. Searching the geometry
+ * rather than naming a spot keeps the case alive when the reach is retuned; the
+ * assertion that matters is still the authority's, which is asked separately.
+ */
+function blockedShotAtAProp(): { objectId: string; eye: Vec3Like } | undefined {
+  const reach = DEFAULT_MATCH_SETTINGS.accusationDistance;
+  const steps = 32;
+  for (const entry of CURIOSITY_SHOP_OBJECTS) {
+    if (entry.accusationPolicy !== "allowed") continue;
+    const bounds = entry.focusBounds;
+    const centre = {
+      x: (bounds.min.x + bounds.max.x) / 2,
+      y: (bounds.min.y + bounds.max.y) / 2,
+      z: (bounds.min.z + bounds.max.z) / 2,
+    };
+    for (let step = 0; step < steps; step += 1) {
+      const angle = (step / steps) * Math.PI * 2;
+      const span = Math.max(bounds.max.x - bounds.min.x, bounds.max.z - bounds.min.z) / 2;
+      const eye = {
+        x: centre.x + Math.cos(angle) * (span + reach * 0.8),
+        y: centre.y,
+        z: centre.z + Math.sin(angle) * (span + reach * 0.8),
+      };
+      if (distanceToBounds(eye, bounds) > reach) continue;
+      if (boundsVisibleFrom(NAV_BLOCKERS, eye, bounds, SIGHT_LINE_EPSILON_M)) continue;
+      return { objectId: entry.objectId, eye };
+    }
+  }
+  return undefined;
+}
+
 const BOT_COUNT = 3;
 /** Hands the Inspector role to the local player in a four-seat room. */
 const INSPECTOR_SEED = 10;
@@ -156,29 +201,20 @@ describe("shooting a disguise", () => {
   it("refuses a shot through the shop wall, and says so", async () => {
     vi.useFakeTimers();
     const fixture = await huntingFixture();
-    const disguises = fixture.adapter.getSync().publicState?.disguises ?? [];
 
-    // Somewhere close enough that only the wall can be what stops the shot: an
-    // out-of-range refusal would prove nothing about line of sight.
-    const behindWall = disguises
-      .map((disguise) => {
-        const bounds = fixture.theatre.boundsOf(disguise.publicObjectId) as THREE.Box3;
-        const centre = bounds.getCenter(new THREE.Vector3());
-        return { objectId: disguise.publicObjectId, centre, gap: SHOP_MAX_Z + 0.6 - centre.z };
-      })
-      .find((entry) => entry.gap > 0 && entry.gap < 5);
-    expect(behindWall, "no disguise stands near enough to the south wall").toBeDefined();
+    // A shop object with something solid between it and the Inspector, chosen so
+    // the gun reaches it: an out-of-range refusal would prove nothing about line
+    // of sight. `blockedShotAtAProp` searches the map's own geometry for the
+    // pair, so the case survives a retune of the gun's reach.
+    const blocked = blockedShotAtAProp();
+    expect(blocked, "no shop prop can be stood behind cover and shot at").toBeDefined();
 
     const rejections: { reason: string; detail?: string }[] = [];
     fixture.adapter.onRejection((rejection) => rejections.push(rejection));
 
-    const eye = behindWall as NonNullable<typeof behindWall>;
-    fixture.bridge.setInspectorEye(LOCAL_SELF_ID, {
-      x: eye.centre.x,
-      y: eye.centre.y,
-      z: SHOP_MAX_Z + 0.6,
-    });
-    fixture.adapter.sendCommand({ type: "accuse", targetObjectId: eye.objectId });
+    const shot = blocked as NonNullable<typeof blocked>;
+    fixture.bridge.setInspectorEye(LOCAL_SELF_ID, shot.eye);
+    fixture.adapter.sendCommand({ type: "accuse", targetObjectId: shot.objectId });
 
     expect(rejections).toHaveLength(1);
     expect(rejections[0]?.reason).toBe("spatial_rejected");

@@ -43,6 +43,7 @@ import {
   clampBoneRotation,
   getBone,
   PANEL_SOCKET_NAMES,
+  RIG_TO_WORLD,
   SEGMENT_BONES,
   type PanelSocketName,
 } from "../mimic/rig";
@@ -234,18 +235,29 @@ interface SegmentEdit {
   readonly mirrorBefore: SegmentFormState | null;
 }
 
-const CAMERA_MIN_RADIUS = 0.6;
-const CAMERA_MAX_RADIUS = 7;
+/**
+ * Orbit distances and handle sizes are measured against the body, not the room,
+ * so they are quoted in the rig's authored units and converted with it. Left
+ * absolute they would frame a player-height Mimic from across the shop and put
+ * a 0.075 m grab handle on a 0.35 m creature.
+ */
+const CAMERA_MIN_RADIUS = 0.6 * RIG_TO_WORLD;
+const CAMERA_MAX_RADIUS = 7 * RIG_TO_WORLD;
 const CAMERA_MIN_PITCH = -1.2;
 const CAMERA_MAX_PITCH = 1.45;
 const ORBIT_PER_PIXEL = 0.007;
 const PITCH_PER_PIXEL = 0.005;
 const ZOOM_PER_NOTCH = 0.0016;
 
-/** Handle radius in metres at one metre from the camera, kept constant on screen. */
+/**
+ * Handle radius in metres at one metre from the camera, kept constant on
+ * screen. This one is a ratio rather than a length: it multiplies the camera
+ * distance, which already shrank with the body, so converting it too would
+ * shrink the handles twice.
+ */
 const HANDLE_SCREEN_RADIUS = 0.028;
-const HANDLE_MIN_RADIUS = 0.022;
-const HANDLE_MAX_RADIUS = 0.075;
+const HANDLE_MIN_RADIUS = 0.022 * RIG_TO_WORLD;
+const HANDLE_MAX_RADIUS = 0.075 * RIG_TO_WORLD;
 
 /**
  * The volume the Forge may push the Mimic around inside (§7.16). It reaches the
@@ -325,14 +337,14 @@ const SILHOUETTE_FILL = 0x8d9298;
 const SILHOUETTE_BACKDROP = new THREE.Color(0x0b0d10);
 
 /** How far behind the wall face the root starts, before anchors pull it in. */
-const WALL_MOUNT_STANDOFF_M = 0.34;
+const WALL_MOUNT_STANDOFF_M = 0.34 * RIG_TO_WORLD;
 
 /** Wall-mounted things hang at about chest height, not on the skirting board. */
 const WALL_MOUNT_HEIGHT_M = 1.15;
-const WALL_SEARCH_RANGE_M = 4;
+const WALL_SEARCH_RANGE_M = 4 * RIG_TO_WORLD;
 
 /** Auto-anchoring reaches further than a hand drag, having just been placed. */
-const AUTO_ANCHOR_RADIUS_M = 0.6;
+const AUTO_ANCHOR_RADIUS_M = 0.6 * RIG_TO_WORLD;
 
 /** Two surfaces count as the same face while their normals stay inside ~45 degrees. */
 const SAME_FACE_DOT = 0.7;
@@ -341,10 +353,10 @@ const SAME_FACE_DOT = 0.7;
 const LEVEL_SURFACE_DOT = 0.8;
 
 /** Where a bundle looks for something to sit on, and how high it must be. */
-const PERCH_SAMPLE_RADII_M = [0.5, 1.0] as const;
+const PERCH_SAMPLE_RADII_M = [0.5 * RIG_TO_WORLD, 1.0 * RIG_TO_WORLD] as const;
 const PERCH_SAMPLE_COUNT = 8;
-const PERCH_SAMPLE_LIFT_M = 1.2;
-const PERCH_MIN_HEIGHT_M = 0.2;
+const PERCH_SAMPLE_LIFT_M = 1.2 * RIG_TO_WORLD;
+const PERCH_MIN_HEIGHT_M = 0.2 * RIG_TO_WORLD;
 
 /**
  * Which contact points a starter arrangement wants held, and against what.

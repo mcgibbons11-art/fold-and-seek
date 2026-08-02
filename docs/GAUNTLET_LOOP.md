@@ -10,10 +10,14 @@ Adapted from https://somethingbig.ai/gauntlet-loop (reviewed 2026-08-01).
    their own work.
 3. A critic agent with fresh context inspects the ACTUAL output (runs the
    code, takes/looks at screenshots, reads the diff) and compares it directly
-   against the bar. It names the single biggest remaining gap.
+   against the bar — blind A/B against the reference images where possible.
+   It names the single biggest remaining gap. A critic never grades a
+   builder's summary or self-report, only real output.
 4. Work returns to a builder with the critic's gap as the brief.
 5. Repeat until the bar is met, improvements become negligible, or the lead
-   halts. Never a fixed round count.
+   halts. Never a fixed round count. Every round gets a FRESH critic; a
+   critic is never reused across rounds (its context is contaminated by what
+   it already excused).
 
 ## The bars for this project
 
@@ -29,7 +33,8 @@ Adapted from https://somethingbig.ai/gauntlet-loop (reviewed 2026-08-01).
 
 ## Session rules
 
-- Max 5 concurrent agents.
+- Max 4 concurrent agents (user directive 2026-08-01, supersedes the earlier 5).
+- Agents run as Opus 5, medium effort; never Fable (user directive, see memory).
 - Builders own disjoint file sets; the lead owns shared config files.
 - Critics get: the bar artifacts, the component's acceptance criteria, and
   access to run the app — not the builder's self-report.
