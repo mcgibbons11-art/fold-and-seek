@@ -285,7 +285,15 @@ function deviceMemoryGb(): number | null {
  * report roughly the display interval.
  */
 export function pickDefaultTier(backend: RenderBackend, medianFrameMs: number | null): QualityTier {
-  let index = QUALITY_TIER_ORDER.indexOf(backend === "webgpu" ? "high" : "medium");
+  // WebGL2 boots at the bottom tier as a LOAD-TIME decision, not a frame-rate
+  // one. On the ANGLE/D3D11 path every program link blocks the main thread for
+  // over a second, the shop compiles at the tier that is current when a round
+  // opens, and "light" is the only tier with no dynamic shadows — which both
+  // shrinks every lit program and removes the shadow-pass programs that
+  // nothing can precompile. Measured in the Portals editor (2026-08-02): the
+  // medium-tier compile held the load for minutes and the user could not get
+  // into the game at all. The quality chips opt anyone back up, eyes open.
+  let index = QUALITY_TIER_ORDER.indexOf(backend === "webgpu" ? "high" : "light");
 
   const cores = navigator.hardwareConcurrency > 0 ? navigator.hardwareConcurrency : 4;
   const memory = deviceMemoryGb();

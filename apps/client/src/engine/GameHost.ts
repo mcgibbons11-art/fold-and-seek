@@ -490,6 +490,16 @@ export class GameHost {
     if (this.tierLockedByUser) {
       return;
     }
+    // Automatic raises are refused on the WebGL 2 backend: a tier change
+    // rebuilds materials, and on this backend every new program links
+    // SYNCHRONOUSLY on the main thread at over a second apiece — so the
+    // "reward" for a fast light-tier session would be a multi-second stall in
+    // the middle of play. A player who wants more picks it from the quality
+    // chips, which is a stall they chose at a moment they chose. Lowers stay
+    // automatic, because a struggling session has nothing left to lose.
+    if (direction === "raise" && this.renderer.backend === "webgl2") {
+      return;
+    }
     this.stepTier(direction);
   }
 
