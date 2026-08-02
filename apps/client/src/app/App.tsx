@@ -152,9 +152,14 @@ export function App(): ReactElement {
       if (disposed) {
         return;
       }
-      // A game page outside a room plays exactly as it does offline: Portals.net
-      // is reachable there, but there is nobody in particular to reach.
-      setPortals(session !== null && session.context === "room" ? session : null);
+      // The context label is NOT the multiplayer gate. Measured in the real
+      // editor (2026-08-02): the 2p preview panes share a live Portals.net
+      // session while ready() still reports "standalone", and a bare game page
+      // refuses net.join() with "no host page" regardless of label. Joinability
+      // is decided by the join attempt itself, so multiplayer is offered
+      // wherever the SDK exists and the join's own failure copy handles the
+      // pages where there is nobody to reach.
+      setPortals(session);
       setBoot({ kind: "initializing" });
 
       host = new GameHost(
