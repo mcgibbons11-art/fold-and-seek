@@ -29,6 +29,13 @@ export const SHOP_FORGE_WORKSPACE: ForgeWorkspace = {
 };
 
 /**
+ * Longest the loading screen will wait on the shader precompile before letting
+ * the round proceed with lazy compilation. Generous for a healthy GPU (the
+ * whole-shop compile is seconds there) and a ceiling for a contended one.
+ */
+export const SHOP_PRECOMPILE_DEADLINE_MS = 20_000;
+
+/**
  * The scene a round is played in: The Curiosity Shop and the environment that
  * lights it, and nothing else. It deliberately owns no camera, because during a
  * round the camera belongs to whichever system has the player, the Forge orbit,
@@ -82,6 +89,14 @@ export class ShopWorld {
    * Shadow passes are not covered: three builds those pipelines from the shadow
    * camera on the first frame that casts, and there is no public precompile for
    * them.
+   *
+   * The precompile is BEST-EFFORT, not a gate. Measured in the Portals editor's
+   * 2p preview on an integrated GPU, two panes compiling the whole shop at once
+   * sat at "95% · the shaders" for minutes — a loading screen that never ends
+   * is worse than the hitches it prevents. Past the deadline the load proceeds
+   * and whatever is still uncompiled is built lazily on the frames that first
+   * draw it; the compile keeps running behind play and culling is restored
+   * whenever it settles.
    */
   async precompile(renderer: THREE.WebGPURenderer, camera: THREE.Camera): Promise<void> {
     const culled: THREE.Object3D[] = [];
@@ -90,11 +105,17 @@ export class ShopWorld {
       object.frustumCulled = false;
       culled.push(object);
     });
-    try {
-      await renderer.compileAsync(this.scene, camera);
-    } finally {
+    const restore = (): void => {
       for (const object of culled) object.frustumCulled = true;
-    }
+      culled.length = 0;
+    };
+    const compile = renderer.compileAsync(this.scene, camera).then(restore, restore);
+    await Promise.race([
+      compile,
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, SHOP_PRECOMPILE_DEADLINE_MS);
+      }),
+    ]);
   }
 
   applyQuality(settings: QualitySettings): void {
