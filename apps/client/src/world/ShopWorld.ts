@@ -31,22 +31,31 @@ export const SHOP_FORGE_WORKSPACE: ForgeWorkspace = {
 
 /**
  * Longest the loading screen will wait on the shader precompile before letting
- * the round proceed with lazy compilation. Generous for a healthy GPU (the
- * whole-shop compile is seconds there) and a ceiling for a contended one.
+ * the round proceed with lazy compilation.
  *
- * It is checked BETWEEN batches and is therefore a promise the code can keep. It
- * used to be a `setTimeout` raced against one whole-scene `compileAsync`, which
- * is unenforceable by construction: a timer is a task and cannot interrupt the
- * call it is racing.
+ * Two minutes, not twenty seconds, and the length is deliberate: on drivers
+ * where every program link BLOCKS (measured on this ANGLE/D3D11 Intel path at
+ * ~1.4 s per link even under KHR_parallel_shader_compile), bailing early does
+ * not save the player anything — the uncompiled remainder links synchronously
+ * inside the first frame that draws it, which is the exact multi-minute
+ * unresponsive tab the sweep exists to prevent. One completed sweep also
+ * populates Chrome's shader disk cache, so every later load of the same build
+ * is seconds. A moving progress bar for up to two minutes ONCE beats a dead
+ * tab every time.
+ *
+ * It is checked BETWEEN drawables and is therefore a promise the code can keep.
  */
-export const SHOP_PRECOMPILE_DEADLINE_MS = 20_000;
+export const SHOP_PRECOMPILE_DEADLINE_MS = 120_000;
 
 /**
- * Drawables compiled between yields. Small enough that the deadline is checked
- * often and the loading screen keeps moving, large enough that the per-call
- * overhead of building a render list stays a rounding error beside a link.
+ * Drawables compiled between yields. ONE, because on a blocking driver a
+ * single link can take over a second, and a batch of eight stalls the tab in
+ * ten-second chunks — long enough for the browser to declare the page
+ * unresponsive and for the player to kill it ("it crashes on the shaders").
+ * The per-call overhead of a one-drawable render list is a rounding error
+ * beside a link on any driver where the batch size matters at all.
  */
-export const SHOP_PRECOMPILE_BATCH = 8;
+export const SHOP_PRECOMPILE_BATCH = 1;
 
 export interface BatchedCompileOptions {
   readonly scene: THREE.Scene;
