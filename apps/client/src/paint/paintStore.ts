@@ -1,5 +1,6 @@
 import { MAX_PAINT_STROKES } from "@foldseek/shared";
 
+import { PAINT_INSTRUCTION } from "../gameplay/copy";
 import { hsvToRgb, rgbToHsv, sameColorByte, type Hsv, type Rgb } from "./color";
 
 /**
@@ -33,6 +34,13 @@ export interface PaintPanelState {
   readonly savedColors: readonly Rgb[];
   readonly strokeCount: number;
   readonly maxStrokes: number;
+  /**
+   * The panel's one line of prose: how to paint at rest, and what just happened
+   * when the eyedropper or the clear has something to say. It opens on
+   * `PAINT_INSTRUCTION` because that instruction has exactly one home, and this
+   * is it — the Forge's context panel and its status strip used to carry their
+   * own wordings of the same sentence beside it.
+   */
   readonly status: string;
 }
 
@@ -60,7 +68,7 @@ export class PaintStore {
       savedColors: [],
       strokeCount: 0,
       maxStrokes: MAX_PAINT_STROKES,
-      status: "Drag on your body to paint. F samples a colour from the room.",
+      status: PAINT_INSTRUCTION,
     };
   }
 

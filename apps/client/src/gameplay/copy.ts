@@ -32,6 +32,13 @@ export function phaseLabel(phase: MatchPhase): string | null {
       return "THE ROOM CONFESSES";
     case MatchPhase.Results:
       return "RESULTS";
+    // Not a §41.1 entry. The results screen is one screen across two phases —
+    // `RoundHud` renders `ResultsHud` for Results and RematchVote alike — and
+    // without a headline for the second the clock finished, the pill went blank
+    // and a fresh 12 seconds started counting, which reads as the screen about
+    // to be taken away rather than as the same screen asking a new question.
+    case MatchPhase.RematchVote:
+      return "PLAY AGAIN?";
     default:
       return null;
   }
@@ -137,7 +144,20 @@ export const AMMO_EMPTY_PROMPT = "OUT OF WARRANT ROUNDS";
 export const AMMO_COOLDOWN_PROMPT = "CHAMBERING";
 export const AMMO_OUT_OF_RANGE_PROMPT = "OUT OF RANGE";
 export const AMMO_READY_PROMPT = "HOLD TO FIRE";
-export const AMMO_NO_TARGET_PROMPT = "NO TARGET";
+
+/**
+ * What the Inspector spends the Fold phase doing, and why.
+ *
+ * §41.1 names this phase FOLD, which is the Mimics' verb: the Inspector is shut
+ * in the Security Office for the same sixty seconds with nothing to fold. The
+ * phase is renamed for them and the standing goal stays under it, because
+ * "memorize the room" is only an instruction if the reason for it is on screen
+ * beside the clock.
+ */
+export const INSPECTOR_FORGE_LABEL = "MEMORIZE";
+export const INSPECTOR_FORGE_GOAL =
+  "Memorize what belongs. When the hunt starts, shoot what doesn't.";
+export const INSPECTOR_FORGE_PLACE = "Security Office";
 
 /**
  * What a hider is told during inspection. Movement is legal now and is also
@@ -212,17 +232,24 @@ export function deceptionLabel(kind: DeceptionEventKind): string {
 }
 
 /**
- * The missed-finds board, carrying the original's own English name for it
- * (docs/MECCHA_RESEARCH.md). It reports on a cycle rather than continuously, so
- * a player who has just joined is told the board is coming rather than shown an
+ * The missed-finds board. It reports on a cycle rather than continuously, so a
+ * player who has just joined is told the board is coming rather than shown an
  * empty ranking they would read as "nobody has scored".
+ *
+ * The board was previously titled with the original's own English name,
+ * "Missed-Spot Ranking" (docs/MECCHA_RESEARCH.md). That name says nothing to a
+ * player who has not read the research note: it ranks hiders by the points they
+ * have earned for being looked straight at and walked past, so it is titled with
+ * what it measures and its two columns are named.
  */
-export const MISSED_FINDS_TITLE = "Missed-Spot Ranking";
+export const MISSED_FINDS_TITLE = "Fooled the Inspector";
 /** The same board, named on its rail chip. */
 export const BOARD_RAIL_LABEL = MISSED_FINDS_TITLE;
 export const MISSED_FINDS_TOGGLE_HINT = "6";
 export const MISSED_FINDS_AWAITING = "Awaiting the first report.";
 export const MISSED_FINDS_FINAL_NOTE = "final";
+export const MISSED_FINDS_PLAYER_HEADER = "Player";
+export const MISSED_FINDS_POINTS_HEADER = "Points";
 
 export function missedFindsCountdown(secondsToNextUpdate: number | null): string {
   if (secondsToNextUpdate === null) return MISSED_FINDS_FINAL_NOTE;
@@ -255,3 +282,73 @@ export const VOTE_CATEGORY_LABELS: Readonly<Record<ResultVoteCategory, string>> 
   funniest_attempt: "Funniest Attempt",
   most_audacious: "Most Audacious",
 };
+
+/**
+ * The results ledger, which reports two different rounds. A Mimic's round is
+ * measured in the time they held out; an Inspector's is measured in what they
+ * spent and what they caught. Printing one set of columns for both is what put
+ * "SURVIVED 0.0s" against the Inspector and a pair of permanent zeroes against
+ * every Mimic, so each side is given the columns that mean something to it.
+ */
+export const RESULTS_MIMIC_HEADING = "The Mimics";
+export const RESULTS_INSPECTOR_HEADING = "The Inspector";
+export const RESULTS_SPECTATOR_HEADING = "Sitting this one out";
+export const RESULTS_COLUMN_PLAYER = "Player";
+export const RESULTS_COLUMN_HELD_OUT = "Held out";
+export const RESULTS_COLUMN_SEEN_AND_MISSED = "Seen and missed";
+export const RESULTS_COLUMN_WARRANTS_SPENT = "Warrants spent";
+export const RESULTS_COLUMN_CAUGHT = "Mimics caught";
+export const RESULTS_COLUMN_SCORE = "Score";
+export const RESULTS_SURVIVED_NOTE = "survived";
+
+/** What the three award rows are, said once above them. */
+export const RESULTS_VOTE_HEADING = "Award your votes";
+export const RESULTS_VOTE_BLURB = "One vote each. You cannot vote for yourself, and a vote is final.";
+export const RESULTS_VOTE_NOTHING = "Nothing to vote on.";
+export const RESULTS_VOTE_LEADER_NOTE = "leading";
+export const RESULTS_VOTE_YOUR_PICK = "your pick";
+
+export function voteTallyNote(votes: number): string {
+  return `${votes} vote${votes === 1 ? "" : "s"}`;
+}
+
+/**
+ * The room's own words for the parts of a load that are otherwise named after
+ * the machinery doing them. `GameHost` reports what it is actually building, and
+ * the zone steps it reports are already in the player's language; only the
+ * graphics-pipeline steps need translating out of it.
+ */
+const LOAD_LABELS: Readonly<Record<string, string>> = {
+  "the shaders": "warming the lanterns",
+  "the first frame": "turning up the lamps",
+};
+
+export function loadingLabel(label: string): string {
+  return LOAD_LABELS[label] ?? label;
+}
+
+/**
+ * Taking the mouse for a look around, which the browser only grants from a
+ * gesture. It said "click to take the room", which reads as a game verb the
+ * game does not have.
+ */
+export const POINTER_LOCK_TITLE = "Click to look around";
+export const POINTER_LOCK_BODY =
+  "WASD to walk · right mouse to aim · left mouse to fire a warrant";
+
+/**
+ * Body painting, said once. Three panels used to carry three wordings of it at
+ * once: this is the one, and it lives on the paint panel because the panel is
+ * the only one of the three that travels into the hunt with the tool.
+ */
+export const PAINT_INSTRUCTION =
+  "Drag on your body to paint it. F copies a colour from anything you point at.";
+
+/**
+ * The paint panel's shadow toggle, which is not a paint channel: it turns the
+ * Mimic's own cast shadow on and off, and a shadow with nothing above it is how
+ * a good disguise gets found.
+ */
+export const PAINT_SHADOW_LABEL = "Cast shadow";
+export const PAINT_SHADOW_TITLE =
+  "Whether your body casts a shadow. A shadow falling from an object that should not have one gives the disguise away.";

@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { roleBrief, roleCard, roundLabel } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { ControlsLegend } from "../ControlsLegend";
-import { CORE_CONTROL_HINTS } from "./huntControls";
+import { roleCardHints } from "./huntControls";
 import {
   BRASS_LIT,
   CREAM,
@@ -102,7 +102,7 @@ export function RoleRevealHud({ state }: RoleRevealHudProps): ReactElement | nul
           </div>
 
           <div style={{ marginTop: 18, borderTop: RULE, paddingTop: 14 }}>
-            <ControlsLegend hints={CORE_CONTROL_HINTS} />
+            <ControlsLegend hints={roleCardHints(role)} />
           </div>
         </div>
       </div>

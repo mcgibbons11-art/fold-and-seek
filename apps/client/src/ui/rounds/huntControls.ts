@@ -203,6 +203,30 @@ export const CORE_CONTROL_HINTS: readonly ControlHint[] = [
 ];
 
 /**
+ * The controls a role card teaches, which is not the same list for both sides.
+ *
+ * An Inspector plays the round with the mouse: the room holds the pointer, so
+ * looking around is the mouse itself rather than a held button, the left button
+ * fires and the right aims. Reading those three off `InspectorInput`
+ * (MOUSE_BUTTON_FIRE is the left, MOUSE_BUTTON_AIM the right, and `takeFirePressed`
+ * is edge-triggered on the press) rather than assuming them is the point: the
+ * card used to hand every role the Mimic's set, which told an Inspector to hold
+ * the button that in fact spends a warrant round.
+ */
+export const INSPECTOR_ROLE_HINTS: readonly ControlHint[] = [
+  { id: "walk", keys: ["W", "A", "S", "D"], label: "Walk" },
+  { id: "camera", keys: ["Mouse"], label: "Look around" },
+  { id: "fire", keys: ["LMB"], label: "Fire a warrant" },
+  { id: "aim", keys: ["RMB"], label: "Aim" },
+  { id: "jump", keys: ["Space"], label: "Hop" },
+];
+
+/** Which set a role card prints. Everyone but the Inspector takes the core set. */
+export function roleCardHints(role: "mimic" | "inspector" | "spectator"): readonly ControlHint[] {
+  return role === "inspector" ? INSPECTOR_ROLE_HINTS : CORE_CONTROL_HINTS;
+}
+
+/**
  * A hider's controls during the hunt (CLAUDE.md overrides 5 and 6). A Mimic
  * runs about the shop on WASD while it folds and goes on creeping on the same
  * keys once the disguise has manifested, capped at `hiderCreepSpeed`; space

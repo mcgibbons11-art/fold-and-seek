@@ -79,7 +79,6 @@ function Wordmark(): ReactElement {
 }
 
 export interface MainMenuProps {
-  readonly backend: string;
   readonly onPlayRound: () => void;
   readonly onForgePractice: () => void;
   /** Set while the shop is being unpacked, so the round is not started twice. */
@@ -94,7 +93,6 @@ export interface MainMenuProps {
 }
 
 export function MainMenu({
-  backend,
   onPlayRound,
   onForgePractice,
   starting = false,
@@ -157,8 +155,13 @@ export function MainMenu({
           <ControlsLegend hints={CORE_CONTROL_HINTS} />
         </div>
 
+        {/* Which room this is, and nothing else. The line used to read
+            "SOLO · WEBGL2 · ` FOR DIAGNOSTICS": the graphics backend and the
+            key that shows it are both already in the diagnostics overlay that
+            backquote opens, and neither is anything a player is being asked to
+            decide. */}
         <div style={{ ...labelStyle, opacity: 0.4, marginTop: 20, letterSpacing: "0.1em" }}>
-          {multiplayer ? "Portals room" : "Solo"} · {backend} · ` for diagnostics
+          {multiplayer ? "Portals room" : "Playing solo"}
         </div>
       </div>
     </div>

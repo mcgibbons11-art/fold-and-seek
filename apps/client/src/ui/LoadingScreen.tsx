@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactElement } from "react";
 
 import type { RoundLoadProgress } from "../engine/GameHost";
+import { loadingLabel } from "../gameplay/copy";
 import {
   BRASS,
   BRASS_LIT,
@@ -86,7 +87,10 @@ export function LoadingScreen({ progress }: LoadingScreenProps): ReactElement {
       <div style={{ ...labelStyle, opacity: 0.8 }}>
         <span style={{ color: BRASS_LIT, fontVariantNumeric: "tabular-nums" }}>{percent}%</span>
         {" · "}
-        {progress.label}
+        {/* The engine names its own steps, and two of them are named after the
+            graphics pipeline rather than the shop. `loadingLabel` is where they
+            are said in the room's words instead. */}
+        {loadingLabel(progress.label)}
       </div>
     </div>
   );

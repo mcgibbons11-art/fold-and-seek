@@ -32,6 +32,9 @@ const containerStyle: CSSProperties = {
   left: "50%",
   transform: "translateX(-50%)",
   minWidth: 260,
+  // Bounded so a standing goal line under the clock wraps to a second line
+  // rather than stretching the pill across the top of the shop.
+  maxWidth: 420,
   textAlign: "center",
   ...plate(),
   borderRadius: 10,

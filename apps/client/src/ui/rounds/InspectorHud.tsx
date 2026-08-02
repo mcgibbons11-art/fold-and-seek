@@ -4,7 +4,6 @@ import {
   AMMO_COOLDOWN_PROMPT,
   AMMO_EMPTY_PROMPT,
   AMMO_LABEL,
-  AMMO_NO_TARGET_PROMPT,
   AMMO_OUT_OF_RANGE_PROMPT,
   AMMO_READY_PROMPT,
 } from "../../gameplay/copy";
@@ -63,12 +62,34 @@ const DRY_FIRE_KICK_MS = 200;
 /** How far the reticle ticks are thrown outward by that kick, in pixels. */
 const DRY_FIRE_KICK_SPREAD = 9;
 
+/**
+ * The reticle's four states, and the whole of what tells them apart.
+ *
+ * Colour alone was doing this job at 0.55 opacity cream over a shop that is
+ * itself cream, and the round-1 critic could not find the reticle at all in a
+ * 1080p screenshot — the state was being read off the grey words "NO TARGET"
+ * underneath instead, which is a caption doing an instrument's work. So each
+ * state now differs in three ways at once: colour, how far the ticks stand off
+ * the middle, and whether the ring around them is drawn. Every mark carries a
+ * dark outline so none of it depends on what is behind it.
+ */
 const RETICLE_COLORS: Readonly<Record<ReticleState, string>> = {
-  normal: "rgba(232, 221, 205, 0.55)",
-  on_target: BRASS,
-  out_of_range: "rgba(232, 221, 205, 0.28)",
+  normal: "rgba(240, 232, 218, 0.92)",
+  on_target: BRASS_LIT,
+  out_of_range: "rgba(232, 221, 205, 0.55)",
   cooldown: ALARM,
 };
+
+/** How far the ticks stand off centre, which closes when there is something to shoot. */
+const RETICLE_SPREAD: Readonly<Record<ReticleState, number>> = {
+  normal: 15,
+  on_target: 8,
+  out_of_range: 13,
+  cooldown: 17,
+};
+
+/** The dark edge every mark carries, so the reticle never sinks into the room. */
+const RETICLE_OUTLINE = "0 0 0 1px rgba(10, 7, 4, 0.75), 0 0 6px rgba(10, 7, 4, 0.6)";
 
 function reticleStateOf(gun: InspectorGunView, outOfAmmo: boolean): ReticleState {
   if (outOfAmmo || gun.state === "cooldown" || gun.cooldownRemainingMs > 0) return "cooldown";
@@ -161,19 +182,24 @@ function Reticle({
   readonly kicked: boolean;
 }): ReactElement {
   const color =
-    flash === null ? (kicked ? ALARM : RETICLE_COLORS[reticle]) : flash === "hit" ? BRASS : ALARM;
-  const spread = (reticle === "on_target" ? 9 : 15) + (kicked ? DRY_FIRE_KICK_SPREAD : 0);
+    flash === null ? (kicked ? ALARM : RETICLE_COLORS[reticle]) : flash === "hit" ? BRASS_LIT : ALARM;
+  const spread = RETICLE_SPREAD[reticle] + (kicked ? DRY_FIRE_KICK_SPREAD : 0);
   const progress = Math.min(1, Math.max(0, triggerProgress));
+  // The ring is the "there is something here" mark. It is drawn only when the
+  // gun has a target, so the difference between an object and empty air is a
+  // shape appearing rather than a shade of cream changing.
+  const ringDiameter = spread * 2 + 6;
 
   const tick = (rotation: number): CSSProperties => ({
     position: "absolute",
     left: "50%",
     top: "50%",
     width: 2,
-    height: 9,
+    height: 10,
     marginLeft: -1,
     background: color,
-    transform: `rotate(${rotation}deg) translateY(-${spread + 5}px)`,
+    boxShadow: RETICLE_OUTLINE,
+    transform: `rotate(${rotation}deg) translateY(-${spread + 6}px)`,
     transformOrigin: "50% 50%",
     transition: "transform 90ms ease-out, background 90ms linear",
   });
@@ -189,7 +215,26 @@ function Reticle({
         transform: "translate(-50%, -50%)",
         pointerEvents: "none",
       }}
+      data-reticle={reticle}
     >
+      {reticle === "normal" ? null : (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            top: "50%",
+            width: ringDiameter,
+            height: ringDiameter,
+            marginLeft: -ringDiameter / 2,
+            marginTop: -ringDiameter / 2,
+            borderRadius: "50%",
+            border: `1px solid ${color}`,
+            boxShadow: RETICLE_OUTLINE,
+            opacity: reticle === "on_target" ? 0.95 : 0.5,
+            transition: "width 90ms ease-out, height 90ms ease-out, border-color 90ms linear",
+          }}
+        />
+      )}
       <div style={tick(0)} />
       <div style={tick(90)} />
       <div style={tick(180)} />
@@ -205,6 +250,7 @@ function Reticle({
           marginTop: -1.5,
           borderRadius: "50%",
           background: color,
+          boxShadow: RETICLE_OUTLINE,
         }}
       />
       {progress > 0 ? (
@@ -305,6 +351,9 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
   const { flash, showCallout } = useShotResult(latest?.id ?? null, latest?.correct ?? false);
   const kicked = useDryFireKick(gun.dryFires);
 
+  // Nothing is printed for an empty sight. "NO TARGET" under a reticle that is
+  // already drawn in its no-target state is the instrument being explained
+  // rather than read, and it was the only thing on screen a player could find.
   const prompt = outOfAmmo
     ? AMMO_EMPTY_PROMPT
     : reticle === "cooldown"
@@ -313,7 +362,7 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
         ? AMMO_OUT_OF_RANGE_PROMPT
         : reticle === "on_target"
           ? AMMO_READY_PROMPT
-          : AMMO_NO_TARGET_PROMPT;
+          : null;
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
@@ -340,20 +389,22 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
         </div>
       )}
 
-      <div
-        style={{
-          position: "absolute",
-          top: "calc(50% + 66px)",
-          left: 0,
-          right: 0,
-          textAlign: "center",
-          ...labelStyle,
-          color: outOfAmmo ? ALARM : CREAM,
-          opacity: reticle === "on_target" ? 0.9 : 0.5,
-        }}
-      >
-        {prompt}
-      </div>
+      {prompt === null ? null : (
+        <div
+          style={{
+            position: "absolute",
+            top: "calc(50% + 66px)",
+            left: 0,
+            right: 0,
+            textAlign: "center",
+            ...labelStyle,
+            color: outOfAmmo ? ALARM : CREAM,
+            opacity: reticle === "on_target" ? 0.9 : 0.7,
+          }}
+        >
+          {prompt}
+        </div>
+      )}
 
       {showCallout && latest !== null ? (
         <div

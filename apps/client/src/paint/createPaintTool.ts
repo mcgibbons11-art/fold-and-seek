@@ -2,6 +2,7 @@ import * as THREE from "three/webgpu";
 
 import type { PaintStrokeWire } from "@foldseek/shared";
 
+import { PAINT_INSTRUCTION } from "../gameplay/copy";
 import { Eyedropper } from "./Eyedropper";
 import { PaintBrushController, DEFAULT_BRUSH_RADIUS } from "./PaintBrushController";
 import { PaintLayer, type PaintStroke, type PaintStrokeBatch } from "./PaintLayer";
@@ -158,10 +159,7 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
     activate(): void {
       binder.sync();
       brush.activate();
-      store.patch({
-        active: true,
-        status: "Drag on your body to paint. F samples a colour from the room.",
-      });
+      store.patch({ active: true, status: PAINT_INSTRUCTION });
     },
 
     deactivate(): void {

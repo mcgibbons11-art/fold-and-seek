@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import type { ForgeController, ForgeHudState, ForgeToolMode } from "../../forge/ForgeController";
+import { POINTER_LOCK_BODY, POINTER_LOCK_TITLE } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { ForgeToolPanels } from "../ForgeHud";
 import { ActionRail } from "./ActionRail";
@@ -303,11 +304,9 @@ function PointerLockPrompt(): ReactElement {
       }}
     >
       <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, fontSize: 12 }}>
-        Click to take the room
+        {POINTER_LOCK_TITLE}
       </div>
-      <div style={{ marginTop: 4, opacity: 0.8 }}>
-        WASD to walk · right mouse to aim · left mouse to fire a warrant
-      </div>
+      <div style={{ marginTop: 4, opacity: 0.8 }}>{POINTER_LOCK_BODY}</div>
     </div>
   );
 }

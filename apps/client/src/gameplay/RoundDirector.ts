@@ -112,6 +112,11 @@ const EMPTY_VOTES: Readonly<Record<ResultVoteCategory, string | null>> = {
   most_audacious: null,
 };
 
+/** A fresh tally, one empty count per award. */
+function emptyVoteTallies(): Record<ResultVoteCategory, Record<string, number>> {
+  return { best_disguise: {}, funniest_attempt: {}, most_audacious: {} };
+}
+
 /**
  * Reasons an authority that understands `taunt` can refuse one. Anything else
  * coming back for a taunt means the room is running a build without the
@@ -186,6 +191,8 @@ export class RoundDirector {
   private closePasses = 0;
 
   private myVotes: Record<ResultVoteCategory, string | null> = { ...EMPTY_VOTES };
+  /** Every award vote the room has cast since this client started listening. */
+  private voteTallies = emptyVoteTallies();
   private rematchYesVotes = 0;
   private rematchTotalVoters = 0;
   private myRematchVote: boolean | null = null;
@@ -366,11 +373,16 @@ export class RoundDirector {
         });
         break;
 
-      case "result_vote_cast":
+      case "result_vote_cast": {
         if (event.voterPublicId === this.selfPublicId()) {
           this.myVotes = { ...this.myVotes, [event.category]: event.targetPublicObjectId };
         }
+        // The whole room's votes, not just this player's: an award with no
+        // running count is three buttons that appear to do nothing.
+        const category = this.voteTallies[event.category];
+        category[event.targetPublicObjectId] = (category[event.targetPublicObjectId] ?? 0) + 1;
         break;
+      }
 
       case "rematch_vote_cast":
         this.rematchYesVotes = event.yesVotes;
@@ -500,6 +512,7 @@ export class RoundDirector {
     this.closePasses = 0;
     this.owners.clear();
     this.myVotes = { ...EMPTY_VOTES };
+    this.voteTallies = emptyVoteTallies();
     this.rematchYesVotes = 0;
     this.rematchTotalVoters = 0;
     this.myRematchVote = null;
@@ -869,6 +882,7 @@ export class RoundDirector {
       rows,
       voteCandidates,
       myVotes: this.myVotes,
+      voteTallies: this.voteTallies,
     };
   }
 }

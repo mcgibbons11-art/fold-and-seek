@@ -2,16 +2,21 @@ import type { CSSProperties, ReactElement } from "react";
 
 import { huntStatusLabel } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
-import { ALARM, BRASS, CREAM, FONT_NUMERIC, headlineStyle, plate } from "./theme";
+import { ALARM, BRASS, CREAM, FONT_NUMERIC, formatClock, headlineStyle, labelStyle, plate } from "./theme";
 
 /**
- * The hunt's top-centre row, ported from the original: a rank of hider figures
- * with the caught ones struck through, an hourglass carrying the seconds left,
- * a rank of seeker figures, and the phase named underneath.
+ * The hunt's top-centre row: how many hiders are still unaccounted for, how long
+ * is left to find them, and the phase named underneath.
  *
- * It says nothing about *which* hider is gone. The row draws one figure per
- * disguise in the room and strikes as many as the round has lost, which is a
- * count and not an attribution, so a caught object cannot be picked out of it.
+ * It was previously a rank of small figures either side of an hourglass, ported
+ * from the original. At the sizes the row actually draws at — 13x26 px per
+ * figure — the round-1 critic read the result as "†††⧗42†", which is a fair
+ * description of what those glyphs look like when they are too small to resolve
+ * into people. So the count is written out, and the clock is the whole of the
+ * middle rather than a picture with a number beside it.
+ *
+ * What it must not say is *which* hider is gone: this is a count and never an
+ * attribution, so a caught object cannot be picked out of it.
  */
 
 export interface HuntStatusProps {
@@ -22,54 +27,16 @@ const rowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  gap: 10,
+  gap: 12,
 };
 
-const figureRowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 3 };
-
-/**
- * One player figure: a head over a body with two arms, the shape the original
- * uses, struck through with a diagonal once that player is out.
- */
-function Figure({ color, struck }: { readonly color: string; readonly struck: boolean }): ReactElement {
+/** A clock face, large enough at 20 px to read as one. */
+function ClockFace({ accent }: { readonly accent: string }): ReactElement {
   return (
-    <svg width={13} height={26} viewBox="0 0 13 26" aria-hidden focusable="false">
-      <circle cx="6.5" cy="4" r="3.4" fill={color} />
-      <rect x="5.3" y="8.4" width="2.4" height="16" rx="1.2" fill={color} />
-      <rect x="0.6" y="11.4" width="11.8" height="2.2" rx="1.1" fill={color} />
-      {struck ? <path d="M0.5 22 L12.5 4" stroke={color} strokeWidth="1.6" opacity="0.95" /> : null}
+    <svg width={20} height={20} viewBox="0 0 20 20" aria-hidden focusable="false">
+      <circle cx="10" cy="10" r="8.4" fill="none" stroke={accent} strokeWidth="1.5" />
+      <path d="M10 5.2 L10 10.4 L13.4 12.4" fill="none" stroke={accent} strokeWidth="1.5" strokeLinecap="round" />
     </svg>
-  );
-}
-
-/** The original's hourglass, with the seconds printed in its lower bulb. */
-function Hourglass({ accent, seconds }: { readonly accent: string; readonly seconds: number }): ReactElement {
-  return (
-    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-      <svg width={22} height={30} viewBox="0 0 22 30" aria-hidden focusable="false">
-        <rect x="3" y="1" width="16" height="2.2" rx="1.1" fill={CREAM} />
-        <rect x="3" y="26.8" width="16" height="2.2" rx="1.1" fill={CREAM} />
-        <path
-          d="M5 3.2 L17 3.2 L12 15 L17 26.8 L5 26.8 L10 15 Z"
-          fill="none"
-          stroke={CREAM}
-          strokeWidth="1.6"
-          strokeLinejoin="round"
-        />
-        <path d="M6.6 25.4 L15.4 25.4 L11 17.6 Z" fill={accent} />
-      </svg>
-      <span
-        style={{
-          marginLeft: 3,
-          font: `600 14px/1 ${FONT_NUMERIC}`,
-          color: accent,
-          fontVariantNumeric: "tabular-nums",
-          textShadow: `0 0 10px ${accent === ALARM ? "rgba(200, 80, 60, 0.5)" : "rgba(255, 190, 107, 0.4)"}`,
-        }}
-      >
-        {seconds}
-      </span>
-    </div>
   );
 }
 
@@ -81,39 +48,54 @@ export function HuntStatus({ state }: HuntStatusProps): ReactElement {
   // count but the live figure the authority reports.
   const hiderTotal = Math.max(state.reveal.entries.length, state.mimicsRemaining);
   const hidersLeft = Math.min(state.mimicsRemaining, hiderTotal);
-  const seekerTotal = state.roster.filter(
-    (player) => player.rolePublicState === "inspector",
-  ).length;
-  const seekersLeft = state.roster.filter(
-    (player) => player.rolePublicState === "inspector" && player.lifeState === "active",
-  ).length;
+  const found = hiderTotal - hidersLeft;
 
   return (
     <div
       style={{
         ...plate(),
         borderRadius: 10,
-        padding: "8px 20px 10px",
+        padding: "8px 22px 10px",
         textAlign: "center",
       }}
       role="status"
       aria-live="polite"
-      aria-label={`${hidersLeft} of ${hiderTotal} hiding, ${state.timer.secondsRemaining} seconds left`}
+      aria-label={`${hidersLeft} still hidden, ${state.timer.secondsRemaining} seconds left`}
     >
       <div style={rowStyle}>
-        <div style={figureRowStyle}>
-          {Array.from({ length: hiderTotal }, (_, index) => (
-            <Figure key={index} color={CREAM} struck={index >= hidersLeft} />
-          ))}
+        <div style={{ textAlign: "right" }}>
+          <div
+            style={{
+              font: `600 15px/1.1 ${FONT_NUMERIC}`,
+              letterSpacing: "0.06em",
+              color: CREAM,
+              fontVariantNumeric: "tabular-nums",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {hidersLeft} STILL HIDDEN
+          </div>
+          {found > 0 ? (
+            <div style={{ ...labelStyle, marginTop: 1 }}>{found} found</div>
+          ) : null}
         </div>
-        <Hourglass accent={accent} seconds={state.timer.secondsRemaining} />
-        <div style={figureRowStyle}>
-          {Array.from({ length: seekerTotal }, (_, index) => (
-            <Figure key={index} color={ALARM} struck={index >= seekersLeft} />
-          ))}
+
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <ClockFace accent={accent} />
+          <span
+            style={{
+              font: `600 20px/1 ${FONT_NUMERIC}`,
+              color: accent,
+              fontVariantNumeric: "tabular-nums",
+              letterSpacing: "0.04em",
+              textShadow: `0 0 12px ${accent === ALARM ? "rgba(200, 80, 60, 0.5)" : "rgba(255, 190, 107, 0.4)"}`,
+            }}
+          >
+            {formatClock(state.timer.remainingMs)}
+          </span>
         </div>
       </div>
-      <h2 style={{ ...headlineStyle, fontSize: 13, marginTop: 4, color: accent }}>
+      <h2 style={{ ...headlineStyle, fontSize: 13, marginTop: 6, color: accent }}>
         {huntStatusLabel(state.phase)}
       </h2>
     </div>

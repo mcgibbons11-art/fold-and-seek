@@ -311,11 +311,10 @@ describe("hunt HUD region ownership", () => {
     expect(scrollers[0]).toBe(column);
   });
 
-  it("folds a hider's tool panels at 720p and leaves them open at 1080p", () => {
-    // The arithmetic is checked in `hudLayout.test.ts`; what is checked here is
-    // that the column acts on it. At 720p the panels' own contents have to be
-    // absent from the DOM rather than merely hidden, because the 661 px the
-    // critic measured is what they occupy.
+  it("folds a hider's tool panels at every size, so the toolset is not drawn twice", () => {
+    // The panels' own contents have to be absent from the DOM rather than
+    // merely hidden: what they cost is the count of things on screen, and the
+    // rail beside them is already the whole toolset with the keys on it.
     const restore = { width: window.innerWidth, height: window.innerHeight };
     const folded: Record<string, string | null> = {};
     for (const viewport of VIEWPORTS) {
@@ -344,7 +343,7 @@ describe("hunt HUD region ownership", () => {
     Object.defineProperty(window, "innerHeight", { value: restore.height, configurable: true });
 
     expect(folded["1280x720"]).toBe("folded");
-    expect(folded["1920x1080"]).toBe("open");
+    expect(folded["1920x1080"]).toBe("folded");
   });
 
   it("opens the folded panels when the header is pressed", () => {
@@ -506,7 +505,11 @@ describe("hunt HUD grammar", () => {
         onTaunt={() => undefined}
       />,
     );
-    expect(textOf("topCenter")).toContain("96");
+    // The row prints the clock the way every other clock in the game is
+    // printed, and says the count of hiders in words rather than in a rank of
+    // 13-px figures the round-1 critic read as "†††⧗42†".
+    expect(textOf("topCenter")).toContain("1:36");
+    expect(textOf("topCenter")).toContain("STILL HIDDEN");
     expect(textOf("topCenter")).toContain("SEARCH TIME");
     // The Forge header used to print "FORGE · POSE" on top of the timer.
     for (const region of claimedRegions()) {
@@ -585,7 +588,7 @@ describe("hunt HUD grammar", () => {
         onTaunt={() => undefined}
       />,
     );
-    expect(textOf("bottomCenter")).toContain("Click to take the room");
+    expect(textOf("bottomCenter")).toContain("Click to look around");
     expect(textOf("bottomCenter")).not.toContain("Walk");
   });
 
@@ -602,7 +605,7 @@ describe("hunt HUD grammar", () => {
       />,
     );
     expect(textOf("leftColumn")).toContain("You were found");
-    expect(textOf("leftColumn")).toContain("Missed-Spot Ranking");
+    expect(textOf("leftColumn")).toContain("Fooled the Inspector");
     expect(textOf("rightRail")).not.toContain("Taunt");
   });
 });

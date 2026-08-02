@@ -2,6 +2,8 @@ import type { CSSProperties, ReactElement } from "react";
 
 import {
   MISSED_FINDS_AWAITING,
+  MISSED_FINDS_PLAYER_HEADER,
+  MISSED_FINDS_POINTS_HEADER,
   MISSED_FINDS_TITLE,
   MISSED_FINDS_TOGGLE_HINT,
   missedFindsCountdown,
@@ -79,7 +81,18 @@ export function MissedFindsHud({ state }: MissedFindsHudProps): ReactElement {
       </div>
 
       {board.received ? (
-        board.rows.map((row) => <MissedFindsRow key={row.publicPlayerId} row={row} />)
+        <>
+          {/* Without these the board is three names against three bare numbers,
+              which the round-1 critic read as an unexplained list of zeroes. */}
+          <div style={{ ...rowStyle, borderTop: "none", paddingBottom: 0 }}>
+            <span style={{ ...labelStyle, width: 18 }} aria-hidden />
+            <span style={{ ...labelStyle, flex: 1 }}>{MISSED_FINDS_PLAYER_HEADER}</span>
+            <span style={labelStyle}>{MISSED_FINDS_POINTS_HEADER}</span>
+          </div>
+          {board.rows.map((row) => (
+            <MissedFindsRow key={row.publicPlayerId} row={row} />
+          ))}
+        </>
       ) : (
         <div style={{ padding: "6px 0", opacity: 0.6 }}>{MISSED_FINDS_AWAITING}</div>
       )}

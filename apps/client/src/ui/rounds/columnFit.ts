@@ -115,11 +115,20 @@ export function columnDensityFor(availableHeight: number): ColumnDensity {
 }
 
 /**
- * Whether the tool panels start unfolded. They do wherever they fit whole; below
- * that the player opens them, and pressing a tool key opens them too, so nothing
- * is out of reach — it is out of the way.
+ * Whether the tool panels start unfolded. They never do.
+ *
+ * They used to unfold wherever the column could hold them whole, which meant
+ * everywhere above 720p. The round-1 critic counted about 35 elements on a
+ * hider's screen at 1080p and found the reason: the left column's open panels
+ * and the right rail are two renderings of the same toolset, so a hider who has
+ * just been told to hold still is reading their whole tool inventory twice.
+ * The rail is the one that always fits and always has the keys on it, so the
+ * column starts folded at every size and the panels are one press away.
+ *
+ * `availableHeight` is kept in the signature because the caller has it and
+ * because whether the panels *would* fit is still what `columnDensityFor`
+ * decides above.
  */
-export function forgePanelsOpenByDefault(availableHeight: number): boolean {
-  const density = columnDensityFor(availableHeight);
-  return hiderColumnHeight(density, { scored: true, forgeOpen: true }) <= availableHeight;
+export function forgePanelsOpenByDefault(_availableHeight: number): boolean {
+  return false;
 }

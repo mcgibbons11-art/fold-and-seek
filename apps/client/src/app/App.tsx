@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { MenuAmbience } from "../audio/MenuAmbience";
 import { installUiSounds } from "../audio/uiSounds";
 import { GameHost, type RoundLoadProgress } from "../engine/GameHost";
@@ -12,7 +12,7 @@ import { createPortalsRound, PORTALS_ROUND_CHANNEL } from "../gameplay/portalsRo
 import type { GameRound } from "../gameplay/round";
 import type { RoundSession } from "../gameplay/RoundSession";
 import { detectPortalsSession, type PortalsBoot } from "../networking/portalsBoot";
-import { isQualityTier, QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
+import { QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
 import type { ConnectionDetail } from "../networking/NetworkAdapter";
 import { RendererInitError, type DeviceEvent, type RenderBackend } from "../rendering/RendererManager";
 import { ForgeHud } from "../ui/ForgeHud";
@@ -23,7 +23,9 @@ import {
   CREAM,
   FONT_DISPLAY,
   FONT_UI,
+  PRESS_CLASS,
   SCREEN_WASH,
+  buttonStyle,
   labelStyle,
   ornamentRuleStyle,
   plate,
@@ -107,6 +109,41 @@ const panelStyle: CSSProperties = {
   color: CREAM,
   font: `13px/1.6 ${FONT_UI}`,
   pointerEvents: "auto",
+};
+
+/**
+ * The five tiers, named for what they buy rather than for where they sit in the
+ * `QUALITY_TIER_ORDER` array. "light" and "low" are neighbours in that list and
+ * near-synonyms in English, which is not a choice anybody can make from a
+ * dropdown.
+ */
+const QUALITY_TIER_LABELS: Readonly<Record<QualityTier, string>> = {
+  light: "Lightest",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  ultra: "Ultra",
+};
+
+/**
+ * The quality control as five chips rather than a `<select>`. A native dropdown
+ * is the one piece of browser chrome on the title screen, it renders in the
+ * platform's own colours whatever is asked of it, and it hides four of the five
+ * choices behind a click.
+ */
+const qualityChipStyle: CSSProperties = {
+  ...buttonStyle,
+  padding: "5px 9px",
+  fontSize: 10,
+  letterSpacing: "0.1em",
+};
+
+const qualityChipActiveStyle: CSSProperties = {
+  ...qualityChipStyle,
+  background: "linear-gradient(180deg, rgba(194, 151, 79, 0.45), rgba(122, 93, 46, 0.3))",
+  border: `1px solid ${BRASS_LIT}`,
+  color: "#fff3df",
+  boxShadow: "0 0 12px rgba(255, 190, 107, 0.2), inset 0 1px 0 rgba(255, 232, 186, 0.25)",
 };
 
 const noticeStyle: CSSProperties = {
@@ -283,11 +320,7 @@ export function App(): ReactElement {
     else menuAmbience.stop();
   }, [atMenu, menuAmbience]);
 
-  const onTierSelect = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
-    const value = event.target.value;
-    if (!isQualityTier(value)) {
-      return;
-    }
+  const onTierSelect = useCallback((value: QualityTier) => {
     hostRef.current?.setQualityTier(value);
     setTier(value);
   }, []);
@@ -454,35 +487,30 @@ export function App(): ReactElement {
   return (
     <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
       <MainMenu
-        backend={boot.backend}
         onPlayRound={onPlayRound}
         onForgePractice={onEnterForge}
         starting={false}
         multiplayer={portals !== null}
         notice={roundError}
       />
-      <div style={panelStyle}>
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={labelStyle}>quality</span>
-          <select
-            value={tier}
-            onChange={onTierSelect}
-            style={{
-              background: "rgba(28, 21, 13, 0.9)",
-              color: CREAM,
-              border: "1px solid rgba(176, 138, 74, 0.38)",
-              borderRadius: 6,
-              padding: "4px 8px",
-              font: "inherit",
-            }}
-          >
-            {[...QUALITY_TIER_ORDER].reverse().map((value) => (
-              <option key={value} value={value} style={{ color: "#14100c" }}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div style={panelStyle} role="group" aria-label="Quality">
+        <div style={{ ...labelStyle, marginBottom: 7 }}>Quality</div>
+        <div style={{ display: "flex", gap: 5 }}>
+          {[...QUALITY_TIER_ORDER].reverse().map((value) => (
+            <button
+              key={value}
+              type="button"
+              className={PRESS_CLASS}
+              aria-pressed={tier === value}
+              style={tier === value ? qualityChipActiveStyle : qualityChipStyle}
+              onClick={() => {
+                onTierSelect(value);
+              }}
+            >
+              {QUALITY_TIER_LABELS[value]}
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );

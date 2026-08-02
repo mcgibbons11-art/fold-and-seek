@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 
 import { FORGE_UI_ATTRIBUTE } from "../../forge/ForgeController";
+import { PAINT_SHADOW_LABEL, PAINT_SHADOW_TITLE } from "../../gameplay/copy";
 import { hexToRgb, rgbToCss, rgbToHex, sameColorByte, type Rgb } from "../../paint/color";
 import { MAX_BRUSH_RADIUS, MIN_BRUSH_RADIUS } from "../../paint/PaintBrushController";
 import type { PaintPanelState } from "../../paint/paintStore";
@@ -264,6 +265,60 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
         ))}
       </div>
 
+      {/* The brush comes before the material channels and the swatch grids.
+          At 1280x720 the panel is 773 px of content in a 502 px box, and in the
+          old order everything below RECENT — the brush, the flow, the dropper
+          and the eraser, which is the whole of how you actually paint — was
+          under the fold. Frequency of use is the order now. */}
+      <div style={{ ...labelStyle, marginTop: 10 }}>
+        Brush {Math.round(state.brushSize * 100)}
+      </div>
+      <input
+        type="range"
+        min={MIN_BRUSH_RADIUS}
+        max={MAX_BRUSH_RADIUS}
+        step={0.005}
+        value={state.brushSize}
+        style={sliderStyle}
+        onChange={(event) => {
+          tool.setBrushSize(Number(event.target.value));
+        }}
+      />
+
+      <div style={labelStyle}>Flow {Math.round(state.opacity * 100)}</div>
+      <input
+        type="range"
+        min={0.05}
+        max={1}
+        step={0.05}
+        value={state.opacity}
+        style={sliderStyle}
+        onChange={(event) => {
+          tool.setOpacity(Number(event.target.value));
+        }}
+      />
+
+      <div style={rowStyle}>
+        <button
+          type="button"
+          style={state.eyedropperArmed ? activeToggleStyle : toggleStyle}
+          onClick={() => {
+            tool.armEyedropper(!state.eyedropperArmed);
+          }}
+        >
+          Dropper F
+        </button>
+        <button
+          type="button"
+          style={state.eraser ? activeToggleStyle : toggleStyle}
+          onClick={() => {
+            tool.setEraser(!state.eraser);
+          }}
+        >
+          Eraser
+        </button>
+      </div>
+
       <div style={{ ...labelStyle, marginTop: 10 }}>
         Metallic {Math.round(state.metallic * 100)}
       </div>
@@ -347,64 +402,18 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
         ))}
       </div>
 
-      <div style={{ ...labelStyle, marginTop: 10 }}>
-        Brush {Math.round(state.brushSize * 100)}
-      </div>
-      <input
-        type="range"
-        min={MIN_BRUSH_RADIUS}
-        max={MAX_BRUSH_RADIUS}
-        step={0.005}
-        value={state.brushSize}
-        style={sliderStyle}
-        onChange={(event) => {
-          tool.setBrushSize(Number(event.target.value));
-        }}
-      />
-
-      <div style={labelStyle}>Flow {Math.round(state.opacity * 100)}</div>
-      <input
-        type="range"
-        min={0.05}
-        max={1}
-        step={0.05}
-        value={state.opacity}
-        style={sliderStyle}
-        onChange={(event) => {
-          tool.setOpacity(Number(event.target.value));
-        }}
-      />
-
       <div style={rowStyle}>
+        {/* Not a paint channel: it turns the Mimic's own cast shadow off. It sat
+            here labelled "Shadow" beside Eraser and Clear, where it read as one. */}
         <button
           type="button"
-          style={state.eyedropperArmed ? activeToggleStyle : toggleStyle}
-          onClick={() => {
-            tool.armEyedropper(!state.eyedropperArmed);
-          }}
-        >
-          Dropper F
-        </button>
-        <button
-          type="button"
-          style={state.eraser ? activeToggleStyle : toggleStyle}
-          onClick={() => {
-            tool.setEraser(!state.eraser);
-          }}
-        >
-          Eraser
-        </button>
-      </div>
-
-      <div style={rowStyle}>
-        <button
-          type="button"
+          title={PAINT_SHADOW_TITLE}
           style={state.shadow ? activeToggleStyle : toggleStyle}
           onClick={() => {
             tool.setShadow(!state.shadow);
           }}
         >
-          Shadow
+          {PAINT_SHADOW_LABEL}
         </button>
         <button
           type="button"
@@ -428,6 +437,10 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
       <div style={{ ...labelStyle, marginTop: 10 }}>
         Paint used {budget}%
       </div>
+      {/* The panel's one line of prose, and the only place the instruction is
+          given. It opens on `PAINT_INSTRUCTION` and the eyedropper and the
+          clear replace it with what they just did, so this is a live line
+          rather than a caption. */}
       <div style={{ fontSize: 11, opacity: 0.7, marginTop: 2 }}>{state.status}</div>
     </div>
   );

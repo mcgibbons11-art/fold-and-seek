@@ -18,7 +18,7 @@ import {
   type PanelNumericKey,
   type SegmentFormNumericKey,
 } from "../forge/ForgeController";
-import { BRASS_LIT, CREAM, FONT_DISPLAY, FONT_UI, PRESS_CLASS, plate } from "./rounds/theme";
+import { BRASS_LIT, CREAM, FONT_DISPLAY, FONT_UI, PRESS_CLASS, keycapStyle, plate } from "./rounds/theme";
 
 /**
  * Forge HUD (bible §12.4). React owns layout and discrete state only: sliders
@@ -127,9 +127,16 @@ const FORGE_LAYOUT = {
    * How far the top of the Preview panel sits above the bottom of the viewport.
    * It and the lock panel below it are both fixed-height, so this is a constant:
    * the lock panel's 16 from the bottom, the Preview panel's 132, and the
-   * Preview panel's own 97. Measured at 640x660.
+   * Preview panel's own 155 — a heading, three stacked camera buttons at 24 with
+   * 5 between them, the anchors line, and the panel's own chrome.
    */
-  rightStackTopFromBottom: 229,
+  rightStackTopFromBottom: 287,
+  /**
+   * How far the top of the bottom row — the status strip and the undo column —
+   * sits above the bottom of the viewport. Both are anchored 16 from the bottom
+   * and the undo column is the taller of the two at 102.
+   */
+  bottomRowFromBottom: 118,
   /** Breathing room between two panels that would otherwise touch. */
   gutter: 12,
   /** The status strip stays this narrow even when there is room for more. */
@@ -160,13 +167,75 @@ const CONTEXT_MAX_HEIGHT = `calc(100vh - ${String(
     FORGE_LAYOUT.panelChrome,
 )}px)`;
 
-const TOOL_LABELS: Readonly<Record<ForgeToolMode, string>> = {
-  pose: "1  Pose",
-  shape: "2  Shape",
-  panels: "3  Panels",
-  material: "4  Material",
-  paint: "5  Paint",
+/** Where the paint panel's own top edge sits, beside the tool column. */
+const PAINT_TOP = 58;
+
+/**
+ * The tallest the paint panel's content may be before it would reach the status
+ * strip and the undo column along the bottom.
+ *
+ * It needs one because the panel has no natural bound: a wheel, three material
+ * channels, the swatch grid and the stroke controls came to 773 px on a 660 px
+ * pane, which put the bottom third of the tool off the screen entirely and drew
+ * the rest over the status strip. Scrolling it is what keeps every control
+ * reachable on a short viewport.
+ */
+const PAINT_MAX_HEIGHT = `calc(100vh - ${String(
+  PAINT_TOP + FORGE_LAYOUT.bottomRowFromBottom + FORGE_LAYOUT.gutter + FORGE_LAYOUT.panelChrome,
+)}px)`;
+
+/**
+ * Every key this HUD prints, drawn as the ivory cap the rest of the game prints
+ * keys on rather than written into the label with spaces around it.
+ *
+ * "Enter  Lock disguise" was a string, and HTML collapses runs of whitespace, so
+ * what reached the screen was "Enter Lock disguise" — a three-word label whose
+ * first word happens to be a key. The cap is what tells them apart.
+ */
+const FORGE_KEYCAP_FONT = `600 10px/1.5 ${FONT_UI}`;
+
+function Keycap({ children }: { readonly children: string }): ReactElement {
+  return (
+    <span style={{ ...keycapStyle(FORGE_KEYCAP_FONT), marginRight: 8, verticalAlign: "baseline" }}>
+      {children}
+    </span>
+  );
+}
+
+const TOOL_KEYS: Readonly<Record<ForgeToolMode, string>> = {
+  pose: "1",
+  shape: "2",
+  panels: "3",
+  material: "4",
+  paint: "5",
 };
+
+const TOOL_LABELS: Readonly<Record<ForgeToolMode, string>> = {
+  pose: "Pose",
+  shape: "Shape",
+  panels: "Panels",
+  material: "Material",
+  paint: "Paint",
+};
+
+/** The three preview cameras, named in full rather than clipped to fit a row. */
+const PREVIEW_BUTTONS: readonly {
+  readonly id: "inspector" | "doorway" | "silhouette";
+  readonly label: string;
+  readonly title: string;
+}[] = [
+  {
+    id: "inspector",
+    label: "Inspector's eye",
+    title: "See the disguise from the height an Inspector walks at",
+  },
+  { id: "doorway", label: "From the door", title: "See the disguise from the doorway camera" },
+  {
+    id: "silhouette",
+    label: "Silhouette (V)",
+    title: "Flatten the room to outlines, which is what a shape is really read as",
+  },
+];
 
 interface SliderProps {
   readonly label: string;
@@ -214,16 +283,18 @@ function PreviewButton(props: {
     <button
       type="button"
       title={props.title}
+      aria-label={props.title}
       onClick={props.onPress}
       style={{
-        flex: 1,
+        width: "100%",
+        textAlign: "left",
         background: props.active
           ? "linear-gradient(180deg, rgba(194, 151, 79, 0.42), rgba(122, 93, 46, 0.28))"
           : "linear-gradient(180deg, rgba(232, 221, 205, 0.10), rgba(232, 221, 205, 0.03))",
         color: props.active ? "#fff3df" : CREAM,
         border: props.active ? `1px solid ${BRASS_LIT}` : EDGE,
         borderRadius: 7,
-        padding: "5px 0",
+        padding: "5px 8px",
         font: "inherit",
         fontSize: 11,
         cursor: "pointer",
@@ -272,6 +343,10 @@ export function ForgeHud({
     controller.commitEdits();
   };
 
+  // Paint has no context panel of its own, so the whole right column stands
+  // down for it and the paint panel has the width to itself on a narrow pane.
+  const showContextPanel = state.mode !== "paint";
+
   return (
     <div style={rootStyle}>
       {showHeader ? (
@@ -315,6 +390,7 @@ export function ForgeHud({
               controller.setToolMode(mode);
             }}
           >
+            <Keycap>{TOOL_KEYS[mode]}</Keycap>
             {TOOL_LABELS[mode]}
           </button>
         ))}
@@ -326,32 +402,44 @@ export function ForgeHud({
             controller.setMirror(!state.mirror);
           }}
         >
-          M  Mirror
+          <Keycap>M</Keycap>
+          Mirror
         </button>
       </div>
 
       {/* The paint panel places itself at 16/16 and draws nothing unless the
           paint tool is active. The wrapper is what puts that origin beside the
           tool column instead of on top of it. */}
-      <div style={{ position: "absolute", left: LEFT_GUTTER, top: 58 }}>
+      <div
+        style={{
+          position: "absolute",
+          left: LEFT_GUTTER,
+          top: PAINT_TOP,
+          maxHeight: PAINT_MAX_HEIGHT,
+          overflowY: "auto",
+          pointerEvents: "auto",
+        }}
+      >
         <PaintPanel tool={controller.paint} />
       </div>
 
-      <div
-        {...hudProps}
-        style={{
-          ...panelStyle,
-          top: FORGE_LAYOUT.topRow,
-          right: FORGE_LAYOUT.edge,
-          width: 236,
-          // Stops above the Preview and lock panels rather than growing through
-          // them, which is what `70vh` did on a short pane.
-          maxHeight: CONTEXT_MAX_HEIGHT,
-          overflowY: "auto",
-        }}
-      >
-        <ContextPanel controller={controller} state={state} onCommit={commit} />
-      </div>
+      {showContextPanel ? (
+        <div
+          {...hudProps}
+          style={{
+            ...panelStyle,
+            top: FORGE_LAYOUT.topRow,
+            right: FORGE_LAYOUT.edge,
+            width: 236,
+            // Stops above the Preview and lock panels rather than growing
+            // through them, which is what `70vh` did on a short pane.
+            maxHeight: CONTEXT_MAX_HEIGHT,
+            overflowY: "auto",
+          }}
+        >
+          <ContextPanel controller={controller} state={state} onCommit={commit} />
+        </div>
+      ) : null}
 
       <div
         {...hudProps}
@@ -412,31 +500,29 @@ export function ForgeHud({
         }}
       >
         <div style={{ ...labelStyle, color: BRASS_LIT, marginBottom: 6 }}>Preview</div>
-        <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
-          <PreviewButton
-            label="Eye"
-            title="Inspector eye height (hold Space)"
-            active={state.preview === "inspector"}
-            onPress={() => {
-              controller.setPreview(state.preview === "inspector" ? "none" : "inspector");
-            }}
-          />
-          <PreviewButton
-            label="Door"
-            title="Doorway camera"
-            active={state.preview === "doorway"}
-            onPress={() => {
-              controller.setPreview(state.preview === "doorway" ? "none" : "doorway");
-            }}
-          />
-          <PreviewButton
-            label="Sil"
-            title="Silhouette view (V)"
-            active={state.silhouette}
-            onPress={() => {
-              controller.setSilhouette(!state.silhouette);
-            }}
-          />
+        {/* Stacked rather than in a row: three of these across 176 px is what
+            reduced "Silhouette" to "Sil", and an abbreviation nobody can expand
+            is a control the player has to press to find out about. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 8 }}>
+          {PREVIEW_BUTTONS.map((preview) => (
+            <PreviewButton
+              key={preview.id}
+              label={preview.label}
+              title={preview.title}
+              active={
+                preview.id === "silhouette"
+                  ? state.silhouette
+                  : state.preview === preview.id
+              }
+              onPress={() => {
+                if (preview.id === "silhouette") {
+                  controller.setSilhouette(!state.silhouette);
+                  return;
+                }
+                controller.setPreview(state.preview === preview.id ? "none" : preview.id);
+              }}
+            />
+          ))}
         </div>
         <div style={{ fontSize: 11, opacity: 0.7 }}>
           {state.anchoredBones.length === 0
@@ -471,7 +557,8 @@ export function ForgeHud({
             }
           }}
         >
-          {state.locked ? "Esc  Unlock" : "Enter  Lock disguise"}
+          <Keycap>{state.locked ? "Esc" : "Enter"}</Keycap>
+          {state.locked ? "Unlock" : "Lock disguise"}
         </button>
         <button
           type="button"
@@ -521,9 +608,11 @@ export function ForgeToolPanels({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, width }}>
-      <div {...hudProps} style={cardStyle}>
-        <ContextPanel controller={controller} state={state} onCommit={commit} />
-      </div>
+      {state.mode === "paint" ? null : (
+        <div {...hudProps} style={cardStyle}>
+          <ContextPanel controller={controller} state={state} onCommit={commit} />
+        </div>
+      )}
 
       <div {...hudProps} style={{ pointerEvents: "auto" }}>
         <PaintPanel tool={controller.paint} />
@@ -559,7 +648,16 @@ interface ContextPanelProps {
   readonly onCommit: () => void;
 }
 
-function ContextPanel({ controller, state, onCommit }: ContextPanelProps): ReactElement {
+/**
+ * The controls for whichever tool is selected.
+ *
+ * Paint has none here. It used to carry a "Body paint" card whose whole content
+ * was a third wording of the instruction the paint panel and the status strip
+ * were already both giving, on the one screen where a second panel is also
+ * competing for the width. The paint panel is the tool; this returns nothing and
+ * both callers leave the space to it.
+ */
+function ContextPanel({ controller, state, onCommit }: ContextPanelProps): ReactElement | null {
   if (state.mode === "shape") {
     return <ShapePanel controller={controller} state={state} onCommit={onCommit} />;
   }
@@ -570,13 +668,7 @@ function ContextPanel({ controller, state, onCommit }: ContextPanelProps): React
     return <MaterialPanel controller={controller} state={state} />;
   }
   if (state.mode === "paint") {
-    return (
-      <Section title="Body paint">
-        <div style={{ opacity: 0.65 }}>
-          Drag on the Mimic to paint it. The wheel, the brush and the dropper are on the left.
-        </div>
-      </Section>
-    );
+    return null;
   }
   return <ArrangementPanel controller={controller} state={state} />;
 }

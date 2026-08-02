@@ -10,12 +10,29 @@ const WINDOW_HALF_WIDTH = 1.5;
 const WINDOW_SILL_Y = 0.95;
 const WINDOW_HEAD_Y = 2.45;
 
-const CAMERA_TARGET_X = -1.2;
-const CAMERA_TARGET_Y = 1.05;
-const CAMERA_TARGET_Z = -0.9;
+/**
+ * Where the title screen looks, and how far back it stands.
+ *
+ * The bar is `assets-source/cover-art.jpg`: a lit lamp at one side, a dressed
+ * surface across the middle at about its own height, and the night window
+ * behind. The camera used to sit at 5.6 m with a 0.24 pitch, which is a wide
+ * high three-quarter view of the whole blockout — the round-1 critic reported it
+ * as framing an empty corner, and it is: at that distance the dressed cluster
+ * (lamp, side table, tea set, book stacks, armchair) occupies the left quarter
+ * and the middle of the frame, where the menu card sits, is bare wall and floor.
+ *
+ * So the target moves onto the side table, the camera comes in to 3.8 m and
+ * drops to roughly the height of what it is looking at, and the drift is halved
+ * because a wide sweep at close range reads as a pan rather than a room
+ * breathing. The lamp then sits behind the card's left edge and throws its light
+ * across the frame, which is the cover's composition.
+ */
+const CAMERA_TARGET_X = -0.9;
+const CAMERA_TARGET_Y = 0.95;
+const CAMERA_TARGET_Z = -1.5;
 const CAMERA_BASE_YAW = 0.85;
-const CAMERA_YAW_SWEEP = 0.5;
-const CAMERA_ORBIT_SPEED = 0.09;
+const CAMERA_YAW_SWEEP = 0.28;
+const CAMERA_ORBIT_SPEED = 0.07;
 const CAMERA_MIN_RADIUS = 2.6;
 const CAMERA_MAX_RADIUS = 9;
 const CAMERA_MIN_PITCH = -0.15;
@@ -253,8 +270,8 @@ export class TestRoom {
   private orbitTime = 0;
   private previousOrbitTime = 0;
   private yawOffset = 0;
-  private pitch = 0.24;
-  private radius = 5.6;
+  private pitch = 0.11;
+  private radius = 3.8;
   private dragging = false;
   private dragPointerId = -1;
   private lastPointerX = 0;

@@ -155,15 +155,19 @@ describe("HUD region table", () => {
     }
   });
 
-  it("folds the tool panels at 720p and leaves them open at 1080p", () => {
-    // Folding is what buys the room, so it has to happen exactly where the
-    // panels do not fit whole and nowhere else: a hider at 1080p who has to
-    // click a header to reach a slider has been charged for nothing.
+  it("folds the tool panels at every size, because the rail already carries them", () => {
+    // Folding used to happen only where the panels did not fit whole, which
+    // left them open at 1080p. The round-1 critic counted the result: the open
+    // column and the right rail are the same toolset drawn twice, about 35
+    // elements on a hider's screen. The rail is the copy that always fits and
+    // always has the keys, so the column starts folded whatever the height.
     const short = regionRect("leftColumn", 1280, 720);
     const tall = regionRect("leftColumn", 1920, 1080);
 
     expect(forgePanelsOpenByDefault(short.bottom - short.top)).toBe(false);
-    expect(forgePanelsOpenByDefault(tall.bottom - tall.top)).toBe(true);
+    expect(forgePanelsOpenByDefault(tall.bottom - tall.top)).toBe(false);
+    // The density still answers for the column as it would be with the panels
+    // open, so opening them by hand at 720p still gets the compact sizes.
     expect(columnDensityFor(short.bottom - short.top).id).toBe("compact");
     expect(columnDensityFor(tall.bottom - tall.top).id).toBe("roomy");
   });
