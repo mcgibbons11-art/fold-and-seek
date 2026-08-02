@@ -247,6 +247,17 @@ export class PortalsNetAdapter implements NetworkAdapter {
     try {
       session = await this.net.join(room.length > 0 ? { channel: room } : undefined);
     } catch (error) {
+      // Measured in the Portals editor (2026-08-02): the SDK's own join can
+      // time out while still registering the session internally, after which
+      // every retry is refused with "a multiplayer session is already active —
+      // leave() first". A failed join therefore always leaves before it
+      // reports, so the player's retry meets a clean slate; the leave itself
+      // is best-effort because there may genuinely be no session to leave.
+      try {
+        await this.net.leave();
+      } catch {
+        // Nothing was joined; there is nothing to clean up.
+      }
       this.setStatus("error", "join_failed");
       throw error;
     }
