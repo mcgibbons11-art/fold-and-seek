@@ -167,6 +167,25 @@ sampling the wrong points — the seam test now compares u = 0 against u = 1,
 which are the *same point* of a periodic field and must be equal, instead of two
 samples either side of the edge, which only measured the field's own gradient.
 
+**Flatness is asserted twice and both bars have to hold**, because they catch
+different failures. The field's own excursion between the second and
+ninety-eighth centile must exceed 0.16, which is the check `paper_fibre` and
+`painted_plaster` were each caught failing; it says nothing about how the field
+is *mapped*, though, and the same 0.16 through an albedo floor of 0.95 is
+invisible where through a floor of 0.4 it is a material. So the swing after the
+floor and the mean compensation must also exceed a third. `paper_fibre` was
+confirmed to fail the first bar with its widened coefficients and floor put back
+to their originals, reproducing 0.1346 exactly, so the bar is live and the fix
+is the texture rather than the threshold.
+
+**One flaky neighbour, not touched.** `tests/gameplay/mergedBody.test.ts`'s
+"re-poses a body without allocating a new layout" asserts a wall-clock sample
+under 3 ms and was seen at 3.31 ms in one full run while several agents were
+building on this machine, then passed three times in isolation immediately
+after. It is a sibling's file and a load-sensitive bound; nothing in this pass
+can reach it, since `props/geometry.ts` is imported by `world/maps` alone and
+the Mimic builds its own geometry. Worth a wider bound or a warmup if it recurs.
+
 **Not verified: nothing here has been seen in a browser.** Every figure above is
 a number out of a field or out of the lighting arithmetic. Whether the plaster
 tooth reads at giant scale, whether the wall's 3.2 m tile is visible as tiling
