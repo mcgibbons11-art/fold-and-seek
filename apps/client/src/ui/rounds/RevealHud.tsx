@@ -2,7 +2,7 @@ import type { CSSProperties, ReactElement } from "react";
 
 import type { RevealEntryView, RoundViewState } from "../../gameplay/roundView";
 import { PhaseTimer } from "./PhaseTimer";
-import { BRASS, CREAM, EDGE, labelStyle, overlayStyle, panelStyle } from "./theme";
+import { BRASS_LIT, CREAM, RULE, labelStyle, overlayStyle, panelStyle } from "./theme";
 
 /**
  * The reveal (§5.14). Names arrive only once geometry has started to unfold, so
@@ -20,7 +20,7 @@ const rowStyle: CSSProperties = {
   justifyContent: "space-between",
   gap: 14,
   padding: "6px 0",
-  borderTop: EDGE,
+  borderTop: RULE,
 };
 
 function RevealRow({ entry }: { entry: RevealEntryView }): ReactElement {
@@ -28,7 +28,9 @@ function RevealRow({ entry }: { entry: RevealEntryView }): ReactElement {
   const name = entry.revealed ? (entry.displayName ?? "Unknown") : "Unknown";
   return (
     <div style={rowStyle}>
-      <span style={{ color: entry.caught ? CREAM : BRASS }}>{name}</span>
+      <span style={{ color: entry.caught ? CREAM : BRASS_LIT, opacity: entry.caught ? 0.7 : 1 }}>
+        {name}
+      </span>
       <span style={labelStyle}>
         {entry.survivalSeconds === null ? "survived" : `${entry.survivalSeconds.toFixed(1)}s`}
       </span>

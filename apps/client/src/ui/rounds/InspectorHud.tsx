@@ -9,7 +9,7 @@ import {
   AMMO_READY_PROMPT,
 } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
-import { ALARM, BRASS, CREAM, EDGE, INK, labelStyle } from "./theme";
+import { ALARM, BRASS, BRASS_LIT, CREAM, FONT_DISPLAY, figureStyle, labelStyle, plate } from "./theme";
 
 /**
  * Inspector HUD (§5.9). The Inspector carries a warrant gun, so time,
@@ -96,10 +96,13 @@ function AmmoRounds({ total, remaining }: { total: number; remaining: number }):
               width: 10,
               height: 28,
               borderRadius: "2px 2px 4px 4px",
-              border: `1px solid ${spent ? "rgba(232, 221, 205, 0.22)" : BRASS}`,
+              border: `1px solid ${spent ? "rgba(232, 221, 205, 0.2)" : BRASS_LIT}`,
               background: spent
-                ? "transparent"
-                : `linear-gradient(180deg, ${BRASS} 0 9px, rgba(176, 138, 74, 0.42) 9px 100%)`,
+                ? "rgba(0, 0, 0, 0.25)"
+                : `linear-gradient(180deg, ${BRASS_LIT} 0 9px, ${BRASS} 9px 13px, rgba(120, 92, 46, 0.55) 13px 100%)`,
+              boxShadow: spent
+                ? "inset 0 1px 3px rgba(0, 0, 0, 0.5)"
+                : "0 0 8px rgba(255, 190, 107, 0.3), inset 0 1px 0 rgba(255, 240, 205, 0.55)",
             }}
           />
         );
@@ -124,11 +127,9 @@ export function InspectorStatusCard({ state }: InspectorStatusCardProps): ReactE
   return (
     <div
       style={{
-        background: INK,
-        border: EDGE,
+        ...plate(),
         borderRadius: 10,
         padding: "12px 14px",
-        backdropFilter: "blur(6px)",
         width: "100%",
         boxSizing: "border-box",
         pointerEvents: "none",
@@ -136,15 +137,13 @@ export function InspectorStatusCard({ state }: InspectorStatusCardProps): ReactE
     >
       <div style={{ ...labelStyle, display: "flex", justifyContent: "space-between", gap: 12 }}>
         <span>{AMMO_LABEL}</span>
-        <span style={{ color: outOfAmmo ? ALARM : BRASS }}>
+        <span style={{ color: outOfAmmo ? ALARM : BRASS_LIT, fontVariantNumeric: "tabular-nums" }}>
           {warrantsRemaining} / {warrantTotal}
         </span>
       </div>
       <AmmoRounds total={warrantTotal} remaining={warrantsRemaining} />
       <div style={{ ...labelStyle, marginTop: 12 }}>Unaccounted for</div>
-      <div style={{ font: "600 22px/1.2 system-ui, sans-serif", color: accent }}>
-        {state.mimicsRemaining}
-      </div>
+      <div style={{ ...figureStyle, color: accent }}>{state.mimicsRemaining}</div>
     </div>
   );
 }
@@ -365,22 +364,21 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
             transform: "translateX(-50%)",
             textAlign: "center",
             whiteSpace: "nowrap",
-            background: INK,
-            border: EDGE,
+            ...plate(),
             borderRadius: 8,
-            padding: "8px 18px",
-            backdropFilter: "blur(6px)",
+            padding: "9px 20px",
           }}
+          className="fs-rise"
           role="status"
           aria-live="assertive"
         >
           <div
             style={{
+              font: `600 19px/1.2 ${FONT_DISPLAY}`,
               letterSpacing: "0.2em",
               textTransform: "uppercase",
-              fontSize: 17,
-              fontWeight: 600,
-              color: latest.correct ? BRASS : CREAM,
+              color: latest.correct ? BRASS_LIT : CREAM,
+              textShadow: latest.correct ? "0 0 16px rgba(255, 190, 107, 0.4)" : "none",
             }}
           >
             {latest.stamp}

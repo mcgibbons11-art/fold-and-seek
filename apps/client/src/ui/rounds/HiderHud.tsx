@@ -3,7 +3,7 @@ import type { CSSProperties, ReactElement, ReactNode } from "react";
 import { DECEPTION_TITLE, deceptionLabel, HIDER_CREEP_HINT } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { COLUMN_DENSITIES, type ColumnDensity } from "./columnFit";
-import { ALARM, BRASS, EDGE, INK, labelStyle } from "./theme";
+import { ALARM, BRASS_LIT, figureStyle, labelStyle, plate } from "./theme";
 
 /**
  * What a disguised Mimic reads while the Inspectors hunt. The disguise is not a
@@ -37,13 +37,11 @@ export interface HiderStatusCardProps {
  */
 function cardStyle(density: ColumnDensity, scored: boolean): CSSProperties {
   return {
-    background: INK,
-    border: EDGE,
+    ...plate(),
     borderRadius: 10,
     padding: density.cardPadding,
     height: scored ? density.statusScoredHeight : density.statusHeight,
     overflow: "hidden",
-    backdropFilter: "blur(6px)",
     width: "100%",
     boxSizing: "border-box",
     pointerEvents: "none",
@@ -56,7 +54,7 @@ export function HiderStatusCard({
 }: HiderStatusCardProps): ReactElement {
   const level = state.self.watchedLevel;
   const caught = state.self.lifeState !== "active";
-  const accent = level === 2 ? ALARM : BRASS;
+  const accent = level === 2 ? ALARM : BRASS_LIT;
   // Only ever this hider's own score: the director fills it in for the owner of
   // the disguise and for nobody else, which is what keeps it from being a hint.
   const deception = state.deception;
@@ -87,8 +85,12 @@ export function HiderStatusCard({
               flex: 1,
               height: 6,
               borderRadius: 3,
-              background: level >= segment ? accent : "rgba(232, 221, 205, 0.14)",
-              transition: "background 120ms linear",
+              background: level >= segment ? accent : "rgba(8, 6, 4, 0.6)",
+              boxShadow:
+                level >= segment
+                  ? `0 0 10px ${level === 2 ? "rgba(200, 80, 60, 0.6)" : "rgba(255, 190, 107, 0.5)"}`
+                  : "inset 0 1px 2px rgba(0, 0, 0, 0.6)",
+              transition: "background 120ms linear, box-shadow 120ms linear",
             }}
           />
         ))}
@@ -100,11 +102,9 @@ export function HiderStatusCard({
       {scored ? (
         <>
           <div style={{ ...labelStyle, marginTop: density.headingGap }}>{DECEPTION_TITLE}</div>
-          <div style={{ font: "600 22px/1.2 system-ui, sans-serif", color: BRASS }}>
-            {deception.points}
-          </div>
+          <div style={figureStyle}>{deception.points}</div>
           {latest === undefined ? null : (
-            <div style={{ ...labelStyle, marginTop: 2, color: BRASS }}>
+            <div style={{ ...labelStyle, marginTop: 2, color: BRASS_LIT, opacity: 0.9 }}>
               {deceptionLabel(latest.kind)} +{latest.points}
             </div>
           )}

@@ -2,6 +2,7 @@ import type { PublicDisguiseView } from "@foldseek/game-sim";
 import type { TauntId } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
 
+import { distanceGain } from "../audio/distance";
 import type { AABB } from "../inspector/navData";
 import type { InspectableProxy } from "../inspector/FocusSystem";
 import {
@@ -119,6 +120,7 @@ function tauntDirection(seed: number): number {
 }
 
 const scratchSize = new THREE.Vector3();
+const scratchCentre = new THREE.Vector3();
 
 /**
  * A precompile walks the same render list a frame does, culling included, so a
@@ -204,9 +206,18 @@ export class DisguiseTheatre {
   private castRevision = 0;
   private prewarmed = false;
 
-  constructor(scene: THREE.Scene, quality: QualitySettings, audio: SoundCue | null = null) {
+  /** Where the player is listening from, for placing a taunt in the room. */
+  private readonly listener: (() => THREE.Vector3 | null) | null;
+
+  constructor(
+    scene: THREE.Scene,
+    quality: QualitySettings,
+    audio: SoundCue | null = null,
+    listener: (() => THREE.Vector3 | null) | null = null,
+  ) {
     this.scene = scene;
     this.audio = audio;
+    this.listener = listener;
     this.castShadow = quality.dynamicShadows;
   }
 
@@ -358,8 +369,19 @@ export class DisguiseTheatre {
       heightM: size.y > 0 ? size.y : FALLBACK_BODY_HEIGHT_M,
       elapsedMs: 0,
     };
-    this.audio?.play(TAUNT_SOUND, TAUNT_PITCH_JITTER);
+    // A taunt is bait, so where it came from is the point of it: an Inspector
+    // has to be able to tell a hider jeering at their elbow from one across the
+    // sales floor, and a flat taunt tells them only that somebody did it.
+    this.audio?.play(TAUNT_SOUND, TAUNT_PITCH_JITTER, this.gainAt(actor.bounds));
     return true;
+  }
+
+  /** How loud a body's gesture is from where the player is standing. */
+  private gainAt(bounds: THREE.Box3): number {
+    if (this.listener === null) return 1;
+    const ear = this.listener();
+    if (ear === null) return 1;
+    return distanceGain(ear.distanceTo(bounds.getCenter(scratchCentre)));
   }
 
   /**

@@ -18,6 +18,7 @@ import {
   type PanelNumericKey,
   type SegmentFormNumericKey,
 } from "../forge/ForgeController";
+import { BRASS_LIT, CREAM, FONT_DISPLAY, FONT_UI, PRESS_CLASS, plate } from "./rounds/theme";
 
 /**
  * Forge HUD (bible §12.4). React owns layout and discrete state only: sliders
@@ -26,34 +27,29 @@ import {
  * is what makes undo and a starter arrangement snap the controls back.
  */
 
-const CREAM = "#e8ddcd";
-const BRASS = "#b08a4a";
-const INK = "rgba(10, 9, 8, 0.82)";
-const EDGE = "1px solid rgba(232, 221, 205, 0.16)";
+const EDGE = "1px solid rgba(176, 138, 74, 0.30)";
 
 const rootStyle: CSSProperties = {
   position: "absolute",
   inset: 0,
   pointerEvents: "none",
   color: CREAM,
-  font: "13px/1.5 system-ui, sans-serif",
+  font: `13px/1.5 ${FONT_UI}`,
 };
 
 const panelStyle: CSSProperties = {
   position: "absolute",
-  background: INK,
-  border: EDGE,
+  ...plate(),
   borderRadius: 10,
   padding: "12px 14px",
   pointerEvents: "auto",
-  backdropFilter: "blur(6px)",
 };
 
 const buttonStyle: CSSProperties = {
   display: "block",
   width: "100%",
   textAlign: "left",
-  background: "rgba(232, 221, 205, 0.06)",
+  background: "linear-gradient(180deg, rgba(232, 221, 205, 0.10), rgba(232, 221, 205, 0.03))",
   color: CREAM,
   border: EDGE,
   borderRadius: 7,
@@ -67,9 +63,10 @@ const buttonStyle: CSSProperties = {
 // across a rerender is what React warns about, and it also loses the width.
 const activeButtonStyle: CSSProperties = {
   ...buttonStyle,
-  background: "rgba(176, 138, 74, 0.28)",
-  border: `1px solid ${BRASS}`,
+  background: "linear-gradient(180deg, rgba(194, 151, 79, 0.42), rgba(122, 93, 46, 0.28))",
+  border: `1px solid ${BRASS_LIT}`,
   color: "#fff3df",
+  boxShadow: "0 0 14px rgba(255, 190, 107, 0.2), inset 0 1px 0 rgba(255, 232, 186, 0.25)",
 };
 
 const labelStyle: CSSProperties = {
@@ -84,14 +81,14 @@ const labelStyle: CSSProperties = {
 
 const sliderStyle: CSSProperties = {
   width: "100%",
-  accentColor: BRASS,
+  accentColor: BRASS_LIT,
   marginBottom: 8,
   cursor: "ew-resize",
 };
 
 const selectStyle: CSSProperties = {
   width: "100%",
-  background: "rgba(232, 221, 205, 0.08)",
+  background: "rgba(28, 21, 13, 0.9)",
   color: CREAM,
   border: EDGE,
   borderRadius: 6,
@@ -102,6 +99,66 @@ const selectStyle: CSSProperties = {
 
 /** Tells the Forge's pointer handling to keep its hands off this element. */
 const hudProps = { [FORGE_UI_ATTRIBUTE]: "" };
+
+/**
+ * Where the Forge's fixed panels sit, in one table.
+ *
+ * The panels used to carry their own offsets, and at the editor's half-width 2p
+ * panes three of them landed on each other (measured at 640x660): the context
+ * panel grew down through the Preview panel, and the centred status strip ran
+ * under both the undo column on its left and the lock panel on its right. Each
+ * offset looked reasonable alone, which is the same failure the round HUD's
+ * region table was built to end.
+ *
+ * So the two panels that can grow are bounded by arithmetic instead: the right
+ * column reserves the stack beneath it, and the status strip is inset to the gap
+ * between the two bottom corners rather than centred on the whole viewport.
+ */
+const FORGE_LAYOUT = {
+  /** Gap from the viewport edge to any panel. */
+  edge: 16,
+  /** Top of the row under the header. */
+  topRow: 74,
+  /** The tool column and the undo column, which share a width. */
+  leftColumnWidth: 132,
+  /** The Preview and lock panels on the right, which share a width. */
+  rightStackWidth: 176,
+  /**
+   * How far the top of the Preview panel sits above the bottom of the viewport.
+   * It and the lock panel below it are both fixed-height, so this is a constant:
+   * the lock panel's 16 from the bottom, the Preview panel's 132, and the
+   * Preview panel's own 97. Measured at 640x660.
+   */
+  rightStackTopFromBottom: 229,
+  /** Breathing room between two panels that would otherwise touch. */
+  gutter: 12,
+  /** The status strip stays this narrow even when there is room for more. */
+  statusMaxWidth: 620,
+  /**
+   * Padding and border a panel adds around whatever size it declares. These
+   * boxes are content-box, so a `width` of 132 occupies 162 and a `maxHeight`
+   * bounds the content rather than the panel. Every inset below has to pay it.
+   */
+  panelChrome: 14 * 2 + 1 * 2,
+} as const;
+
+/** Left inset for anything that must clear the left-hand columns. */
+const LEFT_GUTTER =
+  FORGE_LAYOUT.edge + FORGE_LAYOUT.leftColumnWidth + FORGE_LAYOUT.panelChrome + FORGE_LAYOUT.gutter;
+/** Right inset for anything that must clear the right-hand stack. */
+const RIGHT_GUTTER =
+  FORGE_LAYOUT.edge + FORGE_LAYOUT.rightStackWidth + FORGE_LAYOUT.panelChrome + FORGE_LAYOUT.gutter;
+
+/**
+ * The tallest the context panel's content may be before it would reach the
+ * Preview panel under it.
+ */
+const CONTEXT_MAX_HEIGHT = `calc(100vh - ${String(
+  FORGE_LAYOUT.topRow +
+    FORGE_LAYOUT.rightStackTopFromBottom +
+    FORGE_LAYOUT.gutter +
+    FORGE_LAYOUT.panelChrome,
+)}px)`;
 
 const TOOL_LABELS: Readonly<Record<ForgeToolMode, string>> = {
   pose: "1  Pose",
@@ -160,9 +217,11 @@ function PreviewButton(props: {
       onClick={props.onPress}
       style={{
         flex: 1,
-        background: props.active ? "rgba(176, 138, 74, 0.28)" : "rgba(232, 221, 205, 0.06)",
+        background: props.active
+          ? "linear-gradient(180deg, rgba(194, 151, 79, 0.42), rgba(122, 93, 46, 0.28))"
+          : "linear-gradient(180deg, rgba(232, 221, 205, 0.10), rgba(232, 221, 205, 0.03))",
         color: props.active ? "#fff3df" : CREAM,
-        border: props.active ? `1px solid ${BRASS}` : EDGE,
+        border: props.active ? `1px solid ${BRASS_LIT}` : EDGE,
         borderRadius: 7,
         padding: "5px 0",
         font: "inherit",
@@ -178,7 +237,9 @@ function PreviewButton(props: {
 function Section(props: { readonly title: string; readonly children: ReactNode }): ReactElement {
   return (
     <div>
-      <div style={{ ...labelStyle, opacity: 0.8, marginBottom: 8, color: BRASS }}>{props.title}</div>
+      <div style={{ ...labelStyle, opacity: 1, marginBottom: 8, color: BRASS_LIT, letterSpacing: "0.14em" }}>
+        {props.title}
+      </div>
       {props.children}
     </div>
   );
@@ -222,24 +283,33 @@ export function ForgeHud({
             left: "50%",
             transform: "translateX(-50%)",
             textAlign: "center",
-            letterSpacing: "0.18em",
+            letterSpacing: "0.2em",
             textTransform: "uppercase",
-            fontSize: 11,
-            padding: "8px 18px",
+            font: `600 13px/1.3 ${FONT_DISPLAY}`,
+            padding: "9px 20px",
           }}
         >
-          <span style={{ color: state.locked ? BRASS : CREAM }}>
+          <span style={{ color: state.locked ? BRASS_LIT : CREAM }}>
             {state.locked ? "Disguise locked" : `Forge · ${state.mode}`}
           </span>
-          {state.mirror ? <span style={{ color: BRASS, marginLeft: 12 }}>mirror</span> : null}
+          {state.mirror ? <span style={{ color: BRASS_LIT, marginLeft: 12 }}>mirror</span> : null}
         </div>
       ) : null}
 
-      <div {...hudProps} style={{ ...panelStyle, top: 74, left: 16, width: 132 }}>
+      <div
+        {...hudProps}
+        style={{
+          ...panelStyle,
+          top: FORGE_LAYOUT.topRow,
+          left: FORGE_LAYOUT.edge,
+          width: FORGE_LAYOUT.leftColumnWidth,
+        }}
+      >
         {FORGE_TOOL_MODES.map((mode) => (
           <button
             key={mode}
             type="button"
+            className={PRESS_CLASS}
             style={state.mode === mode ? activeButtonStyle : buttonStyle}
             onClick={() => {
               controller.setToolMode(mode);
@@ -250,6 +320,7 @@ export function ForgeHud({
         ))}
         <button
           type="button"
+          className={PRESS_CLASS}
           style={state.mirror ? activeButtonStyle : buttonStyle}
           onClick={() => {
             controller.setMirror(!state.mirror);
@@ -262,11 +333,23 @@ export function ForgeHud({
       {/* The paint panel places itself at 16/16 and draws nothing unless the
           paint tool is active. The wrapper is what puts that origin beside the
           tool column instead of on top of it. */}
-      <div style={{ position: "absolute", left: 148, top: 58 }}>
+      <div style={{ position: "absolute", left: LEFT_GUTTER, top: 58 }}>
         <PaintPanel tool={controller.paint} />
       </div>
 
-      <div {...hudProps} style={{ ...panelStyle, top: 74, right: 16, width: 236, maxHeight: "70vh", overflowY: "auto" }}>
+      <div
+        {...hudProps}
+        style={{
+          ...panelStyle,
+          top: FORGE_LAYOUT.topRow,
+          right: FORGE_LAYOUT.edge,
+          width: 236,
+          // Stops above the Preview and lock panels rather than growing through
+          // them, which is what `70vh` did on a short pane.
+          maxHeight: CONTEXT_MAX_HEIGHT,
+          overflowY: "auto",
+        }}
+      >
         <ContextPanel controller={controller} state={state} onCommit={commit} />
       </div>
 
@@ -274,10 +357,15 @@ export function ForgeHud({
         {...hudProps}
         style={{
           ...panelStyle,
-          bottom: 16,
-          left: "50%",
-          transform: "translateX(-50%)",
-          maxWidth: 620,
+          bottom: FORGE_LAYOUT.edge,
+          // Inset to the gap between the two bottom corners and centred inside
+          // it by the auto margins, so a narrow pane shrinks the strip instead
+          // of sliding it under the panels either side.
+          left: LEFT_GUTTER,
+          right: RIGHT_GUTTER,
+          maxWidth: FORGE_LAYOUT.statusMaxWidth,
+          marginLeft: "auto",
+          marginRight: "auto",
           textAlign: "center",
           opacity: 0.9,
         }}
@@ -285,7 +373,15 @@ export function ForgeHud({
         {state.status}
       </div>
 
-      <div {...hudProps} style={{ ...panelStyle, bottom: 16, left: 16, width: 132 }}>
+      <div
+        {...hudProps}
+        style={{
+          ...panelStyle,
+          bottom: FORGE_LAYOUT.edge,
+          left: FORGE_LAYOUT.edge,
+          width: FORGE_LAYOUT.leftColumnWidth,
+        }}
+      >
         <button
           type="button"
           style={{ ...buttonStyle, opacity: state.canUndo ? 1 : 0.4 }}
@@ -306,8 +402,16 @@ export function ForgeHud({
         </button>
       </div>
 
-      <div {...hudProps} style={{ ...panelStyle, bottom: 132, right: 16, width: 176 }}>
-        <div style={{ ...labelStyle, color: BRASS, marginBottom: 6 }}>Preview</div>
+      <div
+        {...hudProps}
+        style={{
+          ...panelStyle,
+          bottom: 132,
+          right: FORGE_LAYOUT.edge,
+          width: FORGE_LAYOUT.rightStackWidth,
+        }}
+      >
+        <div style={{ ...labelStyle, color: BRASS_LIT, marginBottom: 6 }}>Preview</div>
         <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
           <PreviewButton
             label="Eye"
@@ -347,7 +451,15 @@ export function ForgeHud({
         </div>
       </div>
 
-      <div {...hudProps} style={{ ...panelStyle, bottom: 16, right: 16, width: 176 }}>
+      <div
+        {...hudProps}
+        style={{
+          ...panelStyle,
+          bottom: FORGE_LAYOUT.edge,
+          right: FORGE_LAYOUT.edge,
+          width: FORGE_LAYOUT.rightStackWidth,
+        }}
+      >
         <button
           type="button"
           style={state.locked ? activeButtonStyle : buttonStyle}
@@ -399,12 +511,10 @@ export function ForgeToolPanels({
   };
 
   const cardStyle: CSSProperties = {
-    background: INK,
-    border: EDGE,
+    ...plate(),
     borderRadius: 10,
     padding: "12px 14px",
     pointerEvents: "auto",
-    backdropFilter: "blur(6px)",
     width,
     boxSizing: "border-box",
   };
@@ -658,7 +768,10 @@ function MaterialPanel({
                 height: 34,
                 borderRadius: 7,
                 cursor: "pointer",
-                border: selected ? `2px solid ${BRASS}` : EDGE,
+                border: selected ? `2px solid ${BRASS_LIT}` : EDGE,
+                boxShadow: selected
+                  ? "0 0 12px rgba(255, 190, 107, 0.45)"
+                  : "inset 0 1px 0 rgba(255, 255, 255, 0.12)",
                 background: `rgb(${swatch.baseColor.map((value) => Math.round(value * 255)).join(",")})`,
               }}
             />
@@ -666,7 +779,7 @@ function MaterialPanel({
         })}
       </div>
       <div style={{ marginBottom: 10 }}>
-        Holding: <span style={{ color: BRASS }}>{held?.label ?? "nothing"}</span>
+        Holding: <span style={{ color: BRASS_LIT }}>{held?.label ?? "nothing"}</span>
       </div>
       <button
         type="button"

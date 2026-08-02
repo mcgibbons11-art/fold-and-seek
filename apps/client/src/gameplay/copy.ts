@@ -63,6 +63,41 @@ export function roleCard(role: PlayerRole): RoleCard {
 }
 
 /**
+ * What the role card teaches on top of the §41.2 body: the thing to do next,
+ * and the condition that ends the round in this player's favour.
+ *
+ * The deck's own card says what the role *is*, in the game's voice, and says it
+ * once. A player seeing FOLD & SEEK for the first time also needs the two flat
+ * facts underneath it, so these are additions rather than edits — the §41 copy
+ * above stays verbatim.
+ */
+export interface RoleBrief {
+  /** The first thing this role should do, in the imperative. */
+  readonly goal: string;
+  /** What winning is. */
+  readonly win: string;
+}
+
+const ROLE_BRIEFS: Readonly<Record<PlayerRole, RoleBrief>> = {
+  mimic: {
+    goal: "Find a spot, fold into something that belongs there, and hold still.",
+    win: "You win by still being furniture when the clock runs out.",
+  },
+  inspector: {
+    goal: "Learn the room, then shoot whatever looks wrong. Each shot spends a warrant round.",
+    win: "You win by finding every Mimic before the clock runs out.",
+  },
+  spectator: {
+    goal: "Watch the room. The board keeps score while you do.",
+    win: "You are out of this round and back in the next one.",
+  },
+};
+
+export function roleBrief(role: PlayerRole): RoleBrief {
+  return ROLE_BRIEFS[role];
+}
+
+/**
  * §41.3 lock confirmation, revised for the hunt design. Locking commits the
  * disguise but no longer ends the hider's round, so the prompt says what the
  * lock actually costs.

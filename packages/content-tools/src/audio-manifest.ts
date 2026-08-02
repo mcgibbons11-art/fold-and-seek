@@ -52,7 +52,10 @@ export const CORE_SFX: SoundSpec[] = [
   { id: "clock_chime", prompt: "antique shop clock chiming once, warm brass resonance, gentle decay", durationSeconds: 2.5 },
   { id: "lamp_switch", prompt: "vintage lamp pull-chain switch click with a faint filament hum starting, cozy", durationSeconds: 1.0 },
   { id: "unfold_reveal", prompt: "elaborate miniature mechanical transformation: latches releasing in sequence, panels sliding, telescoping rails extending, servo whirs, ending with a bright ceramic chirp, three seconds, toy-like and premium", durationSeconds: 3.5 },
-  { id: "vase_dust_puff", prompt: "pathetic tiny dust puff from a ceramic vase, small air poof, comedic and dry", durationSeconds: 0.8 },
+  // Asked for sustained air rather than a "tiny" one: the first take was almost
+  // entirely silence around a single spike, which put it on the true-peak
+  // ceiling twelve decibels below where the other four reactions sit.
+  { id: "vase_dust_puff", prompt: "dust puffing out of a ceramic vase, soft breathy poof with a full body of settling dust hanging after it, dry and comedic, sustained not clipped", durationSeconds: 0.8 },
   { id: "kettle_whistle", prompt: "small kettle whistle rising briefly then stopping, indignant and comedic", durationSeconds: 1.8 },
   { id: "chair_squeak", prompt: "wooden chair squeaking once, indignant creak, comedic timing", durationSeconds: 0.9 },
 ];
@@ -126,6 +129,45 @@ export const UI_SFX: SoundSpec[] = [
   { id: "countdown_tick", prompt: "single antique clock escapement tick, dry brass, precise and quiet", durationSeconds: 0.5 },
   { id: "countdown_tick_final", prompt: "urgent clock tick, harder brass escapement strike with a faint metallic ring, tense", durationSeconds: 0.5 },
   { id: "score_tick", prompt: "tiny brass counter wheel advancing, light mechanical tally click, quick and bright", durationSeconds: 0.5 },
+  { id: "ui_back", prompt: "soft backward step, muted wooden tick with a low brass release, quiet and closing rather than opening", durationSeconds: 0.5 },
+];
+
+/**
+ * The painting tool (override 3). The brush is heard as a continuous stroke
+ * rather than a stamp, because the player hears it while dragging and the
+ * driver retriggers it on a throttle; it is quiet enough to sit under a long
+ * drag without becoming the loudest thing in the Forge.
+ */
+export const PAINT_SFX: SoundSpec[] = [
+  { id: "paint_stroke", prompt: "soft brush dragging across a smooth painted panel, faint bristle friction with a light airbrush hiss under it, very quiet, close mic, continuous middle of a stroke with no beginning or end", durationSeconds: 0.5 },
+  { id: "eyedropper_pick", prompt: "delicate glass pipette drawing one drop, tiny suction blip resolving into a bright crystalline ping, quick and satisfying", durationSeconds: 0.7 },
+];
+
+/**
+ * Hunt beats the simulation already broadcasts and nothing was listening for:
+ * a hider baiting the Inspector, an Inspector sweeping past a hider, and a
+ * hider surviving a look straight at them. All three are the hunt's tension and
+ * all three are cozy dread rather than horror, per the audio identity.
+ */
+export const HUNT_SFX: SoundSpec[] = [
+  { id: "taunt_call", prompt: "cheeky little mechanical taunt, small brass raspberry with a springy boing and a tiny servo wiggle, impudent and playful, toy-like", durationSeconds: 1.0 },
+  { id: "close_pass_riser", prompt: "short tension spike, low strings tightening upward over one second with a faint heartbeat thud underneath, cut off abruptly, cozy dread not horror", durationSeconds: 1.4 },
+  { id: "escape_relief", prompt: "quiet exhale of relief, warm low chime settling with a gentle wooden sigh as tension releases, grateful and hushed", durationSeconds: 1.2 },
+];
+
+/**
+ * The three moments the round turns over that had no sound of their own: the
+ * roles being dealt, the workbench opening, and the match resolving one way or
+ * the other. `results_resolve` still settles the results screen behind these;
+ * the win and the lose stings are what says which happened.
+ */
+export const OUTCOME_SFX: SoundSpec[] = [
+  // Weighted toward the chime rather than the deal: a take dominated by the
+  // card transients sat on the peak ceiling well below the other phase openers.
+  { id: "role_reveal", prompt: "a warm sustained brass chime swelling and resolving as a secret is handed over, two soft card taps on felt underneath it, elegant and hushed, the chime carrying most of the sound", durationSeconds: 1.6 },
+  { id: "forge_start", prompt: "a workbench opening for work: a drawer of small tools sliding out, a brass lamp clicking on, a servo spinning up ready, inviting and unhurried", durationSeconds: 1.8 },
+  { id: "win_sting", prompt: "triumphant handmade flourish, warm brass chimes cascading upward with a music-box shimmer and a satisfied wooden knock landing, celebratory and cozy, no orchestra", durationSeconds: 2.2 },
+  { id: "lose_sting", prompt: "gentle defeat, two-note descending brass sigh with a soft clockwork winding down and a final quiet thunk, wistful not harsh", durationSeconds: 2.0 },
 ];
 
 /** Every one-shot, in the order it is generated. */
@@ -136,6 +178,9 @@ export const ALL_SFX: readonly SoundSpec[] = [
   ...GUN_SFX,
   ...PHASE_SFX,
   ...UI_SFX,
+  ...PAINT_SFX,
+  ...HUNT_SFX,
+  ...OUTCOME_SFX,
 ];
 
 /**
@@ -223,6 +268,12 @@ export const AMBIENCE_BEDS: readonly BedSpec[] = [
     role: "tension, watched level 2",
     prompt: "continuous fast panicked heartbeat, hard deep double thump about a hundred and thirty beats a minute, pressure and blood rush behind it, seamless",
     durationSeconds: 12,
+  },
+  {
+    id: "amb_candle_flicker",
+    role: "menu and lobby, over the shop room tone",
+    prompt: "continuous close candle flame guttering and breathing, faint wax crackle and a slow warm flutter of air moving the flame, intimate and very quiet, no events, seamless",
+    durationSeconds: 20,
   },
 ];
 

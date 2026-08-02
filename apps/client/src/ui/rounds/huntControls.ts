@@ -191,6 +191,18 @@ export function boardRailAction(open: boolean): RailAction {
 }
 
 /**
+ * The three controls every player steers with, whatever their role, printed on
+ * the title screen and on the role card so that nobody reaches the shop without
+ * having been told how to move in it. Both role sets below repeat them, because
+ * a strip that is up for the whole round has to be complete on its own.
+ */
+export const CORE_CONTROL_HINTS: readonly ControlHint[] = [
+  { id: "walk", keys: ["W", "A", "S", "D"], label: "Move" },
+  { id: "camera", keys: ["Hold LMB"], label: "Look around" },
+  { id: "jump", keys: ["Space"], label: "Jump" },
+];
+
+/**
  * A hider's controls during the hunt (CLAUDE.md overrides 5 and 6). A Mimic
  * runs about the shop on WASD while it folds and goes on creeping on the same
  * keys once the disguise has manifested, capped at `hiderCreepSpeed`; space

@@ -1,7 +1,16 @@
 import type { CSSProperties, ReactElement } from "react";
 
 import type { PhaseTimerView } from "../../gameplay/roundView";
-import { ALARM, BRASS, CREAM, EDGE, INK, formatClock, headlineStyle } from "./theme";
+import {
+  ALARM,
+  BRASS,
+  BRASS_LIT,
+  CREAM,
+  FONT_NUMERIC,
+  formatClock,
+  headlineStyle,
+  plate,
+} from "./theme";
 
 /**
  * Top-centre phase readout: the §41.1 headline for the phase, the countdown,
@@ -24,19 +33,18 @@ const containerStyle: CSSProperties = {
   transform: "translateX(-50%)",
   minWidth: 260,
   textAlign: "center",
-  background: INK,
-  border: EDGE,
+  ...plate(),
   borderRadius: 10,
   padding: "10px 22px 12px",
-  backdropFilter: "blur(6px)",
   pointerEvents: "none",
 };
 
 const barTrackStyle: CSSProperties = {
-  marginTop: 8,
-  height: 3,
+  marginTop: 9,
+  height: 4,
   borderRadius: 2,
-  background: "rgba(232, 221, 205, 0.14)",
+  background: "rgba(8, 6, 4, 0.7)",
+  boxShadow: "inset 0 1px 3px rgba(0, 0, 0, 0.6)",
   overflow: "hidden",
 };
 
@@ -55,17 +63,21 @@ export function PhaseTimer({ timer, label, note }: PhaseTimerProps): ReactElemen
       {timer.running ? (
         <div
           style={{
-            marginTop: label === null ? 0 : 4,
-            font: "600 26px/1.1 system-ui, sans-serif",
-            letterSpacing: "0.06em",
-            color: CREAM,
+            marginTop: label === null ? 0 : 5,
+            font: `600 28px/1.1 ${FONT_NUMERIC}`,
+            fontVariantNumeric: "tabular-nums",
+            letterSpacing: "0.08em",
+            color: timer.finalTen ? ALARM : CREAM,
+            textShadow: timer.finalTen
+              ? "0 0 18px rgba(200, 80, 60, 0.5)"
+              : "0 0 16px rgba(255, 190, 107, 0.18)",
           }}
         >
           {formatClock(timer.remainingMs)}
         </div>
       ) : null}
       {note === null || note === undefined ? null : (
-        <div style={{ marginTop: 4, fontSize: 11, opacity: 0.65 }}>{note}</div>
+        <div style={{ marginTop: 5, fontSize: 11, opacity: 0.65 }}>{note}</div>
       )}
       {timer.running && timer.totalMs > 0 ? (
         <div style={barTrackStyle}>
@@ -73,7 +85,10 @@ export function PhaseTimer({ timer, label, note }: PhaseTimerProps): ReactElemen
             style={{
               height: "100%",
               width: `${(fraction * 100).toFixed(2)}%`,
-              background: accent,
+              background: timer.finalTen
+                ? ALARM
+                : `linear-gradient(90deg, ${BRASS} 0%, ${BRASS_LIT} 100%)`,
+              boxShadow: `0 0 10px ${timer.finalTen ? "rgba(200, 80, 60, 0.6)" : "rgba(255, 190, 107, 0.45)"}`,
               transition: "width 200ms linear",
             }}
           />

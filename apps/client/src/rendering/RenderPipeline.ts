@@ -309,6 +309,44 @@ export class RenderPipeline {
     }
   }
 
+  /**
+   * The same aim, held only for the duration of a SYNCHRONOUS call.
+   *
+   * `compileInScenePass` keeps the renderer pointed at the scene pass until its
+   * callback's promise settles, which is right for the load, where nothing is
+   * drawn in between. It is wrong for a compile that runs one drawable per frame
+   * during the lobby: `THREE.RenderPipeline.render` composites into whatever
+   * target the renderer currently holds, so a frame drawn while the aim is still
+   * borrowed lands in the scene pass's own texture instead of on the canvas.
+   *
+   * Handing the target back before the promise settles is safe because
+   * `Renderer.compileAsync` reads the render target and the MRT synchronously,
+   * before it ever suspends, and stores the resulting render context on each
+   * work item; the async tail that builds the node graph and the pipeline uses
+   * the stored context and never looks at the renderer again.
+   */
+  inScenePassContext<T>(
+    scene: THREE.Scene,
+    camera: THREE.PerspectiveCamera,
+    run: (passCamera: THREE.PerspectiveCamera) => T,
+  ): T {
+    this.bind(scene, camera);
+    const scenePass = this.scenePass;
+    if (scenePass === null) {
+      return run(this.passCamera);
+    }
+    const previousTarget = this.renderer.getRenderTarget();
+    const previousMrt = this.renderer.getMRT();
+    this.renderer.setRenderTarget(scenePass.renderTarget);
+    this.renderer.setMRT(scenePass.getMRT());
+    try {
+      return run(this.passCamera);
+    } finally {
+      this.renderer.setRenderTarget(previousTarget);
+      this.renderer.setMRT(previousMrt);
+    }
+  }
+
   dispose(): void {
     this.teardown();
     this.boundScene = null;

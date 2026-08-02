@@ -9,8 +9,9 @@ import {
   type RenderBackend,
   type ShaderLinkFailure,
 } from "../rendering/RendererManager";
+import type { MatchPhase } from "@foldseek/shared";
 import { PREWARM_BODY_COUNT } from "../gameplay/disguiseTheatre";
-import { RoundSession } from "../gameplay/RoundSession";
+import { INSPECTION_PHASES, RoundSession } from "../gameplay/RoundSession";
 import type { RoundDirector } from "../gameplay/RoundDirector";
 import type { RoundSpatialBridge } from "../gameplay/roundSpatial";
 import type { NetworkAdapter } from "../networking/NetworkAdapter";
@@ -48,6 +49,29 @@ const BOOT_TIER: QualityTier = "high";
 export const LOAD_ZONES_END = 0.36;
 export const LOAD_MIMICS_END = 0.4;
 export const LOAD_SHADERS_END = 0.95;
+
+/**
+ * Whether the lobby's share of the shader sweep may run this frame.
+ *
+ * Three rules, and each answers a different failure. Nothing runs while a
+ * compile is already in flight, because `compileAsync` yields to the main thread
+ * between its own steps and two of them interleaved put both graph builds inside
+ * one frame. Nothing runs during the hunt, where a dropped frame decides whether
+ * a Mimic is seen. What is still queued then costs a graph build on the frame
+ * that first draws it, which is bounded and small, and a bounded hitch is the
+ * better trade. And nothing runs on an empty queue, which is the ordinary case
+ * for every frame after the first half-minute of a round.
+ */
+export function shouldPumpShaderQueue(
+  pending: number,
+  compileInFlight: boolean,
+  phase: MatchPhase | null,
+): boolean {
+  if (pending <= 0 || compileInFlight) {
+    return false;
+  }
+  return phase === null || !INSPECTION_PHASES.has(phase);
+}
 
 /** `done` of `total` as a share, with an empty pass counting as finished. */
 function share(done: number, total: number): number {
@@ -145,6 +169,15 @@ export class GameHost {
    * nothing: a 72%-opaque loading screen is over it either way.
    */
   private compilingShop = false;
+  /**
+   * The lobby's share of the shader sweep, in flight or not.
+   *
+   * One drawable per frame, and never two at once: `compileAsync` yields to the
+   * main thread between its own steps, so a second call started before the first
+   * settles would interleave two node-graph builds inside one frame and cost the
+   * hitch this exists to spread out.
+   */
+  private pendingCompile: Promise<void> | null = null;
 
   constructor(canvas: HTMLCanvasElement, callbacks: GameHostCallbacks = {}, options: GameHostOptions = {}) {
     this.canvas = canvas;
@@ -555,6 +588,9 @@ export class GameHost {
 
     if (session !== null && shop !== null) {
       this.renderer.render(shop.scene, session.camera);
+      // After the frame it belongs to, so a long graph build lands in the gap
+      // before the next one rather than in front of the one being drawn.
+      this.pumpShaderQueue(shop, session);
     } else if (world !== null && !this.compilingShop) {
       this.renderer.render(world.scene, forge === null ? world.camera : forge.camera);
     }
@@ -581,6 +617,44 @@ export class GameHost {
       this.adaptive.update(timeMs, rawDelta * 1000);
     }
   };
+
+  /**
+   * Finishes the shader sweep the loading screen no longer waits for, one
+   * drawable per frame, while the round can afford it.
+   *
+   * The loading screen compiles one drawable per compile group, which is every
+   * program the shop can ask for; what is left over needs a node-builder state
+   * apiece and links nothing, because the text those states generate is already
+   * in the pipeline cache. A few milliseconds a frame through the lobby, the
+   * role reveal and the Forge is invisible. The same work at the Forge camera's
+   * first frame is the stall this whole pass is about.
+   *
+   * It stops for the hunt outright. Whatever is still queued then costs a graph
+   * build on the frame that first draws it, which is bounded and small, and a
+   * bounded hitch is worth more than a smooth one during the only phase where a
+   * dropped frame decides whether a Mimic is seen.
+   */
+  private pumpShaderQueue(shop: ShopWorld, session: RoundSession): void {
+    if (!shouldPumpShaderQueue(shop.pendingCompiles, this.pendingCompile !== null, session.phase)) {
+      return;
+    }
+    this.pendingCompile = shop
+      .compileNextPending(this.renderer.renderer, this.renderer.post, session.camera)
+      .then(
+        () => {
+          this.pendingCompile = null;
+        },
+        (error: unknown) => {
+          this.pendingCompile = null;
+          // A failing compile would otherwise fail once per frame for the rest
+          // of the round, so the queue is abandoned and the reason is said once.
+          shop.dropPendingCompiles();
+          this.callbacks.onRendererMessage?.(
+            `the shop's remaining shaders could not be built: ${String(error)}`,
+          );
+        },
+      );
+  }
 
   private readonly snapshot = (): DiagnosticsSnapshot => {
     const info = this.renderer.renderer.info;

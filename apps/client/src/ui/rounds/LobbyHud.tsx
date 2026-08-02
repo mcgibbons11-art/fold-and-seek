@@ -3,11 +3,13 @@ import type { CSSProperties, ReactElement } from "react";
 import type { RoundViewState } from "../../gameplay/roundView";
 import {
   BRASS,
+  BRASS_LIT,
   CREAM,
-  EDGE,
+  FONT_DISPLAY,
+  PRESS_CLASS,
+  RULE,
   buttonStyle,
   disabledButtonStyle,
-  headlineStyle,
   labelStyle,
   overlayStyle,
   panelStyle,
@@ -18,6 +20,10 @@ import {
  * Lobby (§5.3): who is here, who is ready, the code that brings other people
  * here, and the host's start control. Everything it knows arrives as one
  * RoundViewState, including whether the start button may be pressed at all.
+ *
+ * Why the start gate is printed rather than left in a tooltip: a guest staring
+ * at a dead brass button has no way to discover that they are waiting on the
+ * host, and a tooltip is not an answer on a machine with no pointer hovering.
  */
 
 export interface LobbyHudProps {
@@ -37,8 +43,17 @@ const rosterRowStyle: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: 12,
-  padding: "7px 0",
-  borderTop: EDGE,
+  padding: "8px 0",
+  borderTop: RULE,
+};
+
+const tagStyle: CSSProperties = {
+  ...labelStyle,
+  marginLeft: 8,
+  opacity: 0.55,
+  padding: "1px 5px",
+  borderRadius: 3,
+  border: `1px solid rgba(176, 138, 74, 0.34)`,
 };
 
 const START_BLOCKED_COPY: Readonly<Record<string, string>> = {
@@ -48,6 +63,26 @@ const START_BLOCKED_COPY: Readonly<Record<string, string>> = {
   not_connected: "Not connected.",
   wrong_phase: "A round is already running.",
 };
+
+/** A lit brass pip for a player who has readied, an empty socket for one who has not. */
+function ReadyPip({ ready, away }: { readonly ready: boolean; readonly away: boolean }): ReactElement {
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: "inline-block",
+        width: 7,
+        height: 7,
+        borderRadius: "50%",
+        marginRight: 7,
+        background: ready ? BRASS_LIT : "transparent",
+        border: `1px solid ${ready ? BRASS_LIT : "rgba(232, 221, 205, 0.3)"}`,
+        boxShadow: ready ? "0 0 8px rgba(255, 190, 107, 0.6)" : "none",
+        opacity: away ? 0.35 : 1,
+      }}
+    />
+  );
+}
 
 export function LobbyHud({
   state,
@@ -66,17 +101,54 @@ export function LobbyHud({
   // else: everyone in the room sees the bots, and one person seats them.
   const showBotSeats = bots.supported && bots.canManage && onAddBot !== undefined;
   const roomIsFull = state.roster.length >= bots.maxSeats;
+  const blockedCopy = startGate.reason === null ? null : (START_BLOCKED_COPY[startGate.reason] ?? null);
 
   return (
     <div style={overlayStyle}>
-      <div style={{ ...panelStyle, top: 16, left: "50%", transform: "translateX(-50%)", padding: "10px 24px" }}>
-        <h2 style={{ ...headlineStyle, textAlign: "center" }}>FOLD &amp; SEEK</h2>
+      <div
+        style={{
+          ...panelStyle,
+          top: 16,
+          left: "50%",
+          transform: "translateX(-50%)",
+          padding: "12px 28px",
+          textAlign: "center",
+        }}
+      >
+        <h2
+          style={{
+            margin: 0,
+            font: `600 22px/1.15 ${FONT_DISPLAY}`,
+            letterSpacing: "0.2em",
+            textIndent: "0.2em",
+          }}
+        >
+          <span style={{ color: BRASS_LIT }}>FOLD</span>
+          <span style={{ color: BRASS, opacity: 0.8 }}> &amp; </span>
+          <span style={{ color: CREAM, fontWeight: 400 }}>SEEK</span>
+        </h2>
         {roomCode === "" ? null : (
-          <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            style={{
+              marginTop: 10,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 10,
+            }}
+          >
             <span style={labelStyle}>Room</span>
-            <span style={{ letterSpacing: "0.3em", fontSize: 16, color: BRASS }}>{roomCode}</span>
+            <span
+              style={{
+                letterSpacing: "0.3em",
+                font: `600 16px/1 ${FONT_DISPLAY}`,
+                color: BRASS_LIT,
+              }}
+            >
+              {roomCode}
+            </span>
             {onCopyRoomCode === undefined ? null : (
-              <button type="button" style={buttonStyle} onClick={onCopyRoomCode}>
+              <button type="button" className={PRESS_CLASS} style={buttonStyle} onClick={onCopyRoomCode}>
                 Copy
               </button>
             )}
@@ -84,25 +156,42 @@ export function LobbyHud({
         )}
       </div>
 
-      <div style={{ ...panelStyle, top: 110, left: "50%", transform: "translateX(-50%)", width: 360 }}>
+      <div
+        style={{
+          ...panelStyle,
+          top: 118,
+          left: "50%",
+          transform: "translateX(-50%)",
+          width: 380,
+          padding: "14px 18px",
+        }}
+      >
         <div style={{ ...labelStyle, display: "flex", justifyContent: "space-between" }}>
           <span>Roster</span>
-          <span>
+          <span style={{ color: BRASS_LIT }}>
             {readyCount} / {state.roster.length} ready
           </span>
         </div>
         {state.roster.map((player) => (
           <div key={player.publicPlayerId} style={rosterRowStyle}>
-            <span style={{ color: player.isSelf ? BRASS : CREAM }}>
+            <span
+              style={{
+                color: player.isSelf ? BRASS_LIT : CREAM,
+                opacity: player.connected ? 1 : 0.4,
+                display: "flex",
+                alignItems: "center",
+              }}
+            >
+              <ReadyPip ready={player.ready} away={!player.connected} />
               {player.displayName}
-              {player.isHost ? <span style={{ ...labelStyle, marginLeft: 8 }}>host</span> : null}
-              {player.isBot ? <span style={{ ...labelStyle, marginLeft: 8 }}>bot</span> : null}
+              {player.isHost ? <span style={tagStyle}>host</span> : null}
+              {player.isBot ? <span style={tagStyle}>bot</span> : null}
             </span>
             <span
               style={{
                 ...labelStyle,
-                color: player.ready ? BRASS : CREAM,
-                opacity: player.connected ? 1 : 0.4,
+                color: player.ready ? BRASS_LIT : CREAM,
+                opacity: player.connected ? (player.ready ? 1 : 0.6) : 0.4,
               }}
             >
               {player.connected ? (player.ready ? "ready" : "waiting") : "away"}
@@ -116,16 +205,27 @@ export function LobbyHud({
               <button
                 type="button"
                 aria-label="Remove a bot"
+                className={PRESS_CLASS}
                 style={bots.count > 0 ? buttonStyle : disabledButtonStyle(buttonStyle)}
                 disabled={bots.count === 0}
                 onClick={onRemoveBot}
               >
                 &minus;
               </button>
-              <span style={{ color: BRASS, minWidth: 16, textAlign: "center" }}>{bots.count}</span>
+              <span
+                style={{
+                  color: BRASS_LIT,
+                  minWidth: 16,
+                  textAlign: "center",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {bots.count}
+              </span>
               <button
                 type="button"
                 aria-label="Add a bot"
+                className={PRESS_CLASS}
                 style={roomIsFull ? disabledButtonStyle(buttonStyle) : buttonStyle}
                 disabled={roomIsFull}
                 onClick={onAddBot}
@@ -145,29 +245,43 @@ export function LobbyHud({
           left: "50%",
           transform: "translateX(-50%)",
           display: "flex",
-          gap: 10,
+          flexDirection: "column",
           alignItems: "center",
+          gap: 10,
+          padding: "14px 18px",
         }}
       >
-        <button
-          type="button"
-          style={readyGate.allowed ? (state.self.ready ? primaryButtonStyle : buttonStyle) : disabledButtonStyle(buttonStyle)}
-          disabled={!readyGate.allowed}
-          onClick={() => {
-            onReady(!state.self.ready);
-          }}
-        >
-          {state.self.ready ? "Ready" : "Ready up"}
-        </button>
-        <button
-          type="button"
-          style={startGate.allowed ? primaryButtonStyle : disabledButtonStyle(primaryButtonStyle)}
-          disabled={!startGate.allowed}
-          onClick={onStart}
-          title={startGate.reason === null ? "" : (START_BLOCKED_COPY[startGate.reason] ?? "")}
-        >
-          Start the round
-        </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button
+            type="button"
+            className={PRESS_CLASS}
+            style={
+              readyGate.allowed
+                ? state.self.ready
+                  ? primaryButtonStyle
+                  : buttonStyle
+                : disabledButtonStyle(buttonStyle)
+            }
+            disabled={!readyGate.allowed}
+            onClick={() => {
+              onReady(!state.self.ready);
+            }}
+          >
+            {state.self.ready ? "Ready" : "Ready up"}
+          </button>
+          <button
+            type="button"
+            className={PRESS_CLASS}
+            style={startGate.allowed ? primaryButtonStyle : disabledButtonStyle(primaryButtonStyle)}
+            disabled={!startGate.allowed}
+            onClick={onStart}
+          >
+            Start the round
+          </button>
+        </div>
+        {startGate.allowed || blockedCopy === null ? null : (
+          <div style={{ ...labelStyle, opacity: 0.7, letterSpacing: "0.08em" }}>{blockedCopy}</div>
+        )}
       </div>
     </div>
   );

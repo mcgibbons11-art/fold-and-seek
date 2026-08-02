@@ -2,7 +2,7 @@ import type { CSSProperties, ReactElement } from "react";
 
 import type { RailAction, RailTone } from "./huntControls";
 import { useRegionHeight } from "./layout";
-import { BRASS, CREAM, EDGE, INK } from "./theme";
+import { BRASS, BRASS_LIT, CREAM, FONT_UI, PLATE_BACKGROUND, PRESS_CLASS, keycapStyle } from "./theme";
 
 /**
  * The right-edge action rail, ported from the original: one chip per verb, each
@@ -60,10 +60,10 @@ const ROOMY: RailSize = {
   gap: 6,
   chipWidth: 160,
   padding: "6px 9px",
-  keycapFont: "600 11px/1.5 system-ui, sans-serif",
+  keycapFont: `600 11px/1.5 ${FONT_UI}`,
   glyphSize: 14,
-  labelFont: "400 11px/1.4 system-ui, sans-serif",
-  noteFont: "400 10px/1.4 system-ui, sans-serif",
+  labelFont: `400 11px/1.4 ${FONT_UI}`,
+  noteFont: `400 10px/1.4 ${FONT_UI}`,
   rowGap: 2,
 };
 
@@ -74,10 +74,10 @@ const COMPACT: RailSize = {
   gap: 4,
   chipWidth: 148,
   padding: "3px 8px",
-  keycapFont: "600 10px/1.4 system-ui, sans-serif",
+  keycapFont: `600 10px/1.4 ${FONT_UI}`,
   glyphSize: 12,
-  labelFont: "400 10px/1.1 system-ui, sans-serif",
-  noteFont: "400 9px/1.1 system-ui, sans-serif",
+  labelFont: `400 10px/1.1 ${FONT_UI}`,
+  noteFont: `400 9px/1.1 ${FONT_UI}`,
   rowGap: 1,
 };
 
@@ -121,21 +121,12 @@ function railStyle(size: RailSize): CSSProperties {
   };
 }
 
-function keycapStyle(size: RailSize): CSSProperties {
-  return {
-    minWidth: 20,
-    padding: "1px 5px",
-    borderRadius: 4,
-    textAlign: "center",
-    font: size.keycapFont,
-    letterSpacing: "0.04em",
-    color: "#1a150e",
-    background: CREAM,
-  };
-}
-
 function chipStyle(action: RailAction, size: RailSize): CSSProperties {
   const accent = TONE_ACCENTS[action.tone];
+  // Longhands throughout rather than `border` plus a `borderRight` override:
+  // React warns when a shorthand and a longhand for the same property are both
+  // updated on a rerender, and the rail rerenders on every tool change.
+  const edge = action.active ? `1px solid ${BRASS_LIT}` : "1px solid rgba(176, 138, 74, 0.28)";
   return {
     display: "flex",
     flexDirection: "column",
@@ -149,11 +140,18 @@ function chipStyle(action: RailAction, size: RailSize): CSSProperties {
     // pushing the chip below it off the screen.
     overflow: "hidden",
     padding: size.padding,
-    background: action.active ? "rgba(176, 138, 74, 0.3)" : INK,
-    border: action.active ? `1px solid ${BRASS}` : EDGE,
+    background: action.active
+      ? "linear-gradient(180deg, rgba(194, 151, 79, 0.42), rgba(122, 93, 46, 0.3))"
+      : PLATE_BACKGROUND,
+    borderTop: edge,
+    borderBottom: edge,
+    borderLeft: edge,
     borderRight: `3px solid ${accent}`,
     borderRadius: 8,
-    backdropFilter: "blur(6px)",
+    boxShadow: action.active
+      ? `0 0 16px rgba(255, 190, 107, 0.22), inset 0 1px 0 rgba(255, 232, 186, 0.28)`
+      : "0 6px 16px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 232, 186, 0.08)",
+    backdropFilter: "blur(7px)",
     color: CREAM,
     font: "inherit",
     textAlign: "right",
@@ -171,7 +169,7 @@ function ChipBody({
   return (
     <>
       <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
-        <span style={keycapStyle(size)}>{action.key}</span>
+        <span style={keycapStyle(size.keycapFont)}>{action.key}</span>
         <span aria-hidden style={{ fontSize: size.glyphSize, lineHeight: 1 }}>
           {action.glyph}
         </span>
@@ -223,6 +221,7 @@ export function ActionRail({ actions, onPress, availableHeight }: ActionRailProp
           <button
             key={action.id}
             type="button"
+            className={PRESS_CLASS}
             disabled={!action.enabled}
             aria-pressed={action.active}
             style={{

@@ -1,7 +1,16 @@
 import type { CSSProperties, ReactElement } from "react";
 
 import type { RoundLoadProgress } from "../engine/GameHost";
-import { BRASS, CREAM, EDGE, headlineStyle, INK, labelStyle } from "./rounds/theme";
+import {
+  BRASS,
+  BRASS_LIT,
+  CREAM,
+  FONT_UI,
+  SCREEN_WASH,
+  headlineStyle,
+  labelStyle,
+  ornamentRuleStyle,
+} from "./rounds/theme";
 
 /**
  * What the player looks at while a round opens.
@@ -11,6 +20,11 @@ import { BRASS, CREAM, EDGE, headlineStyle, INK, labelStyle } from "./rounds/the
  * build that has finished, and the line under it names the piece that was just
  * put in. It sits over the menu room, which goes on rendering underneath until
  * the shop is ready to take its place.
+ *
+ * The percentage, the bar's width and the announced value are all the one
+ * reported fraction. The sheen inside the filled bar is the only thing here that
+ * is not measured, and it is inside the fill precisely so it cannot suggest
+ * progress the build has not made.
  */
 
 const backdropStyle: CSSProperties = {
@@ -19,21 +33,22 @@ const backdropStyle: CSSProperties = {
   display: "grid",
   placeContent: "center",
   justifyItems: "center",
-  gap: 18,
+  gap: 16,
   padding: 32,
-  background: "rgba(8, 7, 6, 0.72)",
+  background: SCREEN_WASH,
   backdropFilter: "blur(3px)",
   color: CREAM,
-  font: "13px/1.6 system-ui, sans-serif",
+  font: `13px/1.6 ${FONT_UI}`,
   pointerEvents: "auto",
 };
 
 const trackStyle: CSSProperties = {
   width: "min(420px, 70vw)",
-  height: 6,
-  borderRadius: 3,
-  background: INK,
-  border: EDGE,
+  height: 8,
+  borderRadius: 4,
+  background: "rgba(8, 6, 4, 0.75)",
+  border: "1px solid rgba(176, 138, 74, 0.34)",
+  boxShadow: "inset 0 2px 5px rgba(0, 0, 0, 0.6)",
   overflow: "hidden",
 };
 
@@ -45,7 +60,10 @@ export function LoadingScreen({ progress }: LoadingScreenProps): ReactElement {
   const percent = Math.round(Math.min(Math.max(progress.fraction, 0), 1) * 100);
   return (
     <div style={backdropStyle} role="status" aria-live="polite">
-      <h1 style={headlineStyle}>Opening the shop</h1>
+      <h1 style={{ ...headlineStyle, fontSize: 22 }} className="fs-candle">
+        Opening the shop
+      </h1>
+      <div style={ornamentRuleStyle(160)} aria-hidden />
       <div
         style={trackStyle}
         role="progressbar"
@@ -57,13 +75,18 @@ export function LoadingScreen({ progress }: LoadingScreenProps): ReactElement {
           style={{
             width: `${String(percent)}%`,
             height: "100%",
-            background: BRASS,
+            background: `linear-gradient(180deg, ${BRASS_LIT} 0%, ${BRASS} 60%, #8a6a34 100%)`,
+            boxShadow: "0 0 12px rgba(255, 190, 107, 0.45)",
             transition: "width 120ms linear",
           }}
-        />
+        >
+          <div className="fs-sheen" style={{ width: "100%", height: "100%" }} />
+        </div>
       </div>
-      <div style={{ ...labelStyle, opacity: 0.75 }}>
-        {percent}% · {progress.label}
+      <div style={{ ...labelStyle, opacity: 0.8 }}>
+        <span style={{ color: BRASS_LIT, fontVariantNumeric: "tabular-nums" }}>{percent}%</span>
+        {" · "}
+        {progress.label}
       </div>
     </div>
   );

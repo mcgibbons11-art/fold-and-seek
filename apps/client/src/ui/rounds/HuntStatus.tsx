@@ -2,7 +2,7 @@ import type { CSSProperties, ReactElement } from "react";
 
 import { huntStatusLabel } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
-import { ALARM, BRASS, CREAM, EDGE, INK, headlineStyle } from "./theme";
+import { ALARM, BRASS, CREAM, FONT_NUMERIC, headlineStyle, plate } from "./theme";
 
 /**
  * The hunt's top-centre row, ported from the original: a rank of hider figures
@@ -61,9 +61,10 @@ function Hourglass({ accent, seconds }: { readonly accent: string; readonly seco
       <span
         style={{
           marginLeft: 3,
-          font: "600 13px/1 system-ui, sans-serif",
+          font: `600 14px/1 ${FONT_NUMERIC}`,
           color: accent,
           fontVariantNumeric: "tabular-nums",
+          textShadow: `0 0 10px ${accent === ALARM ? "rgba(200, 80, 60, 0.5)" : "rgba(255, 190, 107, 0.4)"}`,
         }}
       >
         {seconds}
@@ -90,11 +91,9 @@ export function HuntStatus({ state }: HuntStatusProps): ReactElement {
   return (
     <div
       style={{
-        background: INK,
-        border: EDGE,
+        ...plate(),
         borderRadius: 10,
         padding: "8px 20px 10px",
-        backdropFilter: "blur(6px)",
         textAlign: "center",
       }}
       role="status"

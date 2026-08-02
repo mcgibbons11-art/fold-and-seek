@@ -21,7 +21,7 @@ import { InspectorSight, InspectorStatusCard, warrantsRemainingOf, type Inspecto
 import { HudLayout, REGION_GAP, useRegionHeight, type RegionAssignment } from "./layout";
 import { MissedFindsHud } from "./MissedFindsHud";
 import { Toast, rejectionToast } from "./Toast";
-import { BRASS, EDGE, INK, labelStyle } from "./theme";
+import { BRASS_LIT, figureStyle, labelStyle, plate } from "./theme";
 
 /**
  * The whole hunt in one layout. Every phase HUD before this one placed its own
@@ -243,11 +243,9 @@ function ForgePanelsDisclosure({
           boxSizing: "border-box",
           overflow: "hidden",
           padding: density.cardPadding,
-          background: INK,
-          border: EDGE,
+          ...plate(),
           borderRadius: 10,
-          backdropFilter: "blur(6px)",
-          color: BRASS,
+          color: BRASS_LIT,
           font: "inherit",
           cursor: "pointer",
           pointerEvents: "auto",
@@ -270,11 +268,9 @@ function SpectatorStatusCard({ state }: { readonly state: RoundViewState }): Rea
   return (
     <div
       style={{
-        background: INK,
-        border: EDGE,
+        ...plate(),
         borderRadius: 10,
         padding: "12px 14px",
-        backdropFilter: "blur(6px)",
         width: "100%",
         boxSizing: "border-box",
         pointerEvents: "none",
@@ -284,9 +280,7 @@ function SpectatorStatusCard({ state }: { readonly state: RoundViewState }): Rea
         {state.self.lifeState === "caught" ? "You were found" : "Spectating"}
       </div>
       <div style={{ ...labelStyle, marginTop: 10 }}>Still standing</div>
-      <div style={{ font: "600 22px/1.2 system-ui, sans-serif", color: BRASS }}>
-        {state.mimicsRemaining}
-      </div>
+      <div style={figureStyle}>{state.mimicsRemaining}</div>
     </div>
   );
 }
@@ -301,16 +295,16 @@ function PointerLockPrompt(): ReactElement {
   return (
     <div
       style={{
-        background: INK,
-        border: EDGE,
+        ...plate(),
         borderRadius: 10,
-        padding: "10px 18px",
-        backdropFilter: "blur(6px)",
+        padding: "11px 20px",
         textAlign: "center",
         pointerEvents: "none",
       }}
     >
-      <div style={{ ...labelStyle, color: BRASS, opacity: 1 }}>Click to take the room</div>
+      <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, fontSize: 12 }}>
+        Click to take the room
+      </div>
       <div style={{ marginTop: 4, opacity: 0.8 }}>
         WASD to walk · right mouse to aim · left mouse to fire a warrant
       </div>

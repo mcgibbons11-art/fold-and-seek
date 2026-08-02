@@ -7,7 +7,7 @@ import {
   missedFindsCountdown,
 } from "../../gameplay/copy";
 import type { MissedFindsRowView, RoundViewState } from "../../gameplay/roundView";
-import { BRASS, CREAM, EDGE, INK, labelStyle } from "./theme";
+import { BRASS_LIT, CREAM, FONT_NUMERIC, RULE, labelStyle, plate } from "./theme";
 
 /**
  * The missed-finds board, the original's Missed-Spot Ranking on key 6. Both
@@ -28,7 +28,7 @@ const rowStyle: CSSProperties = {
   alignItems: "baseline",
   gap: 10,
   padding: "5px 0",
-  borderTop: EDGE,
+  borderTop: RULE,
 };
 
 function MissedFindsRow({ row }: { row: MissedFindsRowView }): ReactElement {
@@ -38,7 +38,7 @@ function MissedFindsRow({ row }: { row: MissedFindsRowView }): ReactElement {
       <span
         style={{
           flex: 1,
-          color: row.isSelf ? BRASS : CREAM,
+          color: row.isSelf ? BRASS_LIT : CREAM,
           overflow: "hidden",
           textOverflow: "ellipsis",
           whiteSpace: "nowrap",
@@ -46,7 +46,15 @@ function MissedFindsRow({ row }: { row: MissedFindsRowView }): ReactElement {
       >
         {row.displayName}
       </span>
-      <span style={{ font: "600 15px/1.2 system-ui, sans-serif", color: BRASS }}>{row.points}</span>
+      <span
+        style={{
+          font: `600 15px/1.2 ${FONT_NUMERIC}`,
+          fontVariantNumeric: "tabular-nums",
+          color: BRASS_LIT,
+        }}
+      >
+        {row.points}
+      </span>
     </div>
   );
 }
@@ -57,11 +65,9 @@ export function MissedFindsHud({ state }: MissedFindsHudProps): ReactElement {
   return (
     <div
       style={{
-        background: INK,
-        border: EDGE,
+        ...plate(),
         borderRadius: 10,
         padding: "12px 14px",
-        backdropFilter: "blur(6px)",
         width: "100%",
         boxSizing: "border-box",
         pointerEvents: "none",

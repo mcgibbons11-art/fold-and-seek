@@ -106,12 +106,25 @@ describe("ShopMaterials", () => {
   it("hands every swatch of a family the identical texture objects", () => {
     const { materials, bag } = build();
     const seen = new Map<SurfaceId, THREE.Texture>();
+    // A family with no procedural surface wears one shared white texel rather
+    // than an empty slot, because an empty slot is a different shader. Every
+    // such family must share the SAME texel objects or the consolidation is
+    // undone: the point is one set of map slots across the whole shop.
+    let neutralAlbedo: THREE.Texture | null = null;
+    let neutralDetail: THREE.Texture | null = null;
     for (const swatch of SHOP_SWATCHES) {
       const id = surfaceForSwatch(swatch);
       const material = materials.get(swatch.id) as THREE.MeshStandardMaterial;
       if (id === null) {
-        expect(material.map, swatch.id).toBeNull();
-        expect(material.roughnessMap, swatch.id).toBeNull();
+        expect(material.map, swatch.id).not.toBeNull();
+        expect(material.bumpMap, swatch.id).toBe(material.roughnessMap);
+        // Zero scale, so the bump term cannot move a pixel even if the texel
+        // it reads ever stopped being constant.
+        expect(material.bumpScale, swatch.id).toBe(0);
+        neutralAlbedo ??= material.map;
+        neutralDetail ??= material.roughnessMap;
+        expect(material.map, swatch.id).toBe(neutralAlbedo);
+        expect(material.roughnessMap, swatch.id).toBe(neutralDetail);
         continue;
       }
       expect(material.map, swatch.id).not.toBeNull();
@@ -147,8 +160,20 @@ describe("ShopMaterials", () => {
     expect(walnut.color.r).toBeGreaterThan(plainColor.r);
     expect(walnut.color.r / plainColor.r).toBeLessThan(2);
 
+    // Brass wears the white texel rather than a surface, and a white texel has
+    // a mean of one, so it is compensated by nothing and sits on its swatch
+    // exactly. That is what makes the lift above visible as a lift.
     const brass = materials.get("brass_tarnished_01") as THREE.MeshStandardMaterial;
-    expect(brass.map).toBeNull();
+    const brassSwatch = SHOP_SWATCHES.find((entry) => entry.id === "brass_tarnished_01");
+    const brassPlain = new THREE.Color().setRGB(
+      brassSwatch?.baseColor[0] ?? 0,
+      brassSwatch?.baseColor[1] ?? 0,
+      brassSwatch?.baseColor[2] ?? 0,
+      THREE.SRGBColorSpace,
+    );
+    expect(brass.color.r).toBeCloseTo(brassPlain.r, 10);
+    expect(brass.color.g).toBeCloseTo(brassPlain.g, 10);
+    expect(brass.color.b).toBeCloseTo(brassPlain.b, 10);
     bag.dispose();
   });
 

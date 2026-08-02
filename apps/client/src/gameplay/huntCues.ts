@@ -2,6 +2,7 @@ import type { InnocentReactionId } from "@foldseek/game-sim";
 import { MatchPhase } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
 
+import { distanceGain } from "../audio/distance";
 import type { AudioPlayer, SoundId } from "../forge/AudioPlayer";
 import { mapObject } from "../world/maps/registry";
 
@@ -18,9 +19,22 @@ import { mapObject } from "../world/maps/registry";
 /** Anything that can make a noise. Narrow enough for a test to stand in for. */
 export type SoundCue = Pick<AudioPlayer, "play">;
 
-export const TAUNT_SOUND: SoundId = "unfold_reveal";
+/**
+ * A taunt used to borrow `unfold_reveal`, the three-and-a-half second
+ * transformation flourish, which announced a hider baiting the Inspector as
+ * though the round had ended. It has its own short, impudent sound now, and
+ * `unfold_reveal` went to the reveal, where bodies actually do unfold.
+ */
+export const TAUNT_SOUND: SoundId = "taunt_call";
 export const CATCH_SOUND: SoundId = "caught_sting";
 export const WRONG_ACCUSATION_SOUND: SoundId = "wrong_horn";
+/** An Inspector sweeping past a hider without seeing them, heard by the hider. */
+export const CLOSE_PASS_SOUND: SoundId = "close_pass_riser";
+/** A hider survived a look straight at them. */
+export const ESCAPE_SOUND: SoundId = "escape_relief";
+/** How the match resolved, from the viewer's own side of it. */
+export const WIN_SOUND: SoundId = "win_sting";
+export const LOSE_SOUND: SoundId = "lose_sting";
 
 export const REACTION_SOUNDS: Readonly<Record<InnocentReactionId, SoundId>> = {
   lamp_turns_on: "lamp_switch",
@@ -32,20 +46,24 @@ export const REACTION_SOUNDS: Readonly<Record<InnocentReactionId, SoundId>> = {
 
 /**
  * What a phase sounds like as it opens. A phase absent from this table opens in
- * silence, which is most of them: the lobby, the role reveal and the loading
- * screen are all places the ambience beds carry on their own.
+ * silence, which is now only the ones that are genuinely a continuation: the
+ * loading screen, the map fly-in and the baseline scan all sit under beds that
+ * are already playing.
  *
  * The hunt opens on two sounds at once because it is two things at once: the
  * shop door letting the Inspector in, and the room going from workshop to hunt.
  * Every role hears both, and a hider hearing the door is the whole tension of
- * the phase opening.
+ * the phase opening. The reveal is two for the same reason: the bodies unfold
+ * and then the round resolves over the top of them.
  *
  * `MatchPhase.Locking` is deliberately absent. The Forge plays `lock_seal` as it
  * freezes the disguise, and a second one here would double it.
  */
 export const PHASE_SOUNDS: Partial<Readonly<Record<MatchPhase, readonly SoundId[]>>> = {
+  [MatchPhase.RoleReveal]: ["role_reveal"],
+  [MatchPhase.Forge]: ["forge_start"],
   [MatchPhase.InspectionIntro]: ["door_open", "hunt_riser"],
-  [MatchPhase.Reveal]: ["reveal_swell"],
+  [MatchPhase.Reveal]: ["unfold_reveal", "reveal_swell"],
   [MatchPhase.Results]: ["results_resolve"],
   [MatchPhase.RematchVote]: ["rematch_tick"],
 };
@@ -102,13 +120,19 @@ interface Flare {
 export class ReactionTheatre {
   private readonly scene: THREE.Scene;
   private readonly audio: SoundCue | null;
+  private readonly listener: (() => THREE.Vector3 | null) | null;
   private readonly flares: Flare[] = [];
   /** One unit sphere for every flare this theatre ever raises. */
   private geometry: THREE.SphereGeometry | null = null;
 
-  constructor(scene: THREE.Scene, audio: SoundCue | null = null) {
+  constructor(
+    scene: THREE.Scene,
+    audio: SoundCue | null = null,
+    listener: (() => THREE.Vector3 | null) | null = null,
+  ) {
     this.scene = scene;
     this.audio = audio;
+    this.listener = listener;
   }
 
   /**
@@ -117,9 +141,13 @@ export class ReactionTheatre {
    * put a flare somewhere nothing stands.
    */
   play(objectId: string, reactionId: InnocentReactionId): void {
-    this.audio?.play(REACTION_SOUNDS[reactionId], REACTION_PITCH_JITTER);
-
     const entry = mapObject(objectId);
+    // An object the map does not know is heard at full volume rather than
+    // guessed at: there is no position to be far from, and inventing one would
+    // quieten a reaction for a distance nothing measured.
+    const centre = entry === null ? null : entry.focusBounds.getCenter(new THREE.Vector3());
+    this.audio?.play(REACTION_SOUNDS[reactionId], REACTION_PITCH_JITTER, this.gainAt(centre));
+
     if (entry === null) return;
 
     const look = REACTION_LOOKS[reactionId];
@@ -172,6 +200,13 @@ export class ReactionTheatre {
   /** Flares still playing, which is what a test without a renderer can see. */
   get count(): number {
     return this.flares.length;
+  }
+
+  /** How loud a reaction is for standing where the listener stands. */
+  private gainAt(position: THREE.Vector3 | null): number {
+    if (position === null || this.listener === null) return 1;
+    const ear = this.listener();
+    return ear === null ? 1 : distanceGain(ear.distanceTo(position));
   }
 
   dispose(): void {

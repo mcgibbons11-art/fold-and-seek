@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactElement } from "react";
 
-import { ALARM, BRASS, CREAM, EDGE, INK, labelStyle } from "./theme";
+import { ALARM, BRASS, CREAM, FONT_DISPLAY, labelStyle, plate } from "./theme";
 
 /**
  * The stamp stack. Accusation results and command refusals both land here, so
@@ -45,22 +45,22 @@ export function Toast({ entries, anchor }: ToastProps): ReactElement | null {
       {entries.map((entry) => (
         <div
           key={entry.id}
+          className="fs-rise"
           style={{
-            background: INK,
-            border: EDGE,
+            ...plate(),
+            // Longhands so the accent edge and the plate's own edge never
+            // collide as a shorthand/longhand pair on a rerender.
             borderLeft: `3px solid ${TONE_COLORS[entry.tone]}`,
             borderRadius: 8,
-            padding: "8px 12px",
-            backdropFilter: "blur(6px)",
+            padding: "9px 13px",
             textAlign: "right",
           }}
         >
           <div
             style={{
-              letterSpacing: "0.16em",
+              font: `600 14px/1.25 ${FONT_DISPLAY}`,
+              letterSpacing: "0.18em",
               textTransform: "uppercase",
-              fontSize: 13,
-              fontWeight: 600,
               color: TONE_COLORS[entry.tone],
             }}
           >

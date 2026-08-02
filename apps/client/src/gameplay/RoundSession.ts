@@ -26,9 +26,13 @@ import { DisguiseTheatre, TAUNT_PITCH_JITTER } from "./disguiseTheatre";
 import { FootstepDriver } from "./footsteps";
 import {
   CATCH_SOUND,
+  CLOSE_PASS_SOUND,
+  ESCAPE_SOUND,
+  LOSE_SOUND,
   PHASE_SOUNDS,
   ReactionTheatre,
   TAUNT_SOUND,
+  WIN_SOUND,
   WRONG_ACCUSATION_SOUND,
 } from "./huntCues";
 import { RoundActions } from "./RoundActions";
@@ -67,7 +71,7 @@ const POSE_PUBLISH_PHASES: ReadonlySet<MatchPhase> = new Set([
   MatchPhase.FinalCountdown,
 ]);
 
-const INSPECTION_PHASES: ReadonlySet<MatchPhase> = new Set([
+export const INSPECTION_PHASES: ReadonlySet<MatchPhase> = new Set([
   MatchPhase.InspectionIntro,
   MatchPhase.Inspection,
   MatchPhase.FinalCountdown,
@@ -167,8 +171,14 @@ export class RoundSession {
     this.options = options;
     this.quality = options.quality;
     this.actions = new RoundActions(options.adapter, options.director);
-    this.theatre = new DisguiseTheatre(options.scene, options.quality, this.audio);
-    this.reactions = new ReactionTheatre(options.scene, this.audio);
+    // The ear is wherever the frame is drawn from, which is the Inspector's eye
+    // during the hunt and the Mimic's orbit point in the Forge, so both roles
+    // hear the room from where they are actually standing in it. Passed as a
+    // getter rather than a position: the camera is swapped when the mode
+    // changes, and a captured vector would leave the listener behind.
+    const listener = (): THREE.Vector3 => this.camera.position;
+    this.theatre = new DisguiseTheatre(options.scene, options.quality, this.audio, listener);
+    this.reactions = new ReactionTheatre(options.scene, this.audio, listener);
     options.spatial.setDisguiseBounds((objectId) => this.theatre.boundsOf(objectId));
     options.spatial.setOwnDisguiseBounds((objectId) => this.ownDisguiseBoundsOf(objectId));
 
@@ -203,6 +213,11 @@ export class RoundSession {
 
   get engineState(): RoundEngineState {
     return this.engine;
+  }
+
+  /** Phase last published by the authority, or null before the first state. */
+  get phase(): MatchPhase | null {
+    return this.lastPhase;
   }
 
   subscribe(listener: (state: RoundEngineState) => void): Unsubscribe {
@@ -342,15 +357,25 @@ export class RoundSession {
   // -------------------------------------------------------------- presentation
 
   /**
-   * Gives the hunt's public events a body and a voice. Every one of these is
+   * Gives the hunt's public events a body and a voice. Most of these are
    * broadcast to the whole room, so the presentation is the same for everybody:
    * a taunt is performed by the object, an innocent object answers a wasted
    * warrant where it stands, and a catch and a miss each have their own sting.
+   *
+   * Two of them are broadcast but heard by one player. A close pass and a
+   * survived look both name a disguise, and they are that hider's own near miss:
+   * the whole room learning which object an Inspector nearly caught would give
+   * away the thing the round is about. They are checked against the viewer's own
+   * disguise and are silent for everybody else.
    *
    * `disguise_updated` is deliberately absent. It carries no geometry, only the
    * news that some object changed; the pose and the paint travel in public
    * state, which `update` re-reads every frame, so a creep and a brushstroke
    * already reach the screen without anything here listening for them.
+   *
+   * `mimic_caught` is absent for a different reason: every catch already arrives
+   * as `accusation_resolved`, which is where the sting is played, and answering
+   * both would double it.
    */
   private presentEvent(event: SimEvent): void {
     switch (event.type) {
@@ -376,9 +401,37 @@ export class RoundSession {
         }
         break;
 
+      case "close_pass":
+        if (this.ownsDisguise(event.publicObjectId)) {
+          this.audio.play(CLOSE_PASS_SOUND);
+          this.ambience.duckUnderStinger();
+        }
+        break;
+
+      case "direct_look_escape":
+        if (this.ownsDisguise(event.publicObjectId)) this.audio.play(ESCAPE_SOUND);
+        break;
+
+      case "match_ended": {
+        // The results screen settles on `results_resolve` for everybody a moment
+        // later; this is the half-second before it that says which way it went.
+        const role = this.state().self.role;
+        if (role === "mimic" || role === "inspector") {
+          const won = event.winner === (role === "mimic" ? "mimics" : "inspectors");
+          this.audio.play(won ? WIN_SOUND : LOSE_SOUND);
+          this.ambience.duckUnderStinger();
+        }
+        break;
+      }
+
       default:
         break;
     }
+  }
+
+  /** True when a named disguise is the one this player is wearing. */
+  private ownsDisguise(publicObjectId: string): boolean {
+    return this.state().self.ownDisguise?.publicObjectId === publicObjectId;
   }
 
   // ------------------------------------------------------------------ phases

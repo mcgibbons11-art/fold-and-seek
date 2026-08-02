@@ -388,6 +388,13 @@ export const TEST_ROOM_WORKSPACE: ForgeWorkspace = {
 
 const SERVO_INTERVAL_MS = 130;
 
+/**
+ * How often a drag retriggers the brush. The clip is half a second of
+ * continuous stroke, so retriggering inside its own length is what makes a
+ * held drag sound sustained rather than repeated.
+ */
+const PAINT_STROKE_INTERVAL_MS = 320;
+
 const RAD_TO_DEG = 180 / Math.PI;
 
 /** How far back the §7.6 Inspector preview stands, as a share of body height. */
@@ -705,6 +712,17 @@ export class ForgeController {
       },
       setCastShadow: (enabled) => {
         this.mimic.setCastShadow(enabled);
+      },
+      // The brush is heard while it is being dragged rather than when the drag
+      // ends, so it is throttled off the stamps rather than played per stamp:
+      // a stroke lays down a stamp every few pixels and one sound each would be
+      // a buzz. `paint_stroke` is a continuous texture and is mixed to sit under
+      // everything, so a long drag reads as one sustained stroke.
+      onStroke: () => {
+        this.audio.playThrottled("paint_stroke", PAINT_STROKE_INTERVAL_MS, 0.06);
+      },
+      onSample: (picked) => {
+        this.audio.play(picked ? "eyedropper_pick" : "ui_deny");
       },
       // Paint joins the same history as the pose, so Ctrl+Z after a brush stroke
       // takes back the brush stroke. Both are recorded rather than applied: the

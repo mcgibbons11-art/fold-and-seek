@@ -1,12 +1,34 @@
 import type { CSSProperties, ReactElement } from "react";
 
-/**
- * Boot menu. The reading nook keeps sweeping behind it, so the first thing a
- * player sees is the art direction rather than a splash screen.
- */
+import { ControlsLegend } from "./ControlsLegend";
+import { CORE_CONTROL_HINTS } from "./rounds/huntControls";
+import {
+  ALARM,
+  BRASS,
+  BRASS_LIT,
+  CREAM,
+  FONT_DISPLAY,
+  FONT_UI,
+  PRESS_CLASS,
+  SCREEN_WASH,
+  buttonStyle,
+  disabledButtonStyle,
+  labelStyle,
+  ornamentRuleStyle,
+  plate,
+  primaryButtonStyle,
+} from "./rounds/theme";
 
-const CREAM = "#e8ddcd";
-const BRASS = "#b08a4a";
+/**
+ * The title screen. The reading nook goes on sweeping behind it, so the first
+ * thing a player sees is the shop itself with a brass plate laid over it rather
+ * than a splash image.
+ *
+ * It carries the controls. FOLD & SEEK is nobody's second game of this kind, and
+ * a player who reaches the shop without knowing that the left button is the
+ * camera spends the Forge phase discovering it; the legend costs one panel here
+ * and saves that.
+ */
 
 const overlayStyle: CSSProperties = {
   position: "absolute",
@@ -14,43 +36,47 @@ const overlayStyle: CSSProperties = {
   display: "grid",
   placeContent: "center",
   pointerEvents: "none",
+  background: SCREEN_WASH,
   color: CREAM,
-  font: "14px/1.6 system-ui, sans-serif",
+  font: `14px/1.6 ${FONT_UI}`,
 };
 
 const cardStyle: CSSProperties = {
+  ...plate(true),
   pointerEvents: "auto",
-  background: "rgba(10, 9, 8, 0.78)",
-  border: "1px solid rgba(232, 221, 205, 0.16)",
   borderRadius: 14,
-  padding: "28px 34px",
-  minWidth: 320,
-  backdropFilter: "blur(8px)",
+  padding: "30px 34px 26px",
+  width: 400,
+  maxWidth: "88vw",
   textAlign: "center",
 };
 
-const buttonStyle: CSSProperties = {
-  display: "block",
-  width: "100%",
-  background: "rgba(176, 138, 74, 0.24)",
-  color: "#fff3df",
-  border: `1px solid ${BRASS}`,
-  borderRadius: 9,
-  padding: "11px 14px",
-  font: "inherit",
-  letterSpacing: "0.08em",
-  cursor: "pointer",
-  marginTop: 10,
-};
+const buttonBlock: CSSProperties = { display: "block", width: "100%", marginTop: 10 };
 
-const disabledButtonStyle: CSSProperties = {
-  ...buttonStyle,
-  background: "rgba(232, 221, 205, 0.05)",
-  color: CREAM,
-  border: "1px solid rgba(232, 221, 205, 0.16)",
-  opacity: 0.45,
-  cursor: "not-allowed",
-};
+/**
+ * The wordmark, set the way the cover art sets it: FOLD in lit brass, SEEK in
+ * cream, and the ampersand between them smaller and dimmer so the two words read
+ * as a pair rather than a list.
+ */
+function Wordmark(): ReactElement {
+  return (
+    <h1
+      style={{
+        margin: 0,
+        font: `600 40px/1.05 ${FONT_DISPLAY}`,
+        letterSpacing: "0.1em",
+        // Letter-spacing hangs off the final glyph, which throws a centred line
+        // to the left by half of it.
+        textIndent: "0.1em",
+        textShadow: "0 2px 18px rgba(255, 190, 107, 0.28)",
+      }}
+    >
+      <span style={{ color: BRASS_LIT }}>FOLD</span>
+      <span style={{ color: BRASS, fontSize: 28, opacity: 0.8, margin: "0 0.14em" }}>&amp;</span>
+      <span style={{ color: CREAM, fontWeight: 400 }}>SEEK</span>
+    </h1>
+  );
+}
 
 export interface MainMenuProps {
   readonly backend: string;
@@ -77,27 +103,62 @@ export function MainMenu({
 }: MainMenuProps): ReactElement {
   return (
     <div style={overlayStyle}>
-      <div style={cardStyle}>
-        <h1 style={{ letterSpacing: "0.28em", fontSize: 20, marginBottom: 4 }}>FOLD &amp; SEEK</h1>
-        <div style={{ opacity: 0.6, fontSize: 11, letterSpacing: "0.16em", marginBottom: 18 }}>
-          THE CURIOSITY SHOP
+      <div style={cardStyle} className="fs-rise">
+        <div className="fs-candle">
+          <div style={{ ...labelStyle, opacity: 0.7, marginBottom: 10 }}>The Curiosity Shop</div>
+          <Wordmark />
         </div>
+
+        <div style={{ ...ornamentRuleStyle(200), margin: "16px auto 14px" }} aria-hidden />
+
+        <p style={{ margin: "0 0 20px", fontSize: 13, lineHeight: 1.65, opacity: 0.8 }}>
+          One of the objects in this room is a person. Fold yourself into the furniture, or hunt
+          whatever is lying.
+        </p>
+
         <button
           type="button"
-          style={starting ? disabledButtonStyle : buttonStyle}
+          className={PRESS_CLASS}
+          style={{ ...(starting ? disabledButtonStyle(primaryButtonStyle) : primaryButtonStyle), ...buttonBlock }}
           onClick={onPlayRound}
           disabled={starting}
         >
           {starting ? "Opening the shop…" : multiplayer ? "Join the room" : "Play a round"}
         </button>
-        <button type="button" style={buttonStyle} onClick={onForgePractice} disabled={starting}>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={{ ...(starting ? disabledButtonStyle(buttonStyle) : buttonStyle), ...buttonBlock }}
+          onClick={onForgePractice}
+          disabled={starting}
+        >
           Forge Practice
         </button>
+
         {notice === null ? null : (
-          <div style={{ color: "#e6a06a", fontSize: 12, marginTop: 14 }}>{notice}</div>
+          <div
+            role="alert"
+            style={{
+              marginTop: 14,
+              padding: "8px 12px",
+              borderRadius: 7,
+              borderLeft: `3px solid ${ALARM}`,
+              background: "rgba(200, 80, 60, 0.12)",
+              color: "#f0b8ab",
+              fontSize: 12,
+              textAlign: "left",
+            }}
+          >
+            {notice}
+          </div>
         )}
-        <div style={{ opacity: 0.5, fontSize: 11, marginTop: 18 }}>
-          {multiplayer ? "portals room" : "solo"} · backend {backend} · ` for diagnostics
+
+        <div style={{ marginTop: 22 }}>
+          <ControlsLegend hints={CORE_CONTROL_HINTS} />
+        </div>
+
+        <div style={{ ...labelStyle, opacity: 0.4, marginTop: 20, letterSpacing: "0.1em" }}>
+          {multiplayer ? "Portals room" : "Solo"} · {backend} · ` for diagnostics
         </div>
       </div>
     </div>

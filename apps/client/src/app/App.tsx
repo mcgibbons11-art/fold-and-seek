@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactElement } from "react";
+import { MenuAmbience } from "../audio/MenuAmbience";
+import { installUiSounds } from "../audio/uiSounds";
 import { GameHost, type RoundLoadProgress } from "../engine/GameHost";
 import type { ForgeController } from "../forge/ForgeController";
 import {
@@ -14,6 +16,18 @@ import { isQualityTier, QUALITY_TIER_ORDER, type QualityTier } from "../renderin
 import type { ConnectionDetail } from "../networking/NetworkAdapter";
 import { RendererInitError, type DeviceEvent, type RenderBackend } from "../rendering/RendererManager";
 import { ForgeHud } from "../ui/ForgeHud";
+import {
+  ALARM,
+  BRASS,
+  BRASS_LIT,
+  CREAM,
+  FONT_DISPLAY,
+  FONT_UI,
+  SCREEN_WASH,
+  labelStyle,
+  ornamentRuleStyle,
+  plate,
+} from "../ui/rounds/theme";
 import { LoadingScreen } from "../ui/LoadingScreen";
 import { MainMenu } from "../ui/MainMenu";
 import { RoundHud } from "../ui/RoundHud";
@@ -87,14 +101,12 @@ const panelStyle: CSSProperties = {
   position: "absolute",
   left: 20,
   bottom: 20,
-  padding: "14px 18px",
+  padding: "12px 16px",
   borderRadius: 10,
-  background: "rgba(10, 9, 8, 0.78)",
-  border: "1px solid rgba(232, 221, 205, 0.16)",
-  color: "#e8ddcd",
-  font: "13px/1.6 system-ui, sans-serif",
+  ...plate(),
+  color: CREAM,
+  font: `13px/1.6 ${FONT_UI}`,
   pointerEvents: "auto",
-  backdropFilter: "blur(6px)",
 };
 
 const noticeStyle: CSSProperties = {
@@ -102,12 +114,39 @@ const noticeStyle: CSSProperties = {
   inset: 0,
   display: "grid",
   placeContent: "center",
+  justifyItems: "center",
   textAlign: "center",
   padding: 32,
-  color: "#e8ddcd",
-  font: "15px/1.7 system-ui, sans-serif",
+  background: SCREEN_WASH,
+  color: CREAM,
+  font: `15px/1.7 ${FONT_UI}`,
   pointerEvents: "auto",
 };
+
+/**
+ * The wordmark every boot-time screen carries, so a failure still looks like
+ * FOLD & SEEK rather than an unstyled browser error.
+ */
+function NoticeMark(): ReactElement {
+  return (
+    <>
+      <h1
+        className="fs-candle"
+        style={{
+          margin: 0,
+          font: `600 30px/1.1 ${FONT_DISPLAY}`,
+          letterSpacing: "0.16em",
+          textIndent: "0.16em",
+        }}
+      >
+        <span style={{ color: BRASS_LIT }}>FOLD</span>
+        <span style={{ color: BRASS, opacity: 0.8 }}> &amp; </span>
+        <span style={{ color: CREAM, fontWeight: 400 }}>SEEK</span>
+      </h1>
+      <div style={{ ...ornamentRuleStyle(180), margin: "14px auto 18px" }} aria-hidden />
+    </>
+  );
+}
 
 export function App(): ReactElement {
   const [boot, setBoot] = useState<BootState>({ kind: "detecting" });
@@ -221,6 +260,29 @@ export function App(): ReactElement {
     };
   }, []);
 
+  // The whole shell's click and hover, for the life of the page. It listens at
+  // the document rather than in the components, so every panel the game grows
+  // later is audible without being wired for it.
+  useEffect(() => installUiSounds(), []);
+
+  const menuAmbience = useMemo(() => new MenuAmbience(), []);
+  useEffect(() => () => {
+    menuAmbience.dispose();
+  }, [menuAmbience]);
+
+  /**
+   * The menu has beds of its own because the round's ambience does not exist
+   * yet: `AmbienceController` is built with a round and treats the lobby as
+   * silent, so everything before the player presses play used to be dead air.
+   * They close again as soon as anything else opens, and the fade is short
+   * enough that the shop is never heard twice over.
+   */
+  const atMenu = boot.kind === "ready" && round === null && forge === null && loading === null;
+  useEffect(() => {
+    if (atMenu) menuAmbience.start();
+    else menuAmbience.stop();
+  }, [atMenu, menuAmbience]);
+
   const onTierSelect = useCallback((event: ChangeEvent<HTMLSelectElement>) => {
     const value = event.target.value;
     if (!isQualityTier(value)) {
@@ -326,13 +388,13 @@ export function App(): ReactElement {
   // reads "ready" while nothing can actually be drawn.
   if (deviceFault !== null) {
     return (
-      <div style={noticeStyle}>
-        <div style={{ maxWidth: 520 }}>
-          <h1 style={{ letterSpacing: "0.2em", fontSize: 22, marginBottom: 12 }}>FOLD &amp; SEEK</h1>
-          <p style={{ fontWeight: 600, marginBottom: 8 }}>
-            The graphics device was lost — reload to reopen the shop
+      <div style={noticeStyle} role="alert">
+        <div style={{ ...plate(true), borderRadius: 14, padding: "30px 34px", maxWidth: 540 }}>
+          <NoticeMark />
+          <p style={{ margin: "0 0 10px", font: `17px/1.5 ${FONT_DISPLAY}`, color: ALARM }}>
+            The graphics device was lost. Reload the page to reopen the shop.
           </p>
-          <p style={{ opacity: 0.8 }}>
+          <p style={{ ...labelStyle, opacity: 0.6, margin: 0 }}>
             {deviceFault.api}: {deviceFault.message}
           </p>
         </div>
@@ -342,11 +404,13 @@ export function App(): ReactElement {
 
   if (boot.kind === "failed") {
     return (
-      <div style={noticeStyle}>
-        <div style={{ maxWidth: 520 }}>
-          <h1 style={{ letterSpacing: "0.2em", fontSize: 22, marginBottom: 12 }}>FOLD &amp; SEEK</h1>
-          <p style={{ fontWeight: 600, marginBottom: 8 }}>{boot.headline}</p>
-          <p style={{ opacity: 0.8 }}>{boot.detail}</p>
+      <div style={noticeStyle} role="alert">
+        <div style={{ ...plate(true), borderRadius: 14, padding: "30px 34px", maxWidth: 540 }}>
+          <NoticeMark />
+          <p style={{ margin: "0 0 10px", font: `17px/1.5 ${FONT_DISPLAY}`, color: ALARM }}>
+            {boot.headline}
+          </p>
+          <p style={{ margin: 0, fontSize: 13, opacity: 0.8 }}>{boot.detail}</p>
         </div>
       </div>
     );
@@ -354,10 +418,10 @@ export function App(): ReactElement {
 
   if (boot.kind !== "ready") {
     return (
-      <div style={noticeStyle}>
-        <div>
-          <h1 style={{ letterSpacing: "0.2em", fontSize: 22, marginBottom: 10 }}>FOLD &amp; SEEK</h1>
-          <p style={{ opacity: 0.75 }}>
+      <div style={noticeStyle} role="status" aria-live="polite">
+        <div style={{ textAlign: "center" }}>
+          <NoticeMark />
+          <p style={{ ...labelStyle, opacity: 0.7, margin: 0 }}>
             {boot.kind === "detecting" ? "Checking your browser…" : "Unpacking the reading nook…"}
           </p>
         </div>
@@ -391,14 +455,14 @@ export function App(): ReactElement {
       />
       <div style={panelStyle}>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ opacity: 0.72 }}>quality</span>
+          <span style={labelStyle}>quality</span>
           <select
             value={tier}
             onChange={onTierSelect}
             style={{
-              background: "rgba(232, 221, 205, 0.08)",
-              color: "#e8ddcd",
-              border: "1px solid rgba(232, 221, 205, 0.24)",
+              background: "rgba(28, 21, 13, 0.9)",
+              color: CREAM,
+              border: "1px solid rgba(176, 138, 74, 0.38)",
               borderRadius: 6,
               padding: "4px 8px",
               font: "inherit",

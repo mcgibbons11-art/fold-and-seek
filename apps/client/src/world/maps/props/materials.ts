@@ -112,15 +112,45 @@ export const WALL_PLASTER_MATERIAL = "wall_plaster";
 
 const WARM_AMBER = 0xffb066;
 
+/**
+ * A single white texel, bound wherever a family has no procedural surface.
+ *
+ * **This is a shader consolidation, not a look.** Three r185 keys a compiled
+ * program on the generated shader SOURCE, and the presence or absence of a
+ * texture slot is a branch in the generator (`MaterialNode` tests
+ * `material.map`, `material.roughnessMap` and `material.bumpMap` one by one), so
+ * a shop where brass carries no maps and walnut carries three is a shop with two
+ * of every program in it. On the ANGLE/D3D11 path a program costs over a second
+ * to link, which is the load the player waits through.
+ *
+ * **The pixel is provably unchanged.** A white texel is 1.0 in the renderer's
+ * linear working space whichever colour space it is tagged with, so the colour
+ * map multiplies the swatch by one; the roughness map's green channel is one, so
+ * the swatch's roughness is untouched; and a constant bump map has a zero
+ * gradient, with `bumpScale` set to zero besides. Nothing here needs the mean
+ * compensation `dress` applies, because the mean is exactly one.
+ */
+function createNeutralTexture(colorSpace: THREE.ColorSpace): THREE.DataTexture {
+  const texture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  texture.colorSpace = colorSpace;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 export class ShopMaterials {
   private readonly materials = new Map<string, THREE.Material>();
   private readonly textures: THREE.Texture[] = [];
   private readonly surfaces = new Map<SurfaceId, RenderedSurface>();
+  private readonly neutralAlbedo: THREE.DataTexture;
+  private readonly neutralDetail: THREE.DataTexture;
 
   constructor(
     private readonly bag: DisposalBag,
     quality: QualitySettings,
   ) {
+    this.neutralAlbedo = this.registerTexture(createNeutralTexture(THREE.SRGBColorSpace));
+    this.neutralDetail = this.registerTexture(createNeutralTexture(THREE.NoColorSpace));
+
     const scale = SURFACE_SCALE_BY_TIER[quality.tier];
     for (const spec of Object.values(SHOP_SURFACES)) {
       this.surfaces.set(spec.id, this.renderSurface(spec, scale));
@@ -160,7 +190,7 @@ export class ShopMaterials {
     }
   }
 
-  private registerTexture(texture: THREE.CanvasTexture): THREE.CanvasTexture {
+  private registerTexture<T extends THREE.Texture>(texture: T): T {
     this.bag.add(texture);
     this.textures.push(texture);
     return texture;
@@ -245,6 +275,19 @@ export class ShopMaterials {
     return rendered;
   }
 
+  /**
+   * Binds the white texel to the three map slots a dressed material fills, so a
+   * family with no procedural surface still generates the same shader as one
+   * that has one. Every lit material in the shop goes through this or `dress`,
+   * and `shopMaterials.test.ts` holds them to it.
+   */
+  private dressNeutral(material: THREE.MeshStandardMaterial): void {
+    material.map = this.neutralAlbedo;
+    material.roughnessMap = this.neutralDetail;
+    material.bumpMap = this.neutralDetail;
+    material.bumpScale = 0;
+  }
+
   /** Binds a surface's maps onto a material and compensates its base colour. */
   private dress(material: THREE.MeshStandardMaterial, surface: RenderedSurface): void {
     material.roughnessMap = surface.detail;
@@ -271,7 +314,9 @@ export class ShopMaterials {
     material.userData["tintVariance"] = TINT_VARIANCE[swatch.family];
 
     const surfaceId = surfaceForSwatch(swatch);
-    if (surfaceId !== null) {
+    if (surfaceId === null) {
+      this.dressNeutral(material);
+    } else {
       this.dress(material, this.surfaceFor(surfaceId));
     }
 
@@ -326,6 +371,13 @@ export class ShopMaterials {
       emissiveIntensity: 7,
     });
     material.name = "shop:bulb";
+    // The bulb wears the same slots and the same vertex-colour flag as every
+    // other lit material so that it shares their program. Both are no-ops on
+    // the pixel: the map is white and every colour attribute in the shop that
+    // reaches an undressed material is exactly white (the bevel wear is written
+    // only by `extrudeProfile`, and a bulb is a lathe).
+    material.vertexColors = true;
+    this.dressNeutral(material);
     return this.bag.add(material);
   }
 
@@ -349,6 +401,8 @@ export class ShopMaterials {
     });
     material.name = "shop:lampshade";
     material.emissiveMap = this.registerTexture(createShadeGradient());
+    material.vertexColors = true;
+    this.dressNeutral(material);
     material.userData["swatchId"] = "linen_cream_02";
     return this.bag.add(material);
   }
@@ -369,6 +423,7 @@ export class ShopMaterials {
     material.userData["swatchId"] = "bakelite_black_01";
     material.userData["tintVariance"] = 0.16;
     material.vertexColors = true;
+    this.dressNeutral(material);
     return this.bag.add(material);
   }
 
@@ -384,6 +439,8 @@ export class ShopMaterials {
       ior: 1.5,
     });
     material.name = "shop:glass-pane";
+    material.vertexColors = true;
+    this.dressNeutral(material);
     if (swatch !== null) {
       material.color.setRGB(swatch.baseColor[0], swatch.baseColor[1], swatch.baseColor[2], THREE.SRGBColorSpace);
     }

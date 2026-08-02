@@ -267,7 +267,9 @@ describe("DisguiseTheatre taunts", () => {
     expect(body.position.lengthSq()).toBe(0);
 
     expect(theatre.taunt("obj_a", "shudder", 7)).toBe(true);
-    expect(play).toHaveBeenCalledWith(TAUNT_SOUND, expect.any(Number));
+    // The third argument is the distance gain. This theatre was built without a
+    // listener, so there is nowhere to be far from and it plays at full.
+    expect(play).toHaveBeenCalledWith(TAUNT_SOUND, expect.any(Number), 1);
     expect(play.mock.calls[0]?.[0]).toBe(TAUNT_SOUND);
 
     theatre.update(120);

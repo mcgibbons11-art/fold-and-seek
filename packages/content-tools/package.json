@@ -8,7 +8,8 @@
     "build": "echo content-tools: nothing to build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
-    "generate:audio": "node --env-file=../../.env --experimental-strip-types src/generate-audio.ts"
+    "generate:audio": "node --env-file=../../.env --experimental-strip-types src/generate-audio.ts",
+    "normalize:audio": "node --experimental-strip-types src/normalize-audio.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

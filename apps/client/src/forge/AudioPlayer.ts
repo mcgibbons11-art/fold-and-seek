@@ -63,9 +63,22 @@ export type SoundId =
   | "rematch_tick"
   // Interface
   | "ui_deny"
+  | "ui_back"
   | "countdown_tick"
   | "countdown_tick_final"
-  | "score_tick";
+  | "score_tick"
+  // Painting (override 3)
+  | "paint_stroke"
+  | "eyedropper_pick"
+  // Hunt beats the simulation broadcasts
+  | "taunt_call"
+  | "close_pass_riser"
+  | "escape_relief"
+  // Round turns
+  | "role_reveal"
+  | "forge_start"
+  | "win_sting"
+  | "lose_sting";
 
 interface Voices {
   readonly elements: HTMLAudioElement[];
@@ -119,7 +132,13 @@ export class AudioPlayer {
     }
   }
 
-  play(id: SoundId, pitchJitter = 0): void {
+  /**
+   * `gain` scales this one playback on top of the player's own volume, for a
+   * sound whose loudness is a property of the moment rather than of the clip —
+   * an object reacting across the shop rather than underfoot. It lasts until the
+   * pooled element is used again, which is the next time the same clip plays.
+   */
+  play(id: SoundId, pitchJitter = 0, gain = 1): void {
     const clip = this.load(id);
     const element = clip.elements[clip.next % clip.elements.length];
     clip.next += 1;
@@ -127,6 +146,7 @@ export class AudioPlayer {
       return;
     }
     element.currentTime = 0;
+    element.volume = Math.min(1, Math.max(0, this.volume * masterVolume * gain));
     element.playbackRate = pitchJitter > 0 ? 1 + (Math.random() * 2 - 1) * pitchJitter : 1;
     clip.lastPlayedMs = performance.now();
     void element.play().catch((error: unknown) => {

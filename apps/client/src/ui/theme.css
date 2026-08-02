@@ -1,0 +1,141 @@
+/*
+ * The parts of the HUD's look that an inline style cannot carry: hover, focus,
+ * and the two slow animations. Everything static lives in rounds/theme.ts as
+ * tokens, because the components compose their styles as objects.
+ *
+ * Nothing here strobes. §5.13 wants the room readable at all times, so the
+ * candle flicker moves between 0.94 and 1 over six seconds and every animation
+ * is dropped outright for a player who asked for reduced motion.
+ */
+
+/*
+ * Scrollbars. The results ledger and the hunt's left column both scroll, and a
+ * stock light-grey bar down the edge of a lacquer plate is the one piece of
+ * browser chrome the player would notice.
+ */
+#root ::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+
+#root ::-webkit-scrollbar-track {
+  background: rgba(8, 6, 4, 0.55);
+  border-radius: 5px;
+}
+
+#root ::-webkit-scrollbar-thumb {
+  background: rgba(176, 138, 74, 0.55);
+  border-radius: 5px;
+}
+
+#root ::-webkit-scrollbar-thumb:hover {
+  background: rgba(216, 173, 99, 0.8);
+}
+
+#root ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox, which has no pseudo-elements for this. */
+#root * {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(176, 138, 74, 0.55) rgba(8, 6, 4, 0.55);
+}
+
+/* Brass plate, quill, and keycap all light up the same way when pointed at. */
+.fs-press {
+  transition:
+    background 140ms ease-out,
+    border-color 140ms ease-out,
+    box-shadow 140ms ease-out,
+    transform 90ms ease-out;
+}
+
+.fs-press:hover:not(:disabled) {
+  border-color: rgba(216, 173, 99, 0.85);
+  box-shadow:
+    0 0 0 1px rgba(216, 173, 99, 0.18),
+    0 6px 18px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 232, 186, 0.28);
+}
+
+.fs-press:active:not(:disabled) {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+
+/* Keyboard users get the same brass halo the mouse gets, and a little more. */
+.fs-press:focus-visible {
+  outline: none;
+  border-color: rgba(255, 190, 107, 0.9);
+  box-shadow:
+    0 0 0 2px rgba(255, 190, 107, 0.35),
+    0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+/* The candle behind the title card and the role card. */
+@keyframes fs-candle {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  38% {
+    opacity: 0.94;
+  }
+  61% {
+    opacity: 0.985;
+  }
+}
+
+.fs-candle {
+  animation: fs-candle 6.5s ease-in-out infinite;
+}
+
+/* A card arriving: it rises into the light rather than appearing. */
+@keyframes fs-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fs-rise {
+  animation: fs-rise 420ms cubic-bezier(0.22, 0.8, 0.3, 1) both;
+}
+
+/* Brass moving along the loading bar, so a slow build still reads as working. */
+@keyframes fs-sheen {
+  from {
+    background-position: -180% 0;
+  }
+  to {
+    background-position: 280% 0;
+  }
+}
+
+.fs-sheen {
+  background-image: linear-gradient(
+    100deg,
+    rgba(255, 232, 186, 0) 30%,
+    rgba(255, 232, 186, 0.5) 50%,
+    rgba(255, 232, 186, 0) 70%
+  );
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: fs-sheen 1.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fs-candle,
+  .fs-rise,
+  .fs-sheen {
+    animation: none;
+  }
+  .fs-press {
+    transition: none;
+  }
+}

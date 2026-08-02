@@ -5,13 +5,15 @@ import { VOTE_CATEGORY_LABELS, roundLabel } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { PhaseTimer } from "./PhaseTimer";
 import {
-  BRASS,
+  BRASS_LIT,
   CREAM,
-  EDGE,
+  FONT_DISPLAY,
+  PRESS_CLASS,
+  RULE,
   buttonStyle,
   disabledButtonStyle,
-  headlineStyle,
   labelStyle,
+  ornamentRuleStyle,
   overlayStyle,
   panelStyle,
   primaryButtonStyle,
@@ -29,7 +31,7 @@ export interface ResultsHudProps {
 }
 
 const cellStyle: CSSProperties = {
-  padding: "6px 10px",
+  padding: "7px 10px",
   textAlign: "right",
   fontVariantNumeric: "tabular-nums",
 };
@@ -58,11 +60,23 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
           overflowY: "auto",
         }}
       >
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-          <h2 style={{ ...headlineStyle, color: BRASS }}>
-            {results.winner === "inspectors" ? "INSPECTORS" : "MIMICS"}
+        <div style={{ textAlign: "center" }}>
+          <div style={labelStyle}>{roundLabel(results.round)}</div>
+          <h2
+            className="fs-candle"
+            style={{
+              margin: "6px 0 0",
+              font: `600 30px/1.15 ${FONT_DISPLAY}`,
+              letterSpacing: "0.18em",
+              textIndent: "0.18em",
+              textTransform: "uppercase",
+              color: BRASS_LIT,
+              textShadow: "0 2px 20px rgba(255, 190, 107, 0.3)",
+            }}
+          >
+            {results.winner === "inspectors" ? "Inspectors win" : "Mimics win"}
           </h2>
-          <span style={labelStyle}>{roundLabel(results.round)}</span>
+          <div style={{ ...ornamentRuleStyle(190), margin: "12px auto 0" }} aria-hidden />
         </div>
 
         <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 12 }}>
@@ -78,8 +92,8 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
           </thead>
           <tbody>
             {results.rows.map((row) => (
-              <tr key={row.publicPlayerId} style={{ borderTop: EDGE }}>
-                <td style={{ ...nameCellStyle, color: row.isSelf ? BRASS : CREAM }}>
+              <tr key={row.publicPlayerId} style={{ borderTop: RULE }}>
+                <td style={{ ...nameCellStyle, color: row.isSelf ? BRASS_LIT : CREAM }}>
                   {row.displayName}
                   {row.fullRoundSurvival ? (
                     <span style={{ ...labelStyle, marginLeft: 8 }}>survived</span>
@@ -89,7 +103,7 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
                 <td style={cellStyle}>{row.survivalSeconds.toFixed(1)}s</td>
                 <td style={cellStyle}>{row.correctAccusations}</td>
                 <td style={cellStyle}>{row.wrongAccusations}</td>
-                <td style={{ ...cellStyle, color: BRASS }}>{row.score}</td>
+                <td style={{ ...cellStyle, color: BRASS_LIT, fontWeight: 600 }}>{row.score}</td>
               </tr>
             ))}
           </tbody>
@@ -113,6 +127,7 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
                         <button
                           key={candidate.publicObjectId}
                           type="button"
+                          className={PRESS_CLASS}
                           style={allowed || selected ? base : disabledButtonStyle(base)}
                           disabled={!allowed}
                           onClick={() => {
@@ -144,6 +159,7 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
       >
         <button
           type="button"
+          className={PRESS_CLASS}
           style={rematchGate.allowed ? primaryButtonStyle : disabledButtonStyle(primaryButtonStyle)}
           disabled={!rematchGate.allowed}
           onClick={() => {
@@ -154,6 +170,7 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
         </button>
         <button
           type="button"
+          className={PRESS_CLASS}
           style={rematchGate.allowed ? buttonStyle : disabledButtonStyle(buttonStyle)}
           disabled={!rematchGate.allowed}
           onClick={() => {

@@ -5,7 +5,11 @@ import { hexToRgb, rgbToCss, rgbToHex, sameColorByte, type Rgb } from "../../pai
 import { MAX_BRUSH_RADIUS, MIN_BRUSH_RADIUS } from "../../paint/PaintBrushController";
 import type { PaintPanelState } from "../../paint/paintStore";
 import type { PaintTool } from "../../paint/createPaintTool";
-import { BRASS, CREAM, EDGE, INK, labelStyle } from "../rounds/theme";
+import { BRASS_LIT, CREAM, FONT_UI, labelStyle, plate } from "../rounds/theme";
+
+/** The paint panel accents with lit brass and rules with the plate edge. */
+const BRASS = BRASS_LIT;
+const EDGE = "1px solid rgba(176, 138, 74, 0.30)";
 import { ColorWheel, WHEEL_SIZE } from "./ColorWheel";
 
 /**
@@ -23,14 +27,13 @@ import { ColorWheel, WHEEL_SIZE } from "./ColorWheel";
 // to be right about both.
 const panelStyle: CSSProperties = {
   width: WHEEL_SIZE + 28,
-  background: INK,
-  border: EDGE,
+  ...plate(),
   borderRadius: 10,
   padding: "12px 14px",
   pointerEvents: "auto",
   backdropFilter: "blur(6px)",
   color: CREAM,
-  font: "13px/1.5 system-ui, sans-serif",
+  font: `13px/1.5 ${FONT_UI}`,
 };
 
 const rowStyle: CSSProperties = {

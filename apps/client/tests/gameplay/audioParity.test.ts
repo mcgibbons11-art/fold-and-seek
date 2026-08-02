@@ -1,4 +1,4 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -78,9 +78,19 @@ const SOUND_IDS = [
   "results_resolve",
   "rematch_tick",
   "ui_deny",
+  "ui_back",
   "countdown_tick",
   "countdown_tick_final",
   "score_tick",
+  "paint_stroke",
+  "eyedropper_pick",
+  "taunt_call",
+  "close_pass_riser",
+  "escape_relief",
+  "role_reveal",
+  "forge_start",
+  "win_sting",
+  "lose_sting",
 ] as const;
 
 /**
@@ -91,6 +101,52 @@ const SOUND_IDS = [
  */
 type Equals<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 export const SOUND_IDS_MATCH_UNION: Equals<SoundId, (typeof SOUND_IDS)[number]> = true;
+
+/**
+ * Sounds that are bundled and named but which nothing plays, each with the
+ * reason it is allowed to stay. This list is meant to shrink.
+ *
+ * The wall-stick pair belongs to a movement verb that CLAUDE.md lists alongside
+ * jump and climb but which no controller implements: nothing in `src` sets,
+ * clears or reports a stuck state, so there is no moment to hang them on. They
+ * are kept rather than deleted because the feature is intended and a generated
+ * take cannot be reproduced once thrown away.
+ */
+const UNWIRED_SOUNDS: ReadonlySet<string> = new Set(["wallstick_attach", "wallstick_release"]);
+
+const SRC_ROOT = resolve(__dirname, "../../src");
+
+/**
+ * The file that declares the `SoundId` union. Every id appears in it by
+ * definition, so searching it would match all of them and prove nothing: it is
+ * the declaration, not a use. Leaving it in is what made the first version of
+ * the check below pass on the very sounds it was written to catch.
+ */
+const DECLARATION_FILE = resolve(SRC_ROOT, "forge/AudioPlayer.ts");
+
+let sourceCache: string | null = null;
+
+/** Every line of client source that could play something, concatenated once. */
+function sourceText(): string {
+  if (sourceCache !== null) return sourceCache;
+  const parts: string[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir)) {
+      const path = resolve(dir, entry);
+      if (statSync(path).isDirectory()) {
+        walk(path);
+        continue;
+      }
+      if (path === DECLARATION_FILE) continue;
+      if (entry.endsWith(".ts") || entry.endsWith(".tsx")) {
+        parts.push(readFileSync(path, "utf8"));
+      }
+    }
+  };
+  walk(SRC_ROOT);
+  sourceCache = parts.join("\n");
+  return sourceCache;
+}
 
 describe("audio bundle parity", () => {
   it("mirrors the SoundId union exactly", () => {
@@ -118,6 +174,30 @@ describe("audio bundle parity", () => {
       expect(clips.length).toBeGreaterThan(0);
       for (const clip of clips) expect(SOUND_IDS).toContain(clip);
     }
+  });
+
+  /**
+   * Parity above only proves a file exists and can be named. It does not prove
+   * anything ever plays it, and the difference is invisible at run time: a sound
+   * nobody triggers is silence the player cannot report and weight they download
+   * anyway. Both wall-stick clips sat in the bundle unplayed through eight
+   * gauntlet rounds because every check up to here passed on them.
+   *
+   * A `SoundId` reaches the player only by appearing as a literal somewhere in
+   * `src`, so that is what is searched for.
+   */
+  it("plays every one-shot it ships", () => {
+    const unplayed = SOUND_IDS.filter(
+      (id) => !UNWIRED_SOUNDS.has(id) && !sourceText().includes(`"${id}"`),
+    );
+    expect(unplayed).toEqual([]);
+  });
+
+  it("has a live feature behind every sound it excuses as unwired", () => {
+    // An excuse that outlives its reason is how the list stops meaning anything,
+    // so a sound both excused and wired is a failure in the other direction.
+    const excusedButWired = [...UNWIRED_SOUNDS].filter((id) => sourceText().includes(`"${id}"`));
+    expect(excusedButWired).toEqual([]);
   });
 
   it("gives every footstep material three variations that are all bundled", () => {

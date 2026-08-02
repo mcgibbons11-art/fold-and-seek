@@ -1,5 +1,149 @@
 # STATUS
 
+## The load was waiting on 281 compiles for 13 programs (2026-08-02)
+
+**The premise this pass was handed was wrong, and finding that out was most of
+the work.** The brief said the shop was "~174 programs at ~1.4 s a link", so the
+job was to cut the program count. A headless census of the built map says the
+shop generates **eighteen** distinct shader programs, and now thirteen. The 174
+in the earlier note is not the shop's program count; the sweep's own drawable
+count is 281, and `renderer.info.memory.programs` in a live session also holds
+the post chain's quad passes, the menu room, the prewarmed Mimic bodies and the
+Forge, none of which the shop sweep touches.
+
+**What the load was actually spending its time on.** Three r185 keys a compiled
+program on the generated shader SOURCE. `Pipelines.getForRender` looks a stage
+up by `nodeBuilderState.vertexShader` as a string, and `WebGLBackend`'s
+`getRenderCacheKey` returns the empty string, so a pipeline is nothing but its
+pair of stage ids. The sweep compiled all 281 drawables one at a time with a
+frame handed back between each. **268 of those calls could not have linked
+anything**: they built a node-builder state, hit the pipeline cache, and cost the
+player a frame apiece. The loading screen was 281 frames long to build 18
+programs.
+
+### The census
+
+`tests/world/programCensus.test.ts` builds the real `CuriosityShop` headlessly
+and counts. Three numbers, high tier:
+
+| | before | after |
+| --- | --- | --- |
+| drawables the sweep visits | 281 | 281 |
+| drawables the loading screen waits for | 281 | 53 |
+| distinct shader programs | 18 | 13 |
+
+The 53 is the count of **compile groups**: one drawable per group builds every
+program the shop can ask for, and everything after the first drawable of a group
+is a pipeline-cache hit. The group key is `compileGroupKey` in `ShopWorld.ts`,
+and it is deliberately the material's IDENTITY rather than a reading of its
+properties. Two materials configured identically generate one program and this
+key still splits them, which is why 32 materials become 53 groups where 13
+programs would do. That waste is a node-graph build apiece and no link at all,
+milliseconds against the second-plus a link costs on this driver, and it buys an
+argument in place of an audit: same material object, same object and geometry
+properties the generator branches on, therefore the same text, character for
+character. An audit that misses one branch is a program the loading screen never
+builds and the first frame links instead.
+
+### Eighteen programs to thirteen, with the pixel unchanged
+
+The split was between families that carry procedural surfaces and families that
+carry none. `MaterialNode` tests `material.map`, `material.roughnessMap` and
+`material.bumpMap` one at a time, so brass with no maps and walnut with three
+were two programs of everything. Every lit material in the shop now carries the
+same three slots: a family with no surface gets one shared **1x1 white texel**
+(`dressNeutral`), and the metals, the glazes, the bulb, the screen, the lampshade
+and the glazing pick it up. `vertexColors` went the same way, onto the four
+materials that lacked it.
+
+Both are provably no-ops on the pixel rather than approximately so. A white texel
+is 1.0 in the renderer's linear working space whichever colour space it is tagged
+with, so the colour map multiplies the swatch by one and needs none of the mean
+compensation `dress` applies; the roughness map's green channel is one; a
+constant bump map has a zero gradient and `bumpScale` is set to zero besides. And
+every colour attribute reaching a material that had `vertexColors` off was
+measured to be exactly white, because the bevel wear is written only by
+`extrudeProfile` and a bulb, a shade and a pane are lathes and slabs.
+
+The cost is three texture fetches from a fully cache-resident texel and the bump
+term's derivative chain on the ten families that gained them. **That was not
+measured in a browser**, and it is the claim to check if the hunt's frame rate
+moves: it is a permanent per-pixel cost traded against roughly five links, which
+are paid once per cold shader cache.
+
+What is left at thirteen is two lit programs, mesh and instanced, for each of the
+standard, clearcoat and sheen families, two more for the lampshade, which carries
+an emissive gradient and draws double-sided, three for the glazing, and one each
+for the moon backdrop and the light pools. Merging the last of the glass would
+want the bottles drawn double-sided, which is a visual change and was left alone.
+
+### Lobby-first: the loading screen waits for 53 and the lobby finishes 228
+
+`planShopCompile` splits the drawables into the leaders and the rest.
+`ShopWorld.precompile` sweeps the leaders under the existing deadline and
+batching, and hands the rest to a `ShaderQueue` that `GameHost` drains **one
+drawable per frame** from the frame loop, after the frame it belongs to.
+`shouldPumpShaderQueue` is the whole policy: never two at once, because
+`compileAsync` yields to the main thread between its own steps and two
+interleaved put both graph builds in one frame; never during the hunt, where a
+dropped frame decides whether a Mimic is seen; and nothing on an empty queue.
+Whatever is still queued when the hunt starts costs a graph build on the frame
+that first draws it, which is bounded and small, and a bounded hitch beats a
+smooth one during inspection. At 60 fps the 228 drain in under four seconds
+against a lobby and intro run of about thirty.
+
+A deadline that cuts the lead sweep short puts the leaders it never reached at
+the FRONT of the queue (`queueAfterLead`), ahead of every follower: those are the
+only drawables left with a program to link.
+
+**The queue hands the render target back before it awaits, and the lead sweep
+does not.** That is the one real difference between `inScenePassContext` and
+`compileInScenePass`, and it is load-bearing. Nothing is drawn during the lead
+sweep, so holding the scene pass's aim across it is free; the queue has a frame
+drawn between every call, and `THREE.RenderPipeline.render` composites into
+whatever target the renderer currently holds, so a frame drawn under a borrowed
+aim lands in the scene pass's own texture instead of on the canvas. Handing it
+back that early is safe because `Renderer.compileAsync` reads the target
+synchronously and stores the resulting render context on each work item
+(`_createObjectPipeline` sets `renderContext: this._currentRenderContext`), and
+the async tail builds the pipeline against the stored one. The zero-rebuild
+proxy-camera invariant survives: the queue binds the same scene and the same
+camera the frame just used, and a test holds `graphBuilds` flat across a drain.
+
+### `visibleFirst` is very nearly a no-op, and always was
+
+Worth writing down because it was load-bearing in the note this replaces. The
+frustum test runs on bounding spheres, and after batching a merged mesh of every
+walnut part spans the room. Measured at six points around the survey orbit,
+**213 to 232 of the 281 drawables are in view and all 18 structures are present
+at every angle**. Ordering the sweep by the camera buys almost nothing; what the
+lead-set split buys is the same idea done on the axis that separates.
+
+### Verified
+
+`pnpm -r typecheck` clean across six projects. `npx vite build` green at 256
+modules, 1.73 MB / 491 KB gzip, to a scratch outDir. Client suite 796 of 798,
+the two failures being `audioParity.test.ts` naming clips the audio pass had not
+bundled yet, untouched by this and failing before it. Eighteen new cases across
+`tests/world/programCensus.test.ts` and `tests/world/shopCompilePlan.test.ts`;
+the census was **confirmed to fail with `dressNeutral` removed**, naming the
+families that split. `tests/maps/shopMaterials.test.ts` had two cases
+re-expressed rather than relaxed: "no maps" became "the shared texel, and the
+same object every time", and "brass has no colour map" became "brass sits on its
+swatch exactly, because a white map has a mean of one", which was the point the
+assertion was making.
+
+**Not verified in a browser, and this is the honest headline.** Nothing here was
+measured on a GPU. The arithmetic says a cold load's blocking phase falls from
+281 compiles carrying 18 links to 53 carrying 13, which is tens of seconds rather
+than seconds, because the links are the floor and they cost over a second each on
+this ANGLE/D3D11 path. The first thing to check is the simple one: that entering
+a round reaches the shop after the loading bar has counted 53 rather than 281,
+and that the diagnostics overlay's program counter is flat through the lobby.
+Shadow-pass programs are still uncovered, since three builds those from the
+shadow camera on the first frame that casts and there is no public precompile
+for them.
+
 ## The dedicated server had no geometry, and now the map is a package (2026-08-02)
 
 **This closes the gap the close-pass pass wrote down by name and left standing.**

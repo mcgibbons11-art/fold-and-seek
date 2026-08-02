@@ -29,6 +29,13 @@ export interface PaintToolDeps {
   readonly getPickTargets?: () => readonly THREE.Object3D[];
   readonly onStroke?: (stroke: PaintStroke) => void;
   /**
+   * The eyedropper fired, and whether it found anything. Both routes to a
+   * sample — the armed click the brush intercepts and the direct `sampleAt` —
+   * pass through one place inside, so a caller that wants to answer a pick
+   * cannot miss half of them.
+   */
+  readonly onSample?: (picked: boolean) => void;
+  /**
    * One completed drag, for a caller that keeps a history. Fired on pointer-up
    * rather than per stamp, because a drag is one thing the player did and so
    * one thing an undo should take back.
@@ -104,10 +111,12 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
     const sample = eyedropper.sample(pointer, pickTargets());
     if (sample === null) {
       store.patch({ eyedropperArmed: false, status: "Nothing under the cursor to sample." });
+      deps.onSample?.(false);
       return false;
     }
     store.setColor(sample.color);
     store.patch({ eyedropperArmed: false, status: "Colour copied. Drag to paint with it." });
+    deps.onSample?.(true);
     return true;
   };
 

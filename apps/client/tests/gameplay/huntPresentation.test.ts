@@ -258,7 +258,12 @@ describe("innocent reactions", () => {
     const reactions = new ReactionTheatre(scene, { play });
 
     reactions.play(prop.objectId, prop.innocentReactionId);
-    expect(play).toHaveBeenCalledWith(REACTION_SOUNDS[prop.innocentReactionId], expect.any(Number));
+    expect(play).toHaveBeenCalledWith(
+      REACTION_SOUNDS[prop.innocentReactionId],
+      expect.any(Number),
+      // The distance gain. This theatre has no listener, so nothing is far off.
+      1,
+    );
     expect(reactions.count).toBe(1);
 
     const flare = scene.getObjectByName(`reaction-${prop.objectId}`);
@@ -276,6 +281,31 @@ describe("innocent reactions", () => {
     reactions.dispose();
   });
 
+  it("answers more quietly from across the shop than from underfoot", () => {
+    // The falloff curve is checked in distanceGain.test.ts. What matters here is
+    // that the listener is actually wired through to the sound: the theatre knows
+    // where the prop stands, and until this it played every reaction flat.
+    const prop = CURIOSITY_SHOP_OBJECTS.find((entry) => entry.accusationPolicy === "allowed");
+    if (prop === undefined) throw new Error("the map publishes no accusable prop");
+    const centre = prop.focusBounds.getCenter(new THREE.Vector3());
+
+    const gainHeardFrom = (ear: THREE.Vector3): number => {
+      const play = vi.fn();
+      const reactions = new ReactionTheatre(new THREE.Scene(), { play }, () => ear);
+      reactions.play(prop.objectId, prop.innocentReactionId);
+      reactions.dispose();
+      return play.mock.calls[0]?.[2] as number;
+    };
+
+    const underfoot = gainHeardFrom(centre.clone());
+    const acrossTheShop = gainHeardFrom(centre.clone().add(new THREE.Vector3(8, 0, 8)));
+
+    expect(underfoot).toBe(1);
+    expect(acrossTheShop).toBeLessThan(underfoot);
+    // Still plainly audible: it is how an Inspector learns what they just shot.
+    expect(acrossTheShop).toBeGreaterThan(0.25);
+  });
+
   it("still sounds for an object the map does not publish, without inventing a place for it", () => {
     const scene = new THREE.Scene();
     const play = vi.fn();
@@ -283,7 +313,7 @@ describe("innocent reactions", () => {
 
     reactions.play("no-such-prop", "vase_dust_puff");
 
-    expect(play).toHaveBeenCalledWith(REACTION_SOUNDS.vase_dust_puff, expect.any(Number));
+    expect(play).toHaveBeenCalledWith(REACTION_SOUNDS.vase_dust_puff, expect.any(Number), 1);
     expect(reactions.count).toBe(0);
     expect(scene.children).toHaveLength(0);
 

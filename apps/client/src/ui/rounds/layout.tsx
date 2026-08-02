@@ -1,5 +1,7 @@
 import { useEffect, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 
+import { CREAM, FONT_UI } from "./theme";
+
 /**
  * Screen-region ownership for the round HUD.
  *
@@ -236,12 +238,18 @@ export interface HudLayoutProps {
   readonly regions: RegionAssignment;
 }
 
+/**
+ * The 13px/1.5 is load-bearing rather than a taste: `columnFit.ts` derives the
+ * hider column's card heights from it row by row, and `hudLayout.test.ts` checks
+ * that arithmetic against these region boxes. The family may change; the size
+ * and the ratio may not.
+ */
 const rootStyle: CSSProperties = {
   position: "absolute",
   inset: 0,
   pointerEvents: "none",
-  color: "#e8ddcd",
-  font: "13px/1.5 system-ui, sans-serif",
+  color: CREAM,
+  font: `13px/1.5 ${FONT_UI}`,
 };
 
 export function HudLayout({ regions }: HudLayoutProps): ReactElement {

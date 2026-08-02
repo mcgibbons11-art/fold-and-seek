@@ -3,7 +3,7 @@ import type { CSSProperties, ReactElement } from "react";
 import { MODE_TITLE, modeSummary } from "../../gameplay/copy";
 import type { PlayerRole } from "@foldseek/shared";
 import type { ControlHint } from "./huntControls";
-import { BRASS, CREAM, EDGE, INK } from "./theme";
+import { BRASS_LIT, FONT_DISPLAY, FONT_UI, keycapStyle, plate } from "./theme";
 
 /**
  * The bottom of the screen, in the original's two pieces: a strip of keycaps in
@@ -20,24 +20,15 @@ const stripStyle: CSSProperties = {
   alignItems: "stretch",
   gap: 6,
   padding: 6,
-  background: INK,
-  border: EDGE,
+  ...plate(),
   borderRadius: 10,
-  backdropFilter: "blur(6px)",
   pointerEvents: "none",
   maxWidth: "100%",
   flexWrap: "wrap",
   justifyContent: "center",
 };
 
-const keycapStyle: CSSProperties = {
-  minWidth: 20,
-  padding: "1px 5px",
-  borderRadius: 4,
-  font: "600 11px/1.5 system-ui, sans-serif",
-  color: "#1a150e",
-  background: CREAM,
-};
+const KEYCAP_FONT = `600 11px/1.5 ${FONT_UI}`;
 
 export interface ControlStripProps {
   readonly hints: readonly ControlHint[];
@@ -61,7 +52,7 @@ export function ControlStrip({ hints }: ControlStripProps): ReactElement {
         >
           <div style={{ display: "flex", gap: 3 }}>
             {hint.keys.map((key) => (
-              <span key={key} style={keycapStyle}>
+              <span key={key} style={keycapStyle(KEYCAP_FONT)}>
                 {key}
               </span>
             ))}
@@ -84,10 +75,11 @@ export function ModeNote({ role }: ModeNoteProps): ReactElement {
     <div style={{ textAlign: "right", pointerEvents: "none" }}>
       <div
         style={{
-          font: "600 17px/1.2 system-ui, sans-serif",
-          letterSpacing: "0.14em",
+          font: `600 18px/1.2 ${FONT_DISPLAY}`,
+          letterSpacing: "0.16em",
           textTransform: "uppercase",
-          color: BRASS,
+          color: BRASS_LIT,
+          textShadow: "0 0 14px rgba(255, 190, 107, 0.25)",
         }}
       >
         {MODE_TITLE}

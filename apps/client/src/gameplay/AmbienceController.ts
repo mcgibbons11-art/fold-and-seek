@@ -39,6 +39,9 @@ export const BED_IDS = [
   "amb_inspector_near",
   "amb_watched_low",
   "amb_watched_high",
+  // The menu and the lobby, which this controller deliberately leaves silent
+  // (see `SILENT_PHASES`) and `MenuAmbience` plays instead.
+  "amb_candle_flicker",
 ] as const;
 
 export type BedId = (typeof BED_IDS)[number];
