@@ -1,8 +1,16 @@
 import * as THREE from "three/webgpu";
 import { DisposalBag } from "../../engine/DisposalBag";
 import type { QualitySettings } from "../../rendering/quality";
-import { PRACTICAL_PLACEMENTS } from "./placements";
-import { SHOP_MAX_X, SHOP_MAX_Z, SHOP_MIN_X, SHOP_MIN_Z, WINDOW_MAX_X, WINDOW_MIN_X } from "./zones";
+import { PRACTICAL_PLACEMENTS, type PropPlacement } from "./placements";
+import {
+  SECURITY_OFFICE_BOUNDS,
+  SHOP_MAX_X,
+  SHOP_MAX_Z,
+  SHOP_MIN_X,
+  SHOP_MIN_Z,
+  WINDOW_MAX_X,
+  WINDOW_MIN_X,
+} from "./zones";
 
 /**
  * Lighting for The Curiosity Shop (§10.2, §18.3).
@@ -164,13 +172,50 @@ const POOL_TEXTURE_SIZE = 128;
 const WINDOW_CENTRE_X = (WINDOW_MIN_X + WINDOW_MAX_X) / 2;
 
 /**
+ * Whether a lamp lights anywhere a player can actually be.
+ *
+ * The Security Office is sealed: `FLOOR_PLAN` publishes no walkable box inside
+ * it and every prop in it is `blocked` for accusation, so nobody ever stands
+ * there and nothing ever hides there. Its pendant nonetheless carries the
+ * highest authored priority in the manifest, which on a six-light budget would
+ * have spent the single most valuable light in the room on a room nobody can
+ * enter. It is still a lit fixture seen through the glazing; it is just the
+ * first light to go rather than the last.
+ */
+function lightsPlayableSpace(placement: PropPlacement): boolean {
+  const [x, , z] = placement.position;
+  return !(
+    x >= SECURITY_OFFICE_BOUNDS.min.x &&
+    x <= SECURITY_OFFICE_BOUNDS.max.x &&
+    z >= SECURITY_OFFICE_BOUNDS.min.z &&
+    z <= SECURITY_OFFICE_BOUNDS.max.z
+  );
+}
+
+/**
+ * Practicals in the order they keep their live lights: the ones lighting space
+ * a player occupies first, then by authored priority.
+ *
+ * The authored priority is a claim about how much a lamp matters to the room's
+ * look, which is the right tie-break but the wrong first sort once the budget
+ * is small enough that only the gameplay-relevant pools survive. Sorting here
+ * rather than in `placements.ts` keeps the manifest a description of the shop
+ * and leaves this a rendering policy. `sort` is stable, so lamps that tie keep
+ * their authored order.
+ */
+export const PRACTICALS_BY_RANK: readonly PropPlacement[] = [...PRACTICAL_PLACEMENTS].sort((a, b) => {
+  const playable = Number(lightsPlayableSpace(b)) - Number(lightsPlayableSpace(a));
+  return playable !== 0 ? playable : (b.practical?.priority ?? 0) - (a.practical?.priority ?? 0);
+});
+
+/**
  * Practicals that author a pool, in the order the pools are built.
  *
- * Reverse authored priority: the lamps a budget gives up first come first, so
- * the pools that have to appear are always the leading instances of one
- * `InstancedMesh` and switching them on costs a `count` assignment.
+ * Reverse rank: the lamps a budget gives up first come first, so the pools that
+ * have to appear are always the leading instances of one `InstancedMesh` and
+ * switching them on costs a `count` assignment.
  */
-const POOL_ORDER: readonly number[] = PRACTICAL_PLACEMENTS.map((placement, index) => ({ placement, index }))
+const POOL_ORDER: readonly number[] = PRACTICALS_BY_RANK.map((placement, index) => ({ placement, index }))
   .reverse()
   .filter((entry) => POOL_SURFACE[entry.placement.variant] !== undefined)
   .map((entry) => entry.index);
@@ -190,10 +235,10 @@ export interface PracticalLightPlan {
  * how many lights the WebGPU path runs is checkable without a device.
  */
 export function planPracticalLights(maxPracticalLights: number): PracticalLightPlan {
-  const live = Math.max(Math.min(maxPracticalLights, PRACTICAL_PLACEMENTS.length), 0);
+  const live = Math.max(Math.min(maxPracticalLights, PRACTICALS_BY_RANK.length), 0);
   return {
     live,
-    unlit: PRACTICAL_PLACEMENTS.length - live,
+    unlit: PRACTICALS_BY_RANK.length - live,
     pools: POOL_ORDER.filter((index) => index >= live).length,
   };
 }
@@ -307,8 +352,8 @@ export class ShopLighting {
     // it drops to a fill level and the warm practicals stay dominant.
     this.moon.intensity = settings.dynamicShadows ? MOON_KEY_INTENSITY : MOON_FILL_INTENSITY;
 
-    // `PRACTICAL_PLACEMENTS` is sorted by authored priority, so a budget cut
-    // always takes the lamps that matter least first.
+    // The lights were built in rank order, so a budget cut always takes the
+    // lamps that matter least to a player first.
     const budget = Math.min(settings.maxPracticalLights, this.practicals.length);
     this.practicals.forEach((light, index) => {
       light.visible = index < budget;
@@ -406,7 +451,7 @@ export class ShopLighting {
    * the tail without ever dimming the lamp a player is standing next to.
    */
   private buildPracticals(): void {
-    for (const placement of PRACTICAL_PLACEMENTS) {
+    for (const placement of PRACTICALS_BY_RANK) {
       const practical = placement.practical;
       if (practical === undefined) {
         continue;
@@ -443,8 +488,8 @@ export class ShopLighting {
    * is why the fill rig had to come up first.
    */
   private buildPools(): void {
-    const entries = POOL_ORDER.map((index) => PRACTICAL_PLACEMENTS[index]).filter(
-      (placement): placement is (typeof PRACTICAL_PLACEMENTS)[number] => placement !== undefined,
+    const entries = POOL_ORDER.map((index) => PRACTICALS_BY_RANK[index]).filter(
+      (placement): placement is PropPlacement => placement !== undefined,
     );
     if (entries.length === 0) {
       return;

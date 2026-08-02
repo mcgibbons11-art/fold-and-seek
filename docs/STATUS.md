@@ -163,6 +163,17 @@ would have hung a 1.8 m glowing disc a metre out past a 0.5 m table. Wall
 sconces get none at all: they wash the wall beside them and a disc lying flat
 under one would be a lie, so their lit shades carry them.
 
+**Which lamps keep their lights is now a rendering policy, not the manifest's
+authored priority.** `PRACTICALS_BY_RANK` sorts by whether a lamp lights space a
+player can occupy, then by authored priority. This mattered: `office_pendant_01`
+carries the highest priority in the manifest (11) but stands in the Security
+Office, which publishes no walkable floor and blocks accusation on every prop
+inside it, so a six-light budget was spending its most valuable light on the one
+room nobody can enter. The six live lights now land in six different playable
+zones — reading nook, front window, counter, clock wall and cabinet maze —
+instead of five plus a sealed room. The sort lives here rather than in
+`placements.ts` so the manifest stays a description of the shop.
+
 Measured over the authored manifest (17 practicals: 6 pendants, 3 floor lamps,
 2 table lamps, 2 task lights, 4 sconces):
 
@@ -170,6 +181,13 @@ Measured over the authored manifest (17 practicals: 6 pendants, 3 floor lamps,
 |---|---|---|---|
 | WebGPU, high | 6 | 11 | 7 |
 | WebGL 2, high | 17 | 0 | 0 |
+
+Cutting a light never removes a fixture. The bulb and shade geometry belongs to
+the prop and is built from `SHOP_PLACEMENTS` by the lamp builders, which pull
+`BULB_MATERIAL` and `LAMPSHADE_MATERIAL` unconditionally, so no budget can take
+a glow away; only the `THREE.PointLight` goes. `dressing.test.ts` pins the
+arithmetic at every budget from zero up, including the extreme where nothing is
+lit and all seventeen fixtures still stand.
 
 **This does not prove the hypothesis, and the change is built so it can be
 tested.** The 5.4-vs-22.9 comparison across tiers moves practical count,
@@ -275,7 +293,7 @@ publishes no walkable box for it. Clutter sheds as a whole below
 gradually, which would need quality passed into `PropContext` and therefore a
 change to `CuriosityShop.ts`.
 
-Verified: `pnpm -r typecheck`, `pnpm -r test` (494 client, 161 sim, 46 shared,
+Verified: `pnpm -r typecheck`, `pnpm -r test` (501 client, 161 sim, 46 shared,
 23 server) and `pnpm -r build` all green.
 
 ## The hunt HUD now owns screen regions (2026-08-02)

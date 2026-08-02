@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import { QUALITY_PRESETS, QUALITY_TIER_ORDER, qualitySettingsFor } from "../../src/rendering/quality";
-import { fillIrradiance, planPracticalLights, SHOP_FILL_RIG } from "../../src/world/maps/lighting";
+import {
+  fillIrradiance,
+  planPracticalLights,
+  PRACTICALS_BY_RANK,
+  SHOP_FILL_RIG,
+} from "../../src/world/maps/lighting";
 import { PRACTICAL_PLACEMENTS, SHOP_PLACEMENTS } from "../../src/world/maps/placements";
 import { FLOOR_CLUTTER, type ClutterKind } from "../../src/world/maps/props/clutter";
 import { NAV_BLOCKERS } from "../../src/world/maps/nav";
 import { buildMapObjects, buildObjectRegistry } from "../../src/world/maps/registry";
 import { isShopSwatch } from "../../src/world/maps/swatches";
-import { FLOOR_PLAN } from "../../src/world/maps/zones";
+import { FLOOR_PLAN, SECURITY_OFFICE_BOUNDS } from "../../src/world/maps/zones";
 
 /**
  * What the renderer does to a linear colour before a player sees it, so the
@@ -175,7 +180,7 @@ describe("Curiosity Shop practical light budget", () => {
       );
     }
     const high = planPracticalLights(qualitySettingsFor("high", "webgl2").maxPracticalLights);
-    expect(high.live).toBe(PRACTICAL_PLACEMENTS.length);
+    expect(high.live).toBe(PRACTICALS_BY_RANK.length);
     expect(high.pools).toBe(0);
   });
 
@@ -185,30 +190,69 @@ describe("Curiosity Shop practical light budget", () => {
     // disc on the floor under one would be a lie.
     const budget = qualitySettingsFor("high", "webgpu").maxPracticalLights;
     const plan = planPracticalLights(budget);
-    const unlitSconces = PRACTICAL_PLACEMENTS.slice(plan.live).filter(
+    const unlitSconces = PRACTICALS_BY_RANK.slice(plan.live).filter(
       (placement) => placement.variant === "wall_sconce",
     ).length;
 
-    expect(plan.live + plan.unlit).toBe(PRACTICAL_PLACEMENTS.length);
+    expect(plan.live + plan.unlit).toBe(PRACTICALS_BY_RANK.length);
     expect(plan.pools).toBe(plan.unlit - unlitSconces);
     expect(plan.pools).toBeGreaterThan(0);
   });
 
-  it("gives up the least important lamps first", () => {
-    // The pool instances are the leading ones of a single mesh, which is only
-    // correct while the manifest stays sorted by authored priority.
-    const priorities = PRACTICAL_PLACEMENTS.map((placement) => placement.practical?.priority ?? 0);
-    const sorted = [...priorities].sort((a, b) => b - a);
-    expect(priorities).toEqual(sorted);
+  it("spends its lights on space a player can occupy", () => {
+    // The Security Office is sealed: no walkable floor, every prop blocked for
+    // accusation. Its pendant carries the highest authored priority in the
+    // manifest, so on a six-light budget the most valuable light in the room
+    // went to the one room nobody can enter.
+    const inOffice = (placement: (typeof PRACTICALS_BY_RANK)[number]): boolean =>
+      placement.position[0] >= SECURITY_OFFICE_BOUNDS.min.x &&
+      placement.position[0] <= SECURITY_OFFICE_BOUNDS.max.x &&
+      placement.position[2] >= SECURITY_OFFICE_BOUNDS.min.z &&
+      placement.position[2] <= SECURITY_OFFICE_BOUNDS.max.z;
 
-    // And raising the budget can only ever draw fewer pools.
+    expect(PRACTICAL_PLACEMENTS.some(inOffice)).toBe(true);
+    const live = planPracticalLights(qualitySettingsFor("high", "webgpu").maxPracticalLights).live;
+    expect(PRACTICALS_BY_RANK.slice(0, live).some(inOffice)).toBe(false);
+
+    // Every sealed-room lamp sorts behind every playable one, and within each
+    // group the authored priority still decides.
+    const playable = PRACTICALS_BY_RANK.filter((placement) => !inOffice(placement));
+    const priorities = playable.map((placement) => placement.practical?.priority ?? 0);
+    expect(priorities).toEqual([...priorities].sort((a, b) => b - a));
+    expect(PRACTICALS_BY_RANK.slice(0, playable.length)).toEqual(playable);
+  });
+
+  it("gives up lamps monotonically as the budget falls", () => {
+    // The pool instances are the leading ones of a single mesh, so raising the
+    // budget must only ever draw fewer of them.
     let previous = Number.POSITIVE_INFINITY;
-    for (let budget = 0; budget <= PRACTICAL_PLACEMENTS.length; budget += 1) {
+    for (let budget = 0; budget <= PRACTICALS_BY_RANK.length; budget += 1) {
       const pools = planPracticalLights(budget).pools;
       expect(pools).toBeLessThanOrEqual(previous);
       previous = pools;
     }
-    expect(planPracticalLights(PRACTICAL_PLACEMENTS.length).pools).toBe(0);
+    expect(planPracticalLights(PRACTICALS_BY_RANK.length).pools).toBe(0);
+  });
+
+  it("keeps every lit fixture whatever the budget", () => {
+    // Only the THREE.PointLight is dropped. The bulb and shade geometry belongs
+    // to the prop, is built from SHOP_PLACEMENTS by the lamp builders in
+    // props/lamps.ts, and those pull BULB_MATERIAL and LAMPSHADE_MATERIAL
+    // unconditionally, so no budget can take a glow away. What this pins is the
+    // arithmetic: a cut moves a fixture between live and unlit and never out.
+    const fixtures = PRACTICALS_BY_RANK.length;
+    for (let budget = 0; budget <= fixtures + 4; budget += 1) {
+      const plan = planPracticalLights(budget);
+      expect(plan.live + plan.unlit, `budget ${String(budget)}`).toBe(fixtures);
+      expect(plan.live).toBeLessThanOrEqual(fixtures);
+      expect(plan.unlit).toBeGreaterThanOrEqual(0);
+    }
+    // The extreme the WebGPU path is walking toward: no live lights at all, and
+    // every fixture still present, still glowing, most of them over a pool.
+    const dark = planPracticalLights(0);
+    expect(dark.live).toBe(0);
+    expect(dark.unlit).toBe(fixtures);
+    expect(dark.pools).toBeGreaterThan(0);
   });
 
   it("returns one settings object per tier and backend", () => {
