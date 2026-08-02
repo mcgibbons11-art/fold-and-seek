@@ -7,11 +7,12 @@ import {
   curtainPanel,
   extrudeProfile,
   lathe,
+  makeRandom,
   quantize,
   roundedRectShape,
   superellipseColumn,
 } from "./geometry";
-import { GLASS_PANE_MATERIAL } from "./materials";
+import { GLASS_PANE_MATERIAL, SCREEN_MATERIAL } from "./materials";
 
 /**
  * Furniture and fixtures: the objects that define zone silhouettes and most of
@@ -22,6 +23,202 @@ import { GLASS_PANE_MATERIAL } from "./materials";
 
 function sized(base: string, ...values: readonly number[]): string {
   return `${base}#${values.map((value) => value.toFixed(3)).join("x")}`;
+}
+
+/**
+ * Stock the shelves are dressed from. Everything here is already in the
+ * published catalogue, so a Mimic that samples a shelf still lands on a legal
+ * swatch, and the per-copy tint spread does the rest of the variety.
+ */
+const STOCK_SWATCHES = [
+  "paper_aged_01",
+  "paper_kraft_02",
+  "porcelain_cream_01",
+  "ceramic_celadon_02",
+  "ceramic_oxblood_03",
+  "walnut_mid_02",
+  "paint_verdigris_03",
+  "velvet_burgundy_01",
+] as const;
+
+interface DressOptions {
+  /** Height of the surface the stock stands on. */
+  readonly y: number;
+  readonly spanX: number;
+  readonly spanZ: number;
+  /** Clusters along the span; each one is a book run, a stack, a pot or a box. */
+  readonly clusters: number;
+  /** Distinguishes shelves within one prop, so two boards are not twins. */
+  readonly seed: number;
+  readonly scale?: number;
+}
+
+/**
+ * Dresses a shelf or board with small goods.
+ *
+ * A curiosity shop with bare shelves reads as a blockout however good its
+ * materials are, and it costs the Mimic the crowded silhouettes it needs to
+ * disappear into (§10.2). Stock comes from a fixed handful of cached
+ * geometries, so a whole room of dressed shelves still collapses into a few
+ * instanced draws, and the arrangement is hashed from the prop's own placement
+ * so two identical units are never dressed the same way.
+ */
+function dressSurface(ctx: PropContext, placement: PropPlacement, options: DressOptions): void {
+  const b = ctx.batcher;
+  const scale = options.scale ?? 1;
+  const random = makeRandom(
+    Math.abs(
+      Math.round(placement.position[0] * 977 + placement.position[2] * 613 + options.seed * 149) + 7,
+    ),
+  );
+
+  const book = ctx.geometry.get("stock.book", () => chamferedBox(0.052, 0.23, 0.155, 0.005));
+  const crate = ctx.geometry.get("stock.crate", () => chamferedBox(0.19, 0.115, 0.145, 0.01));
+  const pot = ctx.geometry.get("stock.pot", () =>
+    lathe(
+      [
+        [0, 0],
+        [0.052, 0],
+        [0.068, 0.04],
+        [0.062, 0.11],
+        [0.04, 0.15],
+        [0.046, 0.168],
+        [0.038, 0.172],
+        [0.034, 0.152],
+        [0, 0.15],
+      ],
+      14,
+    ),
+  );
+  const dish = ctx.geometry.get("stock.dish", () =>
+    lathe(
+      [
+        [0, 0],
+        [0.045, 0.004],
+        [0.088, 0.038],
+        [0.094, 0.062],
+        [0.088, 0.064],
+        [0.08, 0.042],
+        [0.04, 0.018],
+        [0, 0.014],
+      ],
+      16,
+    ),
+  );
+
+  const stockFor = (): THREE.Material => {
+    const id = STOCK_SWATCHES[Math.floor(random() * STOCK_SWATCHES.length)] ?? "paper_aged_01";
+    return ctx.materials.get(id);
+  };
+
+  for (let cluster = 0; cluster < options.clusters; cluster += 1) {
+    const slot = (cluster + 0.5) / options.clusters;
+    const centreX = (slot - 0.5) * options.spanX;
+    const jitterX = (random() - 0.5) * (options.spanX / options.clusters) * 0.35;
+    const z = (random() - 0.5) * options.spanZ * 0.45;
+    const kind = random();
+
+    if (kind < 0.42) {
+      // Upright run, the last volume leaning into the gap the run leaves.
+      const count = 3 + Math.floor(random() * 4);
+      const material = stockFor();
+      for (let i = 0; i < count; i += 1) {
+        const height = (0.82 + random() * 0.36) * scale;
+        const lean = i === count - 1 ? 0.28 + random() * 0.2 : 0;
+        b.part(
+          book,
+          material,
+          {
+            x: centreX + jitterX + (i - (count - 1) / 2) * 0.058 * scale + lean * 0.09 * scale,
+            y: options.y + 0.115 * height,
+            z,
+            rz: lean,
+            sx: scale,
+            sy: height,
+            sz: (0.86 + random() * 0.3) * scale,
+          },
+          { shadow: false, tint: 2.4 },
+        );
+      }
+      continue;
+    }
+
+    if (kind < 0.62) {
+      // Flat stack, each volume turned a little off the one below it.
+      const count = 2 + Math.floor(random() * 3);
+      const material = stockFor();
+      for (let i = 0; i < count; i += 1) {
+        b.part(
+          book,
+          material,
+          {
+            x: centreX + jitterX,
+            y: options.y + (i + 0.5) * 0.054 * scale,
+            z,
+            rz: Math.PI / 2,
+            ry: (random() - 0.5) * 0.35,
+            sx: scale,
+            sy: (0.9 + random() * 0.25) * scale,
+            sz: (0.9 + random() * 0.25) * scale,
+          },
+          { shadow: false, tint: 2.4 },
+        );
+      }
+      continue;
+    }
+
+    if (kind < 0.78) {
+      b.part(
+        crate,
+        stockFor(),
+        {
+          x: centreX + jitterX,
+          y: options.y + 0.058 * scale,
+          z,
+          ry: (random() - 0.5) * 0.5,
+          sx: scale,
+          sy: scale,
+          sz: scale,
+        },
+        { shadow: false, tint: 1.6 },
+      );
+      continue;
+    }
+
+    if (kind < 0.92) {
+      const height = (0.85 + random() * 0.5) * scale;
+      b.part(
+        pot,
+        stockFor(),
+        {
+          x: centreX + jitterX,
+          y: options.y,
+          z,
+          ry: random() * Math.PI,
+          sx: scale,
+          sy: height,
+          sz: scale,
+        },
+        { shadow: false, tint: 1.8 },
+      );
+      continue;
+    }
+
+    b.part(
+      dish,
+      stockFor(),
+      {
+        x: centreX + jitterX,
+        y: options.y,
+        z,
+        ry: random() * Math.PI,
+        sx: scale,
+        sy: scale,
+        sz: scale,
+      },
+      { shadow: false, tint: 1.8 },
+    );
+  }
 }
 
 /** Swatch roles: 0 = upholstery, 1 = frame wood. */
@@ -238,8 +435,23 @@ export function buildDisplayCabinet(ctx: PropContext, placement: PropPlacement):
   const shelf = ctx.geometry.get(sized("cabinet.shelf", width, depth), () =>
     chamferedSlab(width - 0.1, 0.026, depth - 0.1, 0.008),
   );
-  for (const y of [0.68, 1.15, 1.6]) {
+  const levels = [0.68, 1.15, 1.6];
+  for (let i = 0; i < levels.length; i += 1) {
+    const y = levels[i];
+    if (y === undefined) {
+      continue;
+    }
     b.part(shelf, shelfMaterial, { y }, { shadow: false });
+    // Glazed stock is the smallest in the shop, and it is the one the player
+    // presses their face against, so it stays sparse and precious.
+    dressSurface(ctx, placement, {
+      y: y + 0.013,
+      spanX: width - 0.34,
+      spanZ: depth - 0.24,
+      clusters: Math.max(Math.round(width / 0.6), 2),
+      seed: i + 21,
+      scale: 0.68,
+    });
   }
 
   const frontGlass = ctx.geometry.get(sized("cabinet.glass.front", width, height), () =>
@@ -272,6 +484,14 @@ export function buildWallShelf(ctx: PropContext, placement: PropPlacement): void
   for (const dx of [-1, 1]) {
     b.part(bracket, metal, { x: (dx * (width - 0.24)) / 2, y: -0.09, z: -0.02 }, { shadow: false });
   }
+  dressSurface(ctx, placement, {
+    y: 0.018,
+    spanX: width - 0.18,
+    spanZ: 0.1,
+    clusters: Math.max(Math.round(width / 0.45), 2),
+    seed: 31,
+    scale: 0.86,
+  });
 }
 
 /** Low open bookcase. Swatch roles: 0 = carcass, 1 = back panel. */
@@ -290,8 +510,25 @@ export function buildLowShelf(ctx: PropContext, placement: PropPlacement): void 
   const shelf = ctx.geometry.get(sized("lowShelf.shelf", width, depth), () =>
     chamferedSlab(width - 0.08, 0.032, depth - 0.02, 0.008),
   );
-  for (const y of [0.06, 0.42, 0.78, height - 0.016]) {
+  const levels = [0.06, 0.42, 0.78, height - 0.016];
+  for (let i = 0; i < levels.length; i += 1) {
+    const y = levels[i];
+    if (y === undefined) {
+      continue;
+    }
     b.part(shelf, wood, { y });
+    // The top board is the display surface the authored props stand on, so it
+    // is left clear; the three bays below it are the ones that read as empty.
+    if (i < levels.length - 1) {
+      dressSurface(ctx, placement, {
+        y: y + 0.016,
+        spanX: width - 0.2,
+        spanZ: depth - 0.16,
+        clusters: Math.max(Math.round(width / 0.4), 2),
+        seed: i + 11,
+        scale: 0.92,
+      });
+    }
   }
   b.part(
     ctx.geometry.get(sized("lowShelf.back", width, height), () => chamferedBox(width - 0.08, height - 0.1, 0.016, 0.006)),
@@ -319,8 +556,20 @@ export function buildShelvingUnit(ctx: PropContext, placement: PropPlacement): v
   const shelf = ctx.geometry.get(sized("shelving.shelf", width, depth), () =>
     chamferedSlab(width - 0.06, 0.04, depth, 0.01),
   );
-  for (const y of [0.24, 0.82, 1.4, 1.98]) {
+  const levels = [0.24, 0.82, 1.4, 1.98];
+  for (let i = 0; i < levels.length; i += 1) {
+    const y = levels[i];
+    if (y === undefined) {
+      continue;
+    }
     b.part(shelf, board, { y });
+    dressSurface(ctx, placement, {
+      y: y + 0.02,
+      spanX: width - 0.24,
+      spanZ: depth - 0.14,
+      clusters: Math.max(Math.round(width / 0.42), 3),
+      seed: i + 1,
+    });
   }
 }
 
@@ -431,6 +680,14 @@ export function buildWorkbench(ctx: PropContext, placement: PropPlacement): void
     { y: 0.22 },
     { shadow: false },
   );
+  // The bench top carries the authored tools; the shelf under it was bare.
+  dressSurface(ctx, placement, {
+    y: 0.235,
+    spanX: width - 0.52,
+    spanZ: depth - 0.46,
+    clusters: Math.max(Math.round(width / 0.55), 2),
+    seed: 41,
+  });
   b.part(ctx.geometry.get("bench.vice", () => chamferedBox(0.24, 0.16, 0.14, 0.016)), metal, {
     x: -width / 2 + 0.16,
     y: height - 0.14,
@@ -628,10 +885,11 @@ export function buildDisplayTray(ctx: PropContext, placement: PropPlacement): vo
   b.part(ctx.geometry.get("tray.lining", () => chamferedSlab(0.4, 0.014, 0.26, 0.004)), lining, { y: 0.043 }, { shadow: false });
 }
 
-/** Security Office desk with its monitor bank (§5.7). Swatch roles: 0 = desk, 1 = screens, 2 = legs. */
+/** Security Office desk with its monitor bank (§5.7). Swatch roles: 0 = desk, 1 = bezels, 2 = legs. */
 export function buildMonitorDesk(ctx: PropContext, placement: PropPlacement): void {
   const desk = ctx.materials.get(swatchRole(placement, 0, "slate_grey_02"));
-  const screen = ctx.materials.get(swatchRole(placement, 1, "bakelite_black_01"));
+  const bezel = ctx.materials.get(swatchRole(placement, 1, "bakelite_black_01"));
+  const phosphor = ctx.materials.get(SCREEN_MATERIAL);
   const metal = ctx.materials.get(swatchRole(placement, 2, "iron_dark_03"));
   const b = ctx.batcher;
 
@@ -643,6 +901,7 @@ export function buildMonitorDesk(ctx: PropContext, placement: PropPlacement): vo
     }
   }
   const monitor = ctx.geometry.get("office.monitor", () => chamferedBox(0.42, 0.3, 0.06, 0.012));
+  const glow = ctx.geometry.get("office.monitorGlass", () => new THREE.PlaneGeometry(0.36, 0.24));
   const stand = ctx.geometry.get("office.monitorStand", () => new THREE.CylinderGeometry(0.03, 0.05, 0.12, 8));
   for (const [dx, ry] of [
     [-0.46, 0.28],
@@ -650,6 +909,12 @@ export function buildMonitorDesk(ctx: PropContext, placement: PropPlacement): vo
     [0.46, -0.28],
   ] as const) {
     b.part(stand, metal, { x: dx, y: 0.84, z: -0.14 }, { shadow: false });
-    b.part(monitor, screen, { x: dx, y: 1.05, z: -0.14, ry }, { shadow: false });
+    b.part(monitor, bezel, { x: dx, y: 1.05, z: -0.14, ry }, { shadow: false });
+    b.part(
+      glow,
+      phosphor,
+      { x: dx + Math.sin(ry) * 0.035, y: 1.05, z: -0.14 + Math.cos(ry) * 0.035, ry },
+      { shadow: false, receive: false },
+    );
   }
 }

@@ -2,11 +2,139 @@
 
 ## Current phase
 
-Phase 3 — playable local round (started 2026-08-01 20:00). Phases 0-2 and 4 core are
-committed and green. The map (Curiosity Shop, six zones, nav mesh), paint system
-(brush/eyedropper/material channels), sim (paint + missed-finds board), and transports
-are built and tested but not yet wired into a playable round in `App.tsx` — that wiring
-is this phase.
+Phase 3 — playable local round. The wiring described under "Phase 3 wiring" below is in
+place: "Play a round" on the main menu now runs a whole match in one tab against the
+Curiosity Shop, with no network.
+
+## Art pass (2026-08-02, landed UNREPORTED — agent terminated before its writeup)
+
+The art agent's changes are in this commit but it never delivered its gap analysis:
+edits to `world/maps/lighting.ts`, `props/{batch,furniture,geometry,materials}.ts`,
+`maps/swatches.ts`, `mimic/visual/mimicGeometry.ts`, plus a re-captured
+`docs/screenshots/map-zone-a.jpeg`. Typecheck/tests/build are green over these changes
+and the round runs at ~54 fps on WebGPU against them, but WHAT was improved and what
+remains is undocumented. The next critic pass must judge the art bar visually against
+`assets-source/references/` and the og screenshots rather than trusting any claim here.
+Caution from this session: the agent's live editing was itself the cause of the earlier
+"WebGPU under 1 fps" scare (continuous shader recompilation under HMR churn) — measure
+performance only on a settled tree.
+
+## Phase 3 wiring (2026-08-02)
+
+### What works end to end
+
+A solo round runs from the main menu through every phase. `createLocalRound` builds a
+`LocalLoopbackAdapter` carrying the map's real `ObjectRegistry` and a real
+`SpatialValidatorImpl`, seats three auto-playing bots, and joins. `GameHost.enterRoundMode`
+disposes the menu room, builds `ShopWorld` (Curiosity Shop plus its environment), and
+creates a `RoundSession`. The session watches the one `RoundViewState` the `RoundDirector`
+publishes and hands the player whichever system that phase calls for:
+
+- **Lobby and the intro phases** — a slow survey camera turning inside the shop, with the
+  existing `LobbyHud`, `RoleRevealHud` and `BaselineHud` over it.
+- **Forge** — a `ForgeController` at the map's central Mimic spawn, with `ForgeHud` nested
+  inside `ForgePhaseHud`. An Inspector sees the staging HUD instead.
+- **Locking** — the session locks the disguise it has, publishes the paint layer, and sends
+  `lock_disguise`. Whatever the player has on the workbench is what the room gets.
+- **Inspection** — an Inspector takes `createInspectorSystem` (first-person rig, focus,
+  warrant gun) with pointer lock taken on a canvas click. A hider keeps the Forge open at
+  the hunt's own copy so they can go on shaping and creeping, with `HiderHud`'s watched
+  indicator and taunt over it (override 2).
+- **Reveal, Results, Rematch** — survey camera with `RevealHud` and `ResultsHud`.
+
+Bots lock authored disguises rather than the simulation's origin fallback:
+`botDisguises.ts` gives each one a starter arrangement standing on a different authored
+Mimic spawn, encoded through the new `mimic/poseWire.ts` bridge between the Forge's
+`DisguiseState` and the canonical `DisguiseWire`. `DisguiseTheatre` decodes every public
+disguise, poses a `MimicVisual` with it, and publishes a focus proxy carrying a neutral
+category and the live bounds, so a disguise is picked and shot by exactly the code path a
+shop prop is.
+
+### Verified
+
+- `pnpm -r typecheck`, `pnpm -r test` (392 client, 161 sim, 46 shared, 21 server) and
+  `pnpm -r build` all green.
+- New tests: `poseWire.test.ts` (every starter arrangement survives the crossing),
+  `localRound.test.ts` (a four-seat round reaches the hunt with three authored disguises in
+  different places), `disguiseTheatre.test.ts` (a public pose becomes geometry with
+  non-empty bounds, and the cast is added and removed correctly),
+  `roundAccusation.test.ts` (an Inspector standing over a bot's disguise catches it; the
+  same shot from across the shop and a shot before the eye is known are both refused
+  `spatial_rejected`; a wrong accusation on a real prop spends a warrant and fires an
+  innocent reaction).
+- In-browser on the WebGL 2 backend: menu → lobby with the bot roster → ready → start →
+  role reveal → baseline scan → Forge with the Mimic and its handles in the shop →
+  Inspection with the hider HUD, taunt and watched indicator. Screenshots in
+  `docs/screenshots/round-lobby.jpeg`, `round-forge.jpeg`, `round-inspection.jpeg`.
+
+### Audit follow-ups closed (2026-08-02, second pass)
+
+- **The simulation now judges geometry on the round path.** `RoundSpatialBridge` *is* the
+  `SpatialValidator` the loopback hands `MatchSimulation`, rather than holding one, because
+  the simulation takes its validator once at construction. That indirection also fixes the
+  frozen-settings bug: the host can change `accusationDistance` or `inspectorFocusDistance`
+  in the lobby and the bridge rebuilds the implementation under a stable identity, driven
+  from `RoundSession.update`. `roundAccusation.test.ts` proves a shot through the shop wall
+  is refused with detail `no_line_of_sight` specifically, so it is the wall and not the
+  range doing the refusing.
+- **A rate-limited taunt no longer disables the taunt.** `KNOWN_TAUNT_REFUSALS` was missing
+  `rate_limited` and `payload_too_large`, either of which the room or the relay can emit;
+  one busy second permanently set `tauntSupported = false` and hid the button for the rest
+  of the match. Both are now known refusals, covered in `tauntCapability.test.ts`.
+- **Peer paint renders.** `DisguiseTheatre` builds a `PaintLayer` per painted disguise,
+  loads it with `fromWireData`, and binds it through `PaintMaterialBinder` after the swatch
+  materials are applied, so the base colour is baked into the unpainted texel correctly. A
+  disguise whose layer is cleared has its own materials handed back. `RevealEntryView` now
+  carries `encodedPaint` too, so the reveal can show painted bodies.
+- **The Forge workspace comes from the map.** `WORKSPACE_HALF`/`WORKSPACE_MIN_Y`/
+  `WORKSPACE_MAX_Y` were TestRoom values (an 8 m box about the origin) and silently dragged
+  a Mimic back whenever it was posed past them; The Curiosity Shop runs 15 m by 11 m.
+  `ForgeController` now takes a `ForgeWorkspace`, defaulting to `TEST_ROOM_WORKSPACE` for
+  practice, and the round passes `SHOP_FORGE_WORKSPACE` (published by `ShopWorld` from the
+  zone constants). It reaches the walls and the ceiling rather than stopping short, because
+  wall-mounting and hanging are legal disguises. `localRound.test.ts` guards the regression:
+  several authored Mimic spawns fall outside the old box.
+
+### Giant scale: where the knob is
+
+Player scale already lives in one place, `inspector/navData.ts` `WORLD_SCALE`
+(`playerHeight` 0.35, `eyeHeight` 0.32, `stepHeight` 0.07, `groundSnap` 0.12,
+`climbActivationRadius` 0.15, `mantleSpeed` 0.55, `ladderSpeed` 0.35). `InspectorCamera`
+already derives its boom, shoulder offset and bob from `WORLD_SCALE.playerHeight`, and the
+Forge's §7.6 preview cameras now do the same: `INSPECTOR_EYE_HEIGHT_M` was a hard-coded
+1.6 m, a human-scale duplicate that showed a preview from five times the height any player
+in the match can ever stand at. It reads `WORLD_SCALE.eyeHeight` now, and the stand-back
+distance is a share of body height.
+
+What is *not* yet scale-derived, and is the retune pass's real work, is four numbers in
+`DEFAULT_MATCH_SETTINGS`: `inspectorMoveSpeed` 2.8, `hiderCreepSpeed` 0.6,
+`inspectorFocusDistance` 8.0 and `accusationDistance` 5.5. At 0.35 m tall an Inspector
+crossing the floor at 2.8 m/s covers eight body lengths a second. The workspace and the
+survey camera are room-sized rather than player-sized and should track the map, not the
+scale factor.
+
+### Stubbed, unverified or broken
+
+- **WebGPU renders the round at under one frame per second** while WebGL 2 renders it at
+  roughly 30. Measured by counting `RoundSession.update` calls: 2/1/0/0/0 per second on
+  WebGPU against 36/27/35/12 on WebGL 2, and still zero per second at the `low` tier, so it
+  is not shading cost. The same map in `map-viewer.html` on WebGPU managed about 12 fps.
+  The cause is not isolated. It was measured while a second agent was rewriting the map's
+  materials and lighting and while other WebGPU tabs were open, and the WebGL 2 run later
+  produced a burst of shader compile failures and a device loss, so contention or the
+  in-flight art edits may be involved. This is the single biggest open risk.
+- The Inspector's own round was not exercised in the browser: roles come off a random seed
+  and the draws landed on Mimic. The gun-to-catch chain is covered headlessly by
+  `roundAccusation.test.ts`, but pointer lock, the first-person camera and the reticle were
+  not seen running.
+- A hider's creep is capped by the authority but not by the client: dragging the pelvis
+  faster than `hiderCreepSpeed` is refused as `moved_too_fast` and the local body and the
+  room's copy disagree until the next accepted pose.
+- The Forge tool HUD and `HiderHud` overlap during the hunt, and the Forge's own header
+  still reads "FORGE · POSE" there. Presentation only.
+- Bots ready up and lock a disguise and do nothing else. A bot Inspector never accuses, so
+  a round where the bots inspect always runs the clock out.
+- The lobby has no room code, no settings controls and no way to change the bot count.
 
 ## Done
 

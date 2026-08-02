@@ -2,7 +2,7 @@ import * as THREE from "three/webgpu";
 import { DisposalBag } from "../../engine/DisposalBag";
 import type { QualitySettings, QualityTier } from "../../rendering/quality";
 import { PRACTICAL_PLACEMENTS } from "./placements";
-import { SHOP_MIN_Z, WINDOW_MAX_X, WINDOW_MIN_X } from "./zones";
+import { SHOP_MAX_X, SHOP_MAX_Z, SHOP_MIN_Z, WINDOW_MAX_X, WINDOW_MIN_X } from "./zones";
 
 /**
  * Lighting for The Curiosity Shop (§10.2, §18.3).
@@ -14,12 +14,18 @@ import { SHOP_MIN_Z, WINDOW_MAX_X, WINDOW_MIN_X } from "./zones";
  * pitch-black hiding spot is a fairness bug rather than atmosphere.
  */
 
-const MOON_COLOR = 0xa8c0e0;
-const MOON_KEY_INTENSITY = 3.4;
-const MOON_FILL_INTENSITY = 1.3;
-const SKY_COLOR = 0x35476b;
-const GROUND_COLOR = 0x241a12;
-const AMBIENT_COLOR = 0x2a2118;
+const MOON_COLOR = 0x8fb2e8;
+const MOON_KEY_INTENSITY = 4.2;
+const MOON_FILL_INTENSITY = 1.6;
+const SKY_COLOR = 0x3f5a92;
+const GROUND_COLOR = 0x2a1d12;
+/**
+ * The ambient is cold on purpose. Every practical in the shop is warm, so a
+ * warm ambient left the whole room one hue and flattened it; a cold ambient
+ * puts the shadows in blue and lets each lamp carve its own amber pool, which
+ * is the read the reference dioramas get their depth from (§17.3).
+ */
+const AMBIENT_COLOR = 0x1d2739;
 
 /** How many authored practicals a tier can afford as real lights. */
 const PRACTICAL_BUDGET: Readonly<Record<QualityTier, number>> = {
@@ -47,6 +53,7 @@ export class ShopLighting {
   private readonly hemisphere: THREE.HemisphereLight;
   private readonly ambient: THREE.AmbientLight;
 
+  private readonly coolFill: THREE.DirectionalLight;
   private moon: THREE.DirectionalLight;
   private counterSpot: THREE.SpotLight;
   private shadowKey: string;
@@ -59,12 +66,13 @@ export class ShopLighting {
     this.settings = settings;
     this.shadowKey = shadowSignature(settings);
 
-    this.hemisphere = new THREE.HemisphereLight(SKY_COLOR, GROUND_COLOR, 0.5);
-    this.ambient = new THREE.AmbientLight(AMBIENT_COLOR, 0.5);
+    this.hemisphere = new THREE.HemisphereLight(SKY_COLOR, GROUND_COLOR, 0.62);
+    this.ambient = new THREE.AmbientLight(AMBIENT_COLOR, 0.62);
     this.root.add(this.hemisphere);
     this.root.add(this.ambient);
 
     this.moon = this.buildMoon(settings);
+    this.coolFill = this.buildCoolFill();
     this.counterSpot = this.buildCounterSpot(settings);
     this.buildPracticals();
     this.applyQuality(settings);
@@ -99,6 +107,7 @@ export class ShopLighting {
 
   dispose(): void {
     this.releaseLight(this.moon);
+    this.releaseLight(this.coolFill);
     this.releaseLight(this.counterSpot);
     for (const light of this.practicals) {
       this.root.remove(light);
@@ -143,6 +152,25 @@ export class ShopLighting {
     return light;
   }
 
+  /**
+   * Unshadowed cold wash from high on the back wall.
+   *
+   * The back rooms are out of the moon's reach and every practical in them is
+   * amber, which left them a single hue whatever the materials did. This costs
+   * no shadow map and gives every silhouette a cold edge to separate it from
+   * the warm pool behind it, which is where the reference dioramas get their
+   * depth (§17.3, §18.3).
+   */
+  private buildCoolFill(): THREE.DirectionalLight {
+    const light = new THREE.DirectionalLight(0x7f9ad8, 1.15);
+    light.position.set(SHOP_MAX_X + 4, 7.5, SHOP_MAX_Z + 5);
+    light.target.position.set(WINDOW_CENTRE_X, 0.6, 0);
+    light.castShadow = false;
+    this.root.add(light);
+    this.root.add(light.target);
+    return light;
+  }
+
   /** Warm shadowed key over the counter, the one local light worth a map. */
   private buildCounterSpot(settings: QualitySettings): THREE.SpotLight {
     const spot = new THREE.SpotLight(0xffc48e, 15, 7, 0.95, 0.8, 2);
@@ -172,6 +200,11 @@ export class ShopLighting {
       }
       const light = new THREE.PointLight(practical.color, practical.intensity, practical.distance, 2);
       light.name = `practical:${placement.objectId}`;
+      // Real bulbs of different ages are not the same amber. A deterministic
+      // spread across the authored colour keeps the room from reading as one
+      // lamp copied twenty times, without changing what the manifest declares.
+      const drift = Math.sin(placement.position[0] * 12.9898 + placement.position[2] * 78.233) * 0.5;
+      light.color.offsetHSL(drift * 0.035, drift * 0.12, 0);
       light.position.set(
         placement.position[0],
         placement.position[1] + practical.offsetY,
@@ -217,11 +250,14 @@ export function createShopEnvironment(renderer: THREE.WebGPURenderer): THREE.Tex
     readonly position: readonly [number, number, number];
     readonly rotation: readonly [number, number, number];
   }[] = [
-    { color: 0x8fb0e2, scale: [6, 3], position: [-3.7, 1.8, SHOP_MIN_Z - 0.2], rotation: [0, 0, 0] },
+    // Two cool sources against three warm ones: the brass and the glazes need
+    // a hue to reflect on each side, or every specular in the room is amber.
+    { color: 0xa8c8ff, scale: [7, 3.4], position: [-3.7, 1.8, SHOP_MIN_Z - 0.2], rotation: [0, 0, 0] },
+    { color: 0x6f8fd0, scale: [4, 3], position: [7.6, 2.2, 3], rotation: [0, -Math.PI / 2, 0] },
     { color: 0xffb066, scale: [2, 2], position: [-6, 1.6, 3], rotation: [0, Math.PI / 2, 0] },
     { color: 0xffb066, scale: [2, 2], position: [2.1, 2.6, 3.9], rotation: [Math.PI / 2, 0, 0] },
     { color: 0x3a2a1c, scale: [20, 16], position: [0, -1.5, 0], rotation: [-Math.PI / 2, 0, 0] },
-    { color: 0x1a1410, scale: [20, 16], position: [0, 4.6, 0], rotation: [Math.PI / 2, 0, 0] },
+    { color: 0x16121a, scale: [20, 16], position: [0, 4.6, 0], rotation: [Math.PI / 2, 0, 0] },
   ];
 
   for (const entry of panels) {

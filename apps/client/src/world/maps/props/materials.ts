@@ -87,6 +87,21 @@ interface NoiseOptions {
   readonly stretch: number;
 }
 
+/**
+ * A colour map only ever darkens, because a texel cannot exceed one. The mean
+ * is reported in the renderer's linear working space so a material can divide
+ * its base colour by it and land back on the swatch it published, which keeps
+ * the sampled colour and the rendered colour the same thing (§7.12).
+ */
+interface DetailTexture {
+  readonly texture: THREE.CanvasTexture;
+  readonly linearMean: number;
+}
+
+function srgbToLinear(value: number): number {
+  return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+
 function createNoiseTexture(options: NoiseOptions): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = NOISE_SIZE;
@@ -123,12 +138,81 @@ function createNoiseTexture(options: NoiseOptions): THREE.CanvasTexture {
   return texture;
 }
 
+/** The same field as an sRGB albedo map, with its linear mean measured. */
+function createAlbedoTexture(options: NoiseOptions): DetailTexture {
+  const texture = createNoiseTexture(options);
+  texture.colorSpace = THREE.SRGBColorSpace;
+
+  let sum = 0;
+  let count = 0;
+  const span = options.high - options.low;
+  const field = tileableNoise(NOISE_SIZE, options.cells, options.octaves, options.seed);
+  for (let y = 0; y < NOISE_SIZE; y += 1) {
+    for (let x = 0; x < NOISE_SIZE; x += 1) {
+      const sx = Math.floor(x / options.stretch) % NOISE_SIZE;
+      const value = field[y * NOISE_SIZE + sx] ?? 0.5;
+      sum += srgbToLinear(Math.round((options.low + value * span) * 255) / 255);
+      count += 1;
+    }
+  }
+  return { texture, linearMean: count === 0 ? 1 : sum / count };
+}
+
+/**
+ * Vertical gradient down a lampshade: hottest at the hem where the bulb is
+ * closest, falling off towards the heading. A flat emissive shade reads as a
+ * white cylinder, which is what made every lamp in the room a featureless blob.
+ */
+function createShadeGradient(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 4;
+  canvas.height = 64;
+  const context = canvas.getContext("2d");
+  if (context === null) {
+    throw new Error("Curiosity Shop: 2D canvas context unavailable, cannot build the lampshade gradient");
+  }
+  // Canvas row 0 is the top of the texture, and three flips it onto v = 1, so
+  // the dim end is authored first and the hot hem last.
+  const gradient = context.createLinearGradient(0, 0, 0, canvas.height);
+  gradient.addColorStop(0, "#4a2f18");
+  gradient.addColorStop(0.55, "#c98f4d");
+  gradient.addColorStop(1, "#ffe4bd");
+  context.fillStyle = gradient;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/**
+ * How far a family's copies may drift from the published swatch. Ceramic and
+ * paper stock varies piece to piece; a painted carcass barely does, and glass
+ * not at all.
+ */
+const TINT_VARIANCE: Readonly<Record<MapSwatch["family"], number>> = {
+  wood: 0.11,
+  paint: 0.07,
+  metal: 0.08,
+  fabric: 0.09,
+  ceramic: 0.14,
+  glass: 0,
+  paper: 0.12,
+  plastic: 0.05,
+  stone: 0.07,
+};
+
 /** Materials the map renders but never offers as a sample. */
 export const BULB_MATERIAL = "bulb_warm";
 export const MOON_BACKDROP_MATERIAL = "moon_backdrop";
 /** Lit lampshade and cabinet glazing: sampleable as cloth and as glass. */
 export const LAMPSHADE_MATERIAL = "lampshade_linen";
 export const GLASS_PANE_MATERIAL = "glass_pane";
+/** Cold CRT wash in the Security Office: the one cool practical in the map. */
+export const SCREEN_MATERIAL = "screen_phosphor";
 
 const WARM_AMBER = 0xffb066;
 
@@ -138,6 +222,10 @@ export class ShopMaterials {
   private readonly grain: THREE.Texture;
   private readonly plaster: THREE.Texture;
   private readonly weave: THREE.Texture;
+  /** Albedo break-up, keyed by the detail map it accompanies. */
+  private readonly grainAlbedo: DetailTexture;
+  private readonly plasterAlbedo: DetailTexture;
+  private readonly weaveAlbedo: DetailTexture;
 
   constructor(private readonly bag: DisposalBag) {
     this.grain = this.registerTexture(
@@ -150,6 +238,19 @@ export class ShopMaterials {
       createNoiseTexture({ cells: 16, octaves: 3, seed: 47, low: 0.62, high: 1, repeat: 6, stretch: 1 }),
     );
 
+    // The albedo share their neighbours' seeds and cell counts, so the colour
+    // break-up sits exactly on the grain the bump map already carves. Two
+    // uncorrelated noises read as dirt on the lens rather than as a surface.
+    this.grainAlbedo = this.registerDetail(
+      createAlbedoTexture({ cells: 6, octaves: 4, seed: 29, low: 0.62, high: 1, repeat: 3, stretch: 8 }),
+    );
+    this.plasterAlbedo = this.registerDetail(
+      createAlbedoTexture({ cells: 4, octaves: 4, seed: 11, low: 0.86, high: 1, repeat: 4, stretch: 1 }),
+    );
+    this.weaveAlbedo = this.registerDetail(
+      createAlbedoTexture({ cells: 16, octaves: 3, seed: 47, low: 0.8, high: 1, repeat: 6, stretch: 1 }),
+    );
+
     for (const swatch of SHOP_SWATCHES) {
       this.materials.set(swatch.id, this.buildFromSwatch(swatch));
     }
@@ -157,6 +258,7 @@ export class ShopMaterials {
     this.materials.set(MOON_BACKDROP_MATERIAL, this.buildBackdrop());
     this.materials.set(LAMPSHADE_MATERIAL, this.buildLampshade());
     this.materials.set(GLASS_PANE_MATERIAL, this.buildGlassPane());
+    this.materials.set(SCREEN_MATERIAL, this.buildScreen());
   }
 
   get(id: string): THREE.Material {
@@ -188,6 +290,11 @@ export class ShopMaterials {
     return texture;
   }
 
+  private registerDetail(detail: DetailTexture): DetailTexture {
+    this.registerTexture(detail.texture);
+    return detail;
+  }
+
   private detailFor(family: MapSwatch["family"]): THREE.Texture | null {
     switch (family) {
       case "wood":
@@ -198,6 +305,21 @@ export class ShopMaterials {
         return this.plaster;
       case "fabric":
         return this.weave;
+      default:
+        return null;
+    }
+  }
+
+  private albedoFor(family: MapSwatch["family"]): DetailTexture | null {
+    switch (family) {
+      case "wood":
+        return this.grainAlbedo;
+      case "paint":
+      case "stone":
+      case "paper":
+        return this.plasterAlbedo;
+      case "fabric":
+        return this.weaveAlbedo;
       default:
         return null;
     }
@@ -214,11 +336,23 @@ export class ShopMaterials {
 
     material.name = `shop:${swatch.id}`;
     material.color.setRGB(swatch.baseColor[0], swatch.baseColor[1], swatch.baseColor[2], THREE.SRGBColorSpace);
+    // Per-copy tint rides on the vertex colours the geometry cache guarantees.
+    material.vertexColors = true;
+    material.userData["tintVariance"] = TINT_VARIANCE[swatch.family];
 
     if (detail !== null) {
       material.roughnessMap = detail;
       material.bumpMap = detail;
-      material.bumpScale = swatch.family === "fabric" ? 0.006 : 0.012;
+      // The blockout's relief was too fine to survive a lamp four metres away.
+      material.bumpScale = swatch.family === "fabric" ? 0.03 : 0.055;
+    }
+
+    const albedo = this.albedoFor(swatch.family);
+    if (albedo !== null) {
+      material.map = albedo.texture;
+      // A colour map only darkens, so the base colour is lifted by exactly what
+      // the map's mean takes away and the surface still averages to its swatch.
+      material.color.multiplyScalar(1 / albedo.linearMean);
     }
 
     if (material instanceof THREE.MeshPhysicalMaterial) {
@@ -270,10 +404,32 @@ export class ShopMaterials {
       side: THREE.DoubleSide,
       sheen: 0.4,
       emissive: new THREE.Color(0xffcf9c),
-      emissiveIntensity: 0.45,
+      // The gradient costs most of the shade its glow, so the peak is raised to
+      // keep the hem over the bloom threshold the pipeline uses (§18.5).
+      emissiveIntensity: 1.5,
     });
     material.name = "shop:lampshade";
+    material.emissiveMap = this.registerTexture(createShadeGradient());
     material.userData["swatchId"] = "linen_cream_02";
+    return this.bag.add(material);
+  }
+
+  /**
+   * Monitor phosphor. The Security Office is the only room lit cold, which is
+   * what makes it read as a different place rather than as more shop (§5.7).
+   */
+  private buildScreen(): THREE.Material {
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x0a1218,
+      roughness: 0.22,
+      metalness: 0,
+      emissive: new THREE.Color(0x4e86a8),
+      emissiveIntensity: 2.4,
+    });
+    material.name = "shop:screen";
+    material.userData["swatchId"] = "bakelite_black_01";
+    material.userData["tintVariance"] = 0.16;
+    material.vertexColors = true;
     return this.bag.add(material);
   }
 

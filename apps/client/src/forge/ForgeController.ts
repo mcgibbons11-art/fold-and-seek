@@ -37,6 +37,7 @@ import {
   type PanelProfileId,
   type PanelState,
 } from "../mimic/panels";
+import { WORLD_SCALE } from "../inspector/navData";
 import {
   boneIndex,
   clampBoneRotation,
@@ -196,6 +197,8 @@ export interface ForgeControllerOptions {
   readonly quality: QualitySettings;
   /** Where the Mimic stands, in world metres. */
   readonly origin?: THREE.Vector3;
+  /** The active map's playable volume. Defaults to the practice room's. */
+  readonly workspace?: ForgeWorkspace;
 }
 
 interface HandleDef {
@@ -245,17 +248,39 @@ const HANDLE_MIN_RADIUS = 0.022;
 const HANDLE_MAX_RADIUS = 0.075;
 
 /**
- * The Forge cannot push the Mimic outside the playable volume (§7.16). This is
- * the room's half-extent, not something smaller: a limit inside the walls would
- * make it impossible to touch one, and mounting on a wall is a legal disguise.
+ * The volume the Forge may push the Mimic around inside (§7.16). It reaches the
+ * room's own faces, not something smaller: a limit inside the walls would make
+ * it impossible to touch one, and mounting on a wall is a legal disguise.
+ *
+ * It belongs to the map, so the active map supplies it. A workspace left at the
+ * practice room's size silently drags a Mimic back toward the middle of a
+ * larger shop the moment it is posed near a far wall.
  */
-const WORKSPACE_HALF = 4;
-const WORKSPACE_MIN_Y = 0.02;
-const WORKSPACE_MAX_Y = 2.6;
+export interface ForgeWorkspace {
+  readonly minX: number;
+  readonly maxX: number;
+  readonly minY: number;
+  readonly maxY: number;
+  readonly minZ: number;
+  readonly maxZ: number;
+}
+
+/** The practice room's own volume, which is what Forge practice is staged in. */
+export const TEST_ROOM_WORKSPACE: ForgeWorkspace = {
+  minX: -4,
+  maxX: 4,
+  minY: 0.02,
+  maxY: 2.6,
+  minZ: -4,
+  maxZ: 4,
+};
 
 const SERVO_INTERVAL_MS = 130;
 
 const RAD_TO_DEG = 180 / Math.PI;
+
+/** How far back the §7.6 Inspector preview stands, as a share of body height. */
+const PREVIEW_STAND_BACK_PER_BODY_HEIGHT = 7.4;
 
 /** A panel's deploy slider covers this much of its swing (see MimicVisual). */
 const PANEL_DEPLOY_DEGREES = 90;
@@ -276,9 +301,15 @@ const ANCHOR_PROBE_DIRECTIONS: readonly THREE.Vector3[] = [
   new THREE.Vector3(1, 0, 0),
 ];
 
-/** An Inspector's eye height, and where they would stand to look (§7.6). */
-const INSPECTOR_EYE_HEIGHT_M = 1.6;
-const INSPECTOR_STAND_BACK_M = 2.6;
+/**
+ * Where an Inspector's eye would be, and how far back they would stand, for the
+ * §7.6 preview cameras. Both come from `WORLD_SCALE` rather than being written
+ * out here: the players are toy-sized inside a full-sized room, so a preview
+ * shot from a standing adult's height would show a view nobody in the match can
+ * ever have. `WORLD_SCALE.playerHeight` is the one knob that decides all of it.
+ */
+const INSPECTOR_EYE_HEIGHT_M = WORLD_SCALE.eyeHeight;
+const INSPECTOR_STAND_BACK_M = WORLD_SCALE.playerHeight * PREVIEW_STAND_BACK_PER_BODY_HEIGHT;
 const DOORWAY_POSITION = new THREE.Vector3(2.9, 1.62, 2.6);
 
 /** The seal marker is a disc lathed about +Y; this is the axis it aligns. */
@@ -361,6 +392,7 @@ export class ForgeController {
   private readonly handles: readonly Handle[];
   private readonly handleMeshes: readonly THREE.Mesh[];
   private readonly roomObjects: readonly THREE.Object3D[];
+  private readonly workspace: ForgeWorkspace;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointerNdc = new THREE.Vector2();
   private readonly commands = new ForgeCommandStack();
@@ -453,6 +485,7 @@ export class ForgeController {
     this.scene = options.scene;
     this.canvas = options.canvas;
     this.roomObjects = [...options.scene.children];
+    this.workspace = options.workspace ?? TEST_ROOM_WORKSPACE;
 
     this.camera = new THREE.PerspectiveCamera(40, 1, 0.05, 60);
 
@@ -1056,7 +1089,12 @@ export class ForgeController {
     this.emit();
   }
 
-  unlock(): void {
+  /**
+   * Returns the disguise to editable. `status` names why, because unlocking
+   * means two different things: leaving a practice lock, and reopening a
+   * manifested disguise so its owner can keep working during the hunt.
+   */
+  unlock(status = "Unlocked. Practice mode only."): void {
     if (!this.locked) {
       return;
     }
@@ -1070,13 +1108,22 @@ export class ForgeController {
     this.mimic.setSocketMarkersVisible(this.mode === "panels");
     this.mimic.setLocked(false);
     this.audio.play("ui_click");
-    this.status = "Unlocked. Practice mode only.";
+    this.status = status;
     this.emit();
   }
 
   /** The serialized disguise and paint produced by the last successful lock. */
   get lockedDisguise(): LockedDisguise | null {
     return this.lockedPayload;
+  }
+
+  /**
+   * The disguise as it currently stands, locked or not, for publishing a
+   * working pose to the room. Its `revision` advances only when the pose
+   * actually changed, so a publisher can skip a frame nobody edited.
+   */
+  get disguise(): DisguiseState {
+    return serializeDisguiseState(this.state);
   }
 
   // --- Internals -----------------------------------------------------------
@@ -1215,18 +1262,18 @@ export class ForgeController {
         this.pose.rootPosition.set(
           clamp(
             this.pose.rootPosition.x + (wall.point.x + wall.normal.x * WALL_MOUNT_STANDOFF_M - pelvis.x),
-            -WORKSPACE_HALF,
-            WORKSPACE_HALF,
+            this.workspace.minX,
+            this.workspace.maxX,
           ),
           clamp(
             this.pose.rootPosition.y + (WALL_MOUNT_HEIGHT_M - pelvis.y),
-            WORKSPACE_MIN_Y,
-            WORKSPACE_MAX_Y,
+            this.workspace.minY,
+            this.workspace.maxY,
           ),
           clamp(
             this.pose.rootPosition.z + (wall.point.z + wall.normal.z * WALL_MOUNT_STANDOFF_M - pelvis.z),
-            -WORKSPACE_HALF,
-            WORKSPACE_HALF,
+            this.workspace.minZ,
+            this.workspace.maxZ,
           ),
         );
         updateWorldTransforms(this.pose);
@@ -1247,9 +1294,9 @@ export class ForgeController {
         const pelvis = this.pose.worldPositions[boneIndex("pelvis")];
         if (pelvis !== undefined && Number.isFinite(lowest)) {
           this.pose.rootPosition.set(
-            clamp(this.pose.rootPosition.x + (perch.x - pelvis.x), -WORKSPACE_HALF, WORKSPACE_HALF),
-            clamp(this.pose.rootPosition.y + (perch.y - lowest), WORKSPACE_MIN_Y, WORKSPACE_MAX_Y),
-            clamp(this.pose.rootPosition.z + (perch.z - pelvis.z), -WORKSPACE_HALF, WORKSPACE_HALF),
+            clamp(this.pose.rootPosition.x + (perch.x - pelvis.x), this.workspace.minX, this.workspace.maxX),
+            clamp(this.pose.rootPosition.y + (perch.y - lowest), this.workspace.minY, this.workspace.maxY),
+            clamp(this.pose.rootPosition.z + (perch.z - pelvis.z), this.workspace.minZ, this.workspace.maxZ),
           );
           updateWorldTransforms(this.pose);
         }
@@ -1531,9 +1578,9 @@ export class ForgeController {
       return false;
     }
     this.pose.rootPosition.set(
-      clamp(this.pose.rootPosition.x + this.scratchVector.x, -WORKSPACE_HALF, WORKSPACE_HALF),
-      clamp(this.pose.rootPosition.y + this.scratchVector.y, WORKSPACE_MIN_Y, WORKSPACE_MAX_Y),
-      clamp(this.pose.rootPosition.z + this.scratchVector.z, -WORKSPACE_HALF, WORKSPACE_HALF),
+      clamp(this.pose.rootPosition.x + this.scratchVector.x, this.workspace.minX, this.workspace.maxX),
+      clamp(this.pose.rootPosition.y + this.scratchVector.y, this.workspace.minY, this.workspace.maxY),
+      clamp(this.pose.rootPosition.z + this.scratchVector.z, this.workspace.minZ, this.workspace.maxZ),
     );
     return true;
   }
@@ -2330,9 +2377,9 @@ export class ForgeController {
       return;
     }
     target.set(
-      clamp(this.scratchVector.x, -WORKSPACE_HALF, WORKSPACE_HALF),
-      clamp(this.scratchVector.y, WORKSPACE_MIN_Y, WORKSPACE_MAX_Y),
-      clamp(this.scratchVector.z, -WORKSPACE_HALF, WORKSPACE_HALF),
+      clamp(this.scratchVector.x, this.workspace.minX, this.workspace.maxX),
+      clamp(this.scratchVector.y, this.workspace.minY, this.workspace.maxY),
+      clamp(this.scratchVector.z, this.workspace.minZ, this.workspace.maxZ),
     );
 
     this.updateSnapCandidate(handle, target);
@@ -2424,7 +2471,7 @@ export class ForgeController {
     this.scratchUp.crossVectors(this.scratchRight, this.scratchForward).normalize();
     this.orbitTarget.addScaledVector(this.scratchRight, -deltaX * scale);
     this.orbitTarget.addScaledVector(this.scratchUp, deltaY * scale);
-    this.orbitTarget.y = clamp(this.orbitTarget.y, 0, WORKSPACE_MAX_Y);
+    this.orbitTarget.y = clamp(this.orbitTarget.y, 0, this.workspace.maxY);
     this.updateCamera();
   }
 

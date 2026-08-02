@@ -3,6 +3,11 @@ import { ForgeController } from "../forge/ForgeController";
 import { DiagnosticsOverlay, type DiagnosticsSnapshot } from "../rendering/DiagnosticsOverlay";
 import { FrameTimeProbe, pickDefaultTier, QUALITY_TIER_ORDER, qualitySettingsFor, type QualitySettings, type QualityTier } from "../rendering/quality";
 import { RendererManager, type DeviceEvent, type RenderBackend } from "../rendering/RendererManager";
+import { RoundSession } from "../gameplay/RoundSession";
+import type { RoundDirector } from "../gameplay/RoundDirector";
+import type { RoundSpatialBridge } from "../gameplay/roundSpatial";
+import type { NetworkAdapter } from "../networking/NetworkAdapter";
+import { ShopWorld } from "../world/ShopWorld";
 import { TestRoom } from "../world/TestRoom";
 import { DisposalBag } from "./DisposalBag";
 
@@ -44,6 +49,8 @@ export class GameHost {
   private readonly probe = new FrameTimeProbe();
 
   private world: TestRoom | null = null;
+  private shop: ShopWorld | null = null;
+  private session: RoundSession | null = null;
   private forge: ForgeController | null = null;
   private overlay: DiagnosticsOverlay | null = null;
   private settings: QualitySettings = qualitySettingsFor(BOOT_TIER);
@@ -93,9 +100,13 @@ export class GameHost {
     // still outstanding at this point.
     this.applyTier(pickDefaultTier(this.renderer.backend, null), true);
 
-    const world = new TestRoom(this.renderer.renderer, this.settings);
-    world.attachInput(this.canvas);
-    this.world = this.bag.add(world);
+    this.buildMenuRoom();
+    // Held through a closure rather than as a bag entry, because entering a
+    // round releases the menu room early and a bag has no way to forget it.
+    this.bag.addFn(() => {
+      this.world?.dispose();
+      this.world = null;
+    });
 
     this.overlay = this.bag.add(new DiagnosticsOverlay(this.canvas.parentElement ?? document.body));
 
@@ -126,15 +137,77 @@ export class GameHost {
     this.renderer.setSize(width, height, devicePixelRatio);
     this.world?.setViewport(width, height);
     this.forge?.setViewport(width, height);
+    this.session?.setViewport(width, height);
   }
 
   dispose(): void {
     this.disposed = true;
     this.stop();
     this.exitForgeMode();
-    this.world = null;
+    this.exitRoundMode();
     this.overlay = null;
     this.bag.dispose();
+  }
+
+  /**
+   * Swaps the menu room for The Curiosity Shop and hands the round its engine.
+   * The session decides what the player is holding from phase to phase; this
+   * only owns the scene it happens in and the frame that drives it.
+   */
+  enterRoundMode(
+    adapter: NetworkAdapter,
+    director: RoundDirector,
+    spatial: RoundSpatialBridge,
+  ): RoundSession {
+    if (this.session !== null) return this.session;
+
+    this.exitForgeMode();
+    this.world?.dispose();
+    this.world = null;
+
+    const shop = new ShopWorld(this.renderer.renderer, this.settings);
+    this.shop = shop;
+    this.bag.addFn(() => {
+      this.shop?.dispose();
+      this.shop = null;
+    });
+
+    this.session = new RoundSession({
+      scene: shop.scene,
+      canvas: this.canvas,
+      adapter,
+      director,
+      spatial,
+      quality: this.settings,
+    });
+    this.syncSize();
+    return this.session;
+  }
+
+  /** Ends the round and puts the menu room back behind the main menu. */
+  exitRoundMode(): void {
+    this.session?.dispose();
+    this.session = null;
+    this.shop?.dispose();
+    this.shop = null;
+    if (this.disposed) {
+      return;
+    }
+    this.buildMenuRoom();
+    this.syncSize();
+  }
+
+  private buildMenuRoom(): void {
+    if (this.world !== null) {
+      return;
+    }
+    const world = new TestRoom(this.renderer.renderer, this.settings);
+    world.attachInput(this.canvas);
+    this.world = world;
+  }
+
+  get roundSession(): RoundSession | null {
+    return this.session;
   }
 
   /**
@@ -201,6 +274,8 @@ export class GameHost {
     this.settings = qualitySettingsFor(tier);
     this.renderer.applyQuality(this.settings);
     this.world?.applyQuality(this.settings);
+    this.shop?.applyQuality(this.settings);
+    this.session?.applyQuality(this.settings);
     this.forge?.applyQuality(this.settings);
     this.adaptive.applyQuality(this.settings, performance.now());
     this.callbacks.onTierChange?.(tier, automatic);
@@ -219,7 +294,9 @@ export class GameHost {
 
   private readonly frame = (timeMs: number): void => {
     const world = this.world;
-    if (world === null) {
+    const session = this.session;
+    const shop = this.shop;
+    if (world === null && session === null) {
       return;
     }
 
@@ -232,7 +309,11 @@ export class GameHost {
 
     const forge = this.forge;
     if (!this.hidden) {
-      if (forge === null) {
+      if (session !== null) {
+        // A round is paced by the authority, not by this loop: the session
+        // reads the phase and drives whichever system currently has the player.
+        session.update(delta * 1000, timeMs);
+      } else if (world !== null && forge === null) {
         this.accumulator += delta;
         let steps = 0;
         while (this.accumulator >= FIXED_STEP && steps < MAX_STEPS_PER_FRAME) {
@@ -246,14 +327,18 @@ export class GameHost {
           this.accumulator = 0;
         }
         world.interpolate(this.accumulator / FIXED_STEP);
-      } else {
+      } else if (forge !== null) {
         // The Forge is driven by input, not by a fixed step: the room's own
         // camera sweep would only fight the player's orbit.
         forge.update();
       }
     }
 
-    this.renderer.render(world.scene, forge === null ? world.camera : forge.camera);
+    if (session !== null && shop !== null) {
+      this.renderer.render(shop.scene, session.camera);
+    } else if (world !== null) {
+      this.renderer.render(world.scene, forge === null ? world.camera : forge.camera);
+    }
     this.overlay?.update(timeMs, rawDelta * 1000, this.snapshot);
 
     if (!this.probeApplied) {
@@ -294,10 +379,19 @@ export class GameHost {
       renderScale: this.renderer.renderScale,
       widthPx: Math.round(resolution.x),
       heightPx: Math.round(resolution.y),
-      meshCount: this.world?.stats.meshCount ?? 0,
+      meshCount: this.world?.stats.meshCount ?? this.shopMeshCount(),
       effects: this.renderer.post.activeEffects,
     };
   };
+
+  /** Meshes the shop actually submits, in the same units TestRoom reports. */
+  private shopMeshCount(): number {
+    const stats = this.shop?.map.stats;
+    if (stats === undefined) {
+      return 0;
+    }
+    return stats.heroMeshes + stats.instancedMeshes + stats.mergedMeshes;
+  }
 
   private syncSize(): void {
     const rect = this.canvas.getBoundingClientRect();

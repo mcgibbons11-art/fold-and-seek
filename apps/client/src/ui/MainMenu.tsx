@@ -54,10 +54,18 @@ const disabledButtonStyle: CSSProperties = {
 
 export interface MainMenuProps {
   readonly backend: string;
+  readonly onPlayRound: () => void;
   readonly onForgePractice: () => void;
+  /** Set while the shop is being unpacked, so the round is not started twice. */
+  readonly starting?: boolean;
 }
 
-export function MainMenu({ backend, onForgePractice }: MainMenuProps): ReactElement {
+export function MainMenu({
+  backend,
+  onPlayRound,
+  onForgePractice,
+  starting = false,
+}: MainMenuProps): ReactElement {
   return (
     <div style={overlayStyle}>
       <div style={cardStyle}>
@@ -65,10 +73,15 @@ export function MainMenu({ backend, onForgePractice }: MainMenuProps): ReactElem
         <div style={{ opacity: 0.6, fontSize: 11, letterSpacing: "0.16em", marginBottom: 18 }}>
           THE CURIOSITY SHOP
         </div>
-        <button type="button" style={disabledButtonStyle} disabled>
-          Play a round — not yet
+        <button
+          type="button"
+          style={starting ? disabledButtonStyle : buttonStyle}
+          onClick={onPlayRound}
+          disabled={starting}
+        >
+          {starting ? "Opening the shop…" : "Play a round"}
         </button>
-        <button type="button" style={buttonStyle} onClick={onForgePractice}>
+        <button type="button" style={buttonStyle} onClick={onForgePractice} disabled={starting}>
           Forge Practice
         </button>
         <div style={{ opacity: 0.5, fontSize: 11, marginTop: 18 }}>

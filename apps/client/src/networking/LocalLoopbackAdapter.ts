@@ -2,9 +2,11 @@ import {
   MatchSimulation,
   type MatchCommand,
   type MatchSettingsPatch,
+  type ObjectRegistry,
   type PrivateSimEvent,
   type SimEvent,
   type SimOutput,
+  type SpatialValidator,
 } from "@foldseek/game-sim";
 import { MatchPhase } from "@foldseek/shared";
 import {
@@ -38,6 +40,19 @@ export interface LocalLoopbackOptions {
   readonly tickHz?: number;
   /** Clock source. Defaults to performance.now(), which never runs backwards. */
   readonly now?: () => number;
+  /**
+   * Geometry seam. Omitted, the simulation accepts every accusation from every
+   * distance, so a real round supplies the map's validator here (§28.4).
+   */
+  readonly spatial?: SpatialValidator;
+  /** Objects an Inspector may accuse. Defaults to the simulation's own fixture. */
+  readonly objectRegistry?: ObjectRegistry;
+  /**
+   * Encoded disguise an auto-playing bot locks, by seat order. Returning null
+   * leaves the bot to the simulation's §5.8 fallback, which is a starting
+   * arrangement at the world origin rather than anywhere in the room.
+   */
+  readonly botPose?: (index: number, playerId: string) => string | null;
 }
 
 export interface AddBotOptions {
@@ -89,7 +104,12 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
     this.displayName = displayName;
     this.setStatus({ status: "connecting", selfId: null, authorityId: null });
 
-    this.sim = new MatchSimulation(this.options.settings ?? {}, this.options.seed ?? 1);
+    this.sim = new MatchSimulation(
+      this.options.settings ?? {},
+      this.options.seed ?? 1,
+      this.options.spatial,
+      this.options.objectRegistry,
+    );
     this.publish(this.sim.addPlayer(LOCAL_SELF_ID, { displayName, isHost: true }));
     for (const bot of this.bots) {
       this.publish(this.sim.addPlayer(bot.playerId, { displayName: bot.displayName }));
@@ -173,7 +193,13 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
   sendCommandAs(playerId: string, command: MatchCommand): void {
     const sim = this.sim;
     if (!sim) {
+      // Dropping this on the floor leaves a lobby that looks alive and answers
+      // nothing, which is indistinguishable from a hung game. The refusal goes
+      // to the same stream every other refusal uses, so the player sees it.
       console.warn("[local] command before join, ignoring", command.type);
+      if (playerId === LOCAL_SELF_ID) {
+        this.rejectionSignal.emit({ type: command.type, reason: "not_connected" });
+      }
       return;
     }
     const result = sim.handleCommand(playerId, command);
@@ -294,7 +320,7 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
    */
   private driveBots(sim: MatchSimulation): void {
     const phase = sim.getPhase();
-    for (const bot of this.bots) {
+    for (const [index, bot] of this.bots.entries()) {
       if (!bot.autoPlay) continue;
       const state = sim.getPrivateStateFor(bot.playerId);
       if (!state) continue;
@@ -307,7 +333,8 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
         this.publish(
           sim.handleCommand(bot.playerId, {
             type: "lock_disguise",
-            payload: `${BOT_POSE_PREFIX}${bot.playerId}`,
+            payload:
+              this.options.botPose?.(index, bot.playerId) ?? `${BOT_POSE_PREFIX}${bot.playerId}`,
             revision: 1,
           }),
         );

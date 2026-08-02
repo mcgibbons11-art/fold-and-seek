@@ -36,6 +36,11 @@ export interface PartOptions {
   /** Hero parts cast by default; set false for bulbs, glass and thin trim. */
   readonly shadow?: boolean;
   readonly receive?: boolean;
+  /**
+   * Scales the tint spread the material declares. A book row wants far more
+   * spread than a cabinet carcass, and zero pins the part to the base colour.
+   */
+  readonly tint?: number;
 }
 
 /** Instance count at or below which a bucket is merged rather than instanced. */
@@ -66,6 +71,56 @@ interface Bucket {
   /** Shell geometry, which a disguise mounts against rather than hides among. */
   readonly structure: boolean;
   readonly matrices: THREE.Matrix4[];
+  /** Per-copy tint, parallel to `matrices`. White where the part is untinted. */
+  readonly tints: THREE.Color[];
+}
+
+/**
+ * Deterministic 0..1 hash of a world position. The map has to build identically
+ * on every client, so the tint cannot come from Math.random.
+ */
+function hashPosition(x: number, y: number, z: number, salt: number): number {
+  const raw = Math.sin(x * 127.1 + y * 311.7 + z * 74.7 + salt * 43.31) * 43758.5453;
+  return raw - Math.floor(raw);
+}
+
+/**
+ * Per-copy colour variance.
+ *
+ * Repeated props share one material, so without this every book on a shelf and
+ * every clock on the wall is the same swatch to the pixel, which is what makes
+ * a batched room read as a decal sheet rather than as stock. The tint jitters
+ * brightness and warmth about the base colour; it never rotates hue far enough
+ * to leave the authored palette (§17.3).
+ */
+function writeTint(target: THREE.Color, matrix: THREE.Matrix4, spread: number): void {
+  const x = matrix.elements[12] ?? 0;
+  const y = matrix.elements[13] ?? 0;
+  const z = matrix.elements[14] ?? 0;
+  const brightness = 1 + (hashPosition(x, y, z, 1) - 0.5) * 2 * spread;
+  const warmth = (hashPosition(x, y, z, 2) - 0.5) * 2 * spread * 0.7;
+  target.setRGB(
+    Math.max(brightness * (1 + warmth), 0.05),
+    Math.max(brightness, 0.05),
+    Math.max(brightness * (1 - warmth), 0.05),
+  );
+}
+
+/** Multiplies a baked copy's vertex colours by its tint. */
+function applyTintToGeometry(geometry: THREE.BufferGeometry, tint: THREE.Color): void {
+  const attribute = geometry.getAttribute("color");
+  if (attribute === undefined) {
+    return;
+  }
+  for (let i = 0; i < attribute.count; i += 1) {
+    attribute.setXYZ(
+      i,
+      attribute.getX(i) * tint.r,
+      attribute.getY(i) * tint.g,
+      attribute.getZ(i) * tint.b,
+    );
+  }
+  attribute.needsUpdate = true;
 }
 
 function triangleCount(geometry: THREE.BufferGeometry): number {
@@ -180,7 +235,16 @@ export class PropBatcher {
     // than with its own, so a brass collar shared with fifty other lamps is
     // still one draw call.
     const layer: PropLayer = this.hero ? "standard" : this.layer;
+    // The tint deliberately stays out of the bucket key: two copies of the same
+    // part in different tints must still share one draw call.
     const key = `${layer}|${String(this.structure)}|${geometry.uuid}|${material.uuid}`;
+    const tint = new THREE.Color(1, 1, 1);
+    const declared = material.userData["tintVariance"];
+    const spread = (typeof declared === "number" ? declared : 0) * (options.tint ?? 1);
+    if (spread > 0) {
+      writeTint(tint, this.local, spread);
+    }
+
     const bucket = this.buckets.get(key);
     if (bucket === undefined) {
       this.buckets.set(key, {
@@ -189,10 +253,12 @@ export class PropBatcher {
         material,
         structure: this.structure,
         matrices: [this.local.clone()],
+        tints: [tint],
       });
       return;
     }
     bucket.matrices.push(this.local.clone());
+    bucket.tints.push(tint);
   }
 
   end(): void {
@@ -246,11 +312,24 @@ export class PropBatcher {
           structure: bucket.structure,
           geometries: [],
         };
-        for (const matrix of bucket.matrices) {
+        for (let i = 0; i < bucket.matrices.length; i += 1) {
+          const matrix = bucket.matrices[i];
+          if (matrix === undefined) {
+            continue;
+          }
           // Merging needs one indexing scheme across the whole queue, and the
           // library mixes indexed lathes with non-indexed extrusions.
-          const baked = bucket.geometry.clone().applyMatrix4(matrix);
-          queue.geometries.push(baked.getIndex() === null ? baked : baked.toNonIndexed());
+          const cloned = bucket.geometry.clone().applyMatrix4(matrix);
+          let baked = cloned;
+          if (cloned.getIndex() !== null) {
+            baked = cloned.toNonIndexed();
+            cloned.dispose();
+          }
+          const tint = bucket.tints[i];
+          if (tint !== undefined) {
+            applyTintToGeometry(baked, tint);
+          }
+          queue.geometries.push(baked);
         }
         merges.set(key, queue);
         continue;
@@ -262,8 +341,15 @@ export class PropBatcher {
         if (matrix !== undefined) {
           instanced.setMatrixAt(i, matrix);
         }
+        const tint = bucket.tints[i];
+        if (tint !== undefined) {
+          instanced.setColorAt(i, tint);
+        }
       }
       instanced.instanceMatrix.needsUpdate = true;
+      if (instanced.instanceColor !== null) {
+        instanced.instanceColor.needsUpdate = true;
+      }
       instanced.castShadow = false;
       instanced.receiveShadow = true;
       instanced.userData["swatchId"] = bucket.material.userData["swatchId"];

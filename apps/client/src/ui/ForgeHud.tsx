@@ -187,9 +187,11 @@ function Section(props: { readonly title: string; readonly children: ReactNode }
 export interface ForgeHudProps {
   readonly controller: ForgeController;
   readonly onExit: () => void;
+  /** What leaving means here. Practice leaves the Forge; a round leaves the round. */
+  readonly exitLabel?: string;
 }
 
-export function ForgeHud({ controller, onExit }: ForgeHudProps): ReactElement {
+export function ForgeHud({ controller, onExit, exitLabel }: ForgeHudProps): ReactElement {
   const [state, setState] = useState<ForgeHudState>(() => controller.snapshot());
 
   useEffect(() => controller.subscribe(setState), [controller]);
@@ -351,7 +353,7 @@ export function ForgeHud({ controller, onExit }: ForgeHudProps): ReactElement {
           style={{ ...buttonStyle, marginBottom: 0 }}
           onClick={onExit}
         >
-          Leave the Forge
+          {exitLabel ?? "Leave the Forge"}
         </button>
       </div>
     </div>

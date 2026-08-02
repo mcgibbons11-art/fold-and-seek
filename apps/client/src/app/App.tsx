@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type ChangeEvent, type CSSProperties, type ReactElement } from "react";
 import { GameHost } from "../engine/GameHost";
 import type { ForgeController } from "../forge/ForgeController";
+import {
+  createLocalRound,
+  LOCAL_ROUND_NAME,
+  seedFromLocation,
+  type LocalRound,
+} from "../gameplay/localRound";
+import type { RoundSession } from "../gameplay/RoundSession";
 import { isQualityTier, QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
 import { RendererInitError, type DeviceEvent, type RenderBackend } from "../rendering/RendererManager";
 import { ForgeHud } from "../ui/ForgeHud";
 import { MainMenu } from "../ui/MainMenu";
+import { RoundHud } from "../ui/RoundHud";
 
 type BootState =
   | { kind: "detecting" }
@@ -15,6 +23,14 @@ type BootState =
 interface GpuCapableNavigator extends Navigator {
   readonly gpu?: { requestAdapter(): Promise<unknown | null> };
 }
+
+/** Everything one live round holds open, so leaving it releases all of it. */
+interface ActiveRound {
+  readonly round: LocalRound;
+  readonly session: RoundSession;
+}
+
+const DEFAULT_PLAYER_NAME = "Curator";
 
 const NO_BACKEND_HEADLINE = "This browser cannot draw the shop";
 const NO_BACKEND_DETAIL =
@@ -79,8 +95,11 @@ export function App(): ReactElement {
   const [boot, setBoot] = useState<BootState>({ kind: "detecting" });
   const [tier, setTier] = useState<QualityTier>("high");
   const [forge, setForge] = useState<ForgeController | null>(null);
+  const [round, setRound] = useState<ActiveRound | null>(null);
+  const [startingRound, setStartingRound] = useState(false);
   const [deviceFault, setDeviceFault] = useState<DeviceEvent | null>(null);
   const hostRef = useRef<GameHost | null>(null);
+  const roundRef = useRef<ActiveRound | null>(null);
 
   useEffect(() => {
     const canvas = document.getElementById("game-canvas");
@@ -149,6 +168,10 @@ export function App(): ReactElement {
 
     return () => {
       disposed = true;
+      // The round holds the adapter's ticking simulation, so it is released
+      // before the host that owns the scene its systems are attached to.
+      roundRef.current?.round.dispose();
+      roundRef.current = null;
       host?.dispose();
       hostRef.current = null;
     };
@@ -175,6 +198,56 @@ export function App(): ReactElement {
   const onLeaveForge = useCallback(() => {
     hostRef.current?.exitForgeMode();
     setForge(null);
+  }, []);
+
+  const onPlayRound = useCallback(() => {
+    const host = hostRef.current;
+    if (host === null || roundRef.current !== null) {
+      return;
+    }
+    setStartingRound(true);
+
+    const local = createLocalRound({ seed: seedFromLocation(window.location.search) });
+    const abandon = (error: unknown): void => {
+      console.error("[round] could not open the shop", error);
+      roundRef.current = null;
+      local.dispose();
+      host.exitRoundMode();
+      setStartingRound(false);
+    };
+
+    let active: ActiveRound;
+    try {
+      // Building the map allocates the whole shop against the live device, so
+      // it can fail outright. Leaving the menu on "opening" would strand the
+      // player with no way back and no reason given.
+      active = { round: local, session: host.enterRoundMode(local.adapter, local.director, local.spatial) };
+    } catch (error) {
+      abandon(error);
+      return;
+    }
+    roundRef.current = active;
+
+    local.adapter
+      .join(LOCAL_ROUND_NAME, DEFAULT_PLAYER_NAME)
+      .then(() => {
+        setRound(active);
+        setStartingRound(false);
+      })
+      .catch(abandon);
+  }, []);
+
+  const onLeaveRound = useCallback(() => {
+    const active = roundRef.current;
+    if (active === null) {
+      return;
+    }
+    roundRef.current = null;
+    setRound(null);
+    // Order matters: the host disposes the session, which is what unhooks the
+    // engine from an adapter that is still delivering events.
+    hostRef.current?.exitRoundMode();
+    active.round.dispose();
   }, []);
 
   // A device loss outranks the boot state: the renderer came up, so `boot` still
@@ -220,13 +293,24 @@ export function App(): ReactElement {
     );
   }
 
+  if (round !== null) {
+    return (
+      <RoundHud director={round.round.director} session={round.session} onLeave={onLeaveRound} />
+    );
+  }
+
   if (forge !== null) {
     return <ForgeHud controller={forge} onExit={onLeaveForge} />;
   }
 
   return (
     <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
-      <MainMenu backend={boot.backend} onForgePractice={onEnterForge} />
+      <MainMenu
+        backend={boot.backend}
+        onPlayRound={onPlayRound}
+        onForgePractice={onEnterForge}
+        starting={startingRound}
+      />
       <div style={panelStyle}>
         <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ opacity: 0.72 }}>quality</span>

@@ -93,6 +93,11 @@ const EMPTY_VOTES: Readonly<Record<ResultVoteCategory, string | null>> = {
  * Reasons an authority that understands `taunt` can refuse one. Anything else
  * coming back for a taunt means the room is running a build without the
  * command, so the client stops offering it rather than asking again.
+ *
+ * Transport-level refusals belong here too. A room that rate-limits or rejects
+ * an oversized message understood the command perfectly well; treating either
+ * as "this build has no taunt" would hide the button for the rest of the match
+ * over one busy second.
  */
 const KNOWN_TAUNT_REFUSALS: ReadonlySet<string> = new Set([
   "wrong_phase",
@@ -101,6 +106,8 @@ const KNOWN_TAUNT_REFUSALS: ReadonlySet<string> = new Set([
   "taunt_cooldown",
   "unknown_player",
   "player_disconnected",
+  "rate_limited",
+  "payload_too_large",
 ]);
 
 export class RoundDirector {
@@ -632,6 +639,7 @@ export class RoundDirector {
       return {
         publicObjectId: disguise.publicObjectId,
         encodedPose: disguise.encodedPose,
+        encodedPaint: disguise.encodedPaint,
         defaultArrangementId: disguise.defaultArrangementId,
         revealed: disguise.revealed,
         caught: caught !== null,

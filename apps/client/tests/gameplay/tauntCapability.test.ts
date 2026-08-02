@@ -121,6 +121,24 @@ describe("taunt capability", () => {
     director.dispose();
   });
 
+  /**
+   * A transport refusal is not a missing command. The relay and the room both
+   * rate-limit, and an oversized message is refused the same way, so treating
+   * either as "this build has no taunt" would hide the button for the rest of
+   * the match over one busy second.
+   */
+  it("keeps the taunt through a transport refusal", () => {
+    for (const reason of ["rate_limited", "payload_too_large"]) {
+      const adapter = new StubAdapter();
+      const director = new RoundDirector(adapter, { now: () => 0, tickIntervalMs: 0 });
+
+      adapter.refuse({ type: "taunt", reason });
+
+      expect(director.getState().capabilities.taunt, reason).toBe(true);
+      director.dispose();
+    }
+  });
+
   it("blocks the taunt gate on an unsupported authority whatever the round says", () => {
     const gate = computeAvailability({
       status: "connected",

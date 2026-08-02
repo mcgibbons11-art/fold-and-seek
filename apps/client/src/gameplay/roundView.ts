@@ -150,6 +150,8 @@ export interface AccusationFeedEntry {
 export interface RevealEntryView {
   readonly publicObjectId: string;
   readonly encodedPose: string;
+  /** Body paint, so the reveal shows the disguise as the room saw it. */
+  readonly encodedPaint: string | null;
   readonly defaultArrangementId: StarterArrangementId | null;
   /** True once the room may see what this object was. */
   readonly revealed: boolean;

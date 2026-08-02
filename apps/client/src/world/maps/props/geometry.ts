@@ -167,6 +167,27 @@ export function curtainPanel(width: number, height: number, folds: number, depth
  * BufferGeometry instance or nothing can be instanced, so every part asks for
  * geometry by key rather than building its own.
  */
+/**
+ * Gives a geometry a white vertex colour if it has none.
+ *
+ * Per-copy tint is written into this attribute, so every geometry has to carry
+ * it whether or not the copy in hand is tinted: a material enables
+ * `vertexColors` for the whole family, and merging demands one attribute set
+ * across the entire queue.
+ */
+export function ensureVertexColors(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  if (geometry.getAttribute("color") !== undefined) {
+    return geometry;
+  }
+  const position = geometry.getAttribute("position");
+  if (position === undefined) {
+    return geometry;
+  }
+  const colors = new Float32Array(position.count * 3).fill(1);
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
 export class GeometryCache {
   private readonly cache = new Map<string, THREE.BufferGeometry>();
 
@@ -177,7 +198,7 @@ export class GeometryCache {
     if (existing !== undefined) {
       return existing;
     }
-    const created = this.bag.add(factory());
+    const created = this.bag.add(ensureVertexColors(factory()));
     this.cache.set(key, created);
     return created;
   }
