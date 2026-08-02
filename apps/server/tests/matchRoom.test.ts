@@ -7,6 +7,7 @@ import {
   MatchRoom,
   SERVER_MESSAGE,
   FORGE_SNAPSHOT_MESSAGE,
+  MAX_CONSECUTIVE_TICK_FAILURES,
   PAINT_UPDATE_MESSAGE,
 } from "../src/rooms/MatchRoom";
 import { MAX_COMMANDS_PER_SECOND, MAX_MESSAGE_BYTES } from "../src/rooms/messageGuards";
@@ -470,5 +471,67 @@ describe("MatchRoom simulation wiring", () => {
 
     void harness.room.onLeave(host.asClient(), true);
     expect(harness.room.state.players.size).toBe(1);
+  });
+});
+
+describe("MatchRoom tick fault handling", () => {
+  interface FaultHarness {
+    readonly harness: TestRoom;
+    disconnects: number;
+    failNext(times: number): void;
+  }
+
+  /** Wraps the room's sim so the next N ticks throw, and counts disconnects. */
+  function faultHarness(): FaultHarness {
+    const harness = new TestRoom();
+    const sim = (harness.room as unknown as { sim: { tick(now: number): unknown } }).sim;
+    const realTick = sim.tick.bind(sim);
+    const pending = { remaining: 0 };
+    sim.tick = (now: number) => {
+      if (pending.remaining > 0) {
+        pending.remaining -= 1;
+        throw new Error("forced tick failure");
+      }
+      return realTick(now);
+    };
+    const fault: FaultHarness = {
+      harness,
+      disconnects: 0,
+      failNext: (times) => {
+        pending.remaining = times;
+      },
+    };
+    harness.room.disconnect = (() => {
+      fault.disconnects += 1;
+      return Promise.resolve([]);
+    }) as unknown as typeof harness.room.disconnect;
+    return fault;
+  }
+
+  it("absorbs transient failures below the closure threshold", () => {
+    const fault = faultHarness();
+    fault.harness.join("s1", "Ada");
+    fault.failNext(MAX_CONSECUTIVE_TICK_FAILURES - 1);
+    fault.harness.advance(MAX_CONSECUTIVE_TICK_FAILURES + 2);
+    expect(fault.disconnects).toBe(0);
+  });
+
+  it("closes the room after repeated consecutive failures instead of freezing silently", () => {
+    const fault = faultHarness();
+    fault.harness.join("s1", "Ada");
+    fault.failNext(MAX_CONSECUTIVE_TICK_FAILURES);
+    fault.harness.advance(MAX_CONSECUTIVE_TICK_FAILURES);
+    expect(fault.disconnects).toBe(1);
+  });
+
+  it("resets the consecutive count on a successful tick", () => {
+    const fault = faultHarness();
+    fault.harness.join("s1", "Ada");
+    fault.failNext(MAX_CONSECUTIVE_TICK_FAILURES - 1);
+    fault.harness.advance(MAX_CONSECUTIVE_TICK_FAILURES - 1);
+    fault.harness.advance(1);
+    fault.failNext(MAX_CONSECUTIVE_TICK_FAILURES - 1);
+    fault.harness.advance(MAX_CONSECUTIVE_TICK_FAILURES - 1);
+    expect(fault.disconnects).toBe(0);
   });
 });

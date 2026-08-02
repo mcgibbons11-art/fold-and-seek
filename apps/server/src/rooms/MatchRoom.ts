@@ -59,6 +59,13 @@ export const FORGE_SNAPSHOT_MESSAGE = "forge_snapshot";
 export const PAINT_UPDATE_MESSAGE = "paint_update";
 export const SIMULATION_TICK_MS = Math.round(1_000 / DEFAULT_MATCH_SETTINGS.serverTickHz);
 
+/**
+ * Consecutive failed ticks tolerated before the room closes itself. A sim that
+ * cannot tick at all would otherwise leave every client on a frozen phase with
+ * no rejection and no status change — a silent freeze instead of a loud fault.
+ */
+export const MAX_CONSECUTIVE_TICK_FAILURES = 5;
+
 export class PublicPlayerState extends Schema {
   @type("string") publicId = "";
   @type("string") displayName = "";
@@ -99,6 +106,7 @@ export class MatchRoom extends Room<MatchStateSchema> {
     DEFAULT_MATCH_SETTINGS.maxForgeCommandHz,
     RATE_WINDOW_MS,
   );
+  private consecutiveTickFailures = 0;
 
   override onCreate(options: MatchRoomOptions = {}): void {
     this.sim = new MatchSimulation(
@@ -313,8 +321,14 @@ export class MatchRoom extends Room<MatchStateSchema> {
     let output: SimOutput;
     try {
       output = this.sim.tick(Date.now());
+      this.consecutiveTickFailures = 0;
     } catch (error) {
+      this.consecutiveTickFailures += 1;
       console.error("[match-room] simulation failed on tick", error);
+      if (this.consecutiveTickFailures >= MAX_CONSECUTIVE_TICK_FAILURES) {
+        console.error("[match-room] simulation failing every tick; closing the room");
+        void this.disconnect();
+      }
       return;
     }
     this.publish(output);

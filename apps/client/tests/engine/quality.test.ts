@@ -9,7 +9,12 @@ import {
   type QualitySettings,
 } from "../../src/rendering/quality";
 
-/** Every key the renderer, the world, and the adaptive controller read. */
+/**
+ * Every key the renderer, the world, and the adaptive controller read — and
+ * nothing else. A field that no code consumes must not live in the presets;
+ * the exact-set assertion below is what keeps dead "advertised" effects from
+ * creeping back in.
+ */
 const REQUIRED_KEYS: readonly (keyof QualitySettings)[] = [
   "tier",
   "frameBudgetMs",
@@ -19,30 +24,19 @@ const REQUIRED_KEYS: readonly (keyof QualitySettings)[] = [
   "shadowMapSize",
   "shadowedLocalLights",
   "dynamicShadows",
-  "contactShadows",
   "gtao",
-  "ssgi",
-  "ssr",
-  "temporalAA",
-  "smaa",
-  "fxaa",
   "bloom",
-  "volumetrics",
-  "motionBlurReveal",
   "maxAnisotropy",
-  "textureLodBias",
   "clutterDensity",
-  "particleScale",
 ];
 
 describe("qualitySettingsFor", () => {
-  it("returns a complete, self-identifying preset for every tier", () => {
+  it("returns a self-identifying preset carrying exactly the consumed keys", () => {
+    const expected = [...REQUIRED_KEYS].sort();
     for (const tier of QUALITY_TIER_ORDER) {
       const settings = qualitySettingsFor(tier);
       expect(settings.tier).toBe(tier);
-      for (const key of REQUIRED_KEYS) {
-        expect(settings[key], `${tier}.${key}`).toBeDefined();
-      }
+      expect(Object.keys(settings).sort(), tier).toEqual(expected);
     }
   });
 

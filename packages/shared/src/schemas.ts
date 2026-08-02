@@ -495,8 +495,6 @@ export const CameraSampleSchema = z.strictObject({
   at: timestamp,
 });
 
-export const PingSchema = z.strictObject({ clientTime: timestamp });
-
 // --------------------------------------------------------------- match events
 
 const eventBase = {

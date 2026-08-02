@@ -15,20 +15,12 @@ export interface QualitySettings {
   readonly shadowMapSize: number;
   readonly shadowedLocalLights: number;
   readonly dynamicShadows: boolean;
-  readonly contactShadows: boolean;
+  /** Post effects are limited to what RenderPipeline composes. A new effect earns
+   * its field here only once the pipeline actually reads it. */
   readonly gtao: boolean;
-  readonly ssgi: boolean;
-  readonly ssr: boolean;
-  readonly temporalAA: boolean;
-  readonly smaa: boolean;
-  readonly fxaa: boolean;
   readonly bloom: boolean;
-  readonly volumetrics: boolean;
-  readonly motionBlurReveal: boolean;
   readonly maxAnisotropy: number;
-  readonly textureLodBias: number;
   readonly clutterDensity: number;
-  readonly particleScale: number;
 }
 
 export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
@@ -41,20 +33,10 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     shadowMapSize: 2048,
     shadowedLocalLights: 3,
     dynamicShadows: true,
-    contactShadows: true,
     gtao: true,
-    ssgi: true,
-    ssr: true,
-    temporalAA: true,
-    smaa: false,
-    fxaa: false,
     bloom: true,
-    volumetrics: true,
-    motionBlurReveal: true,
     maxAnisotropy: 16,
-    textureLodBias: 0,
     clutterDensity: 1,
-    particleScale: 1,
   },
   high: {
     tier: "high",
@@ -65,20 +47,10 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     shadowMapSize: 2048,
     shadowedLocalLights: 2,
     dynamicShadows: true,
-    contactShadows: true,
     gtao: true,
-    ssgi: false,
-    ssr: true,
-    temporalAA: true,
-    smaa: false,
-    fxaa: false,
     bloom: true,
-    volumetrics: true,
-    motionBlurReveal: true,
     maxAnisotropy: 8,
-    textureLodBias: 0,
     clutterDensity: 0.85,
-    particleScale: 0.8,
   },
   medium: {
     tier: "medium",
@@ -89,20 +61,10 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     shadowMapSize: 1024,
     shadowedLocalLights: 1,
     dynamicShadows: true,
-    contactShadows: true,
     gtao: true,
-    ssgi: false,
-    ssr: false,
-    temporalAA: false,
-    smaa: true,
-    fxaa: false,
     bloom: true,
-    volumetrics: false,
-    motionBlurReveal: false,
     maxAnisotropy: 4,
-    textureLodBias: 0.25,
     clutterDensity: 0.6,
-    particleScale: 0.55,
   },
   low: {
     tier: "low",
@@ -113,20 +75,10 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     shadowMapSize: 1024,
     shadowedLocalLights: 0,
     dynamicShadows: true,
-    contactShadows: false,
     gtao: false,
-    ssgi: false,
-    ssr: false,
-    temporalAA: false,
-    smaa: false,
-    fxaa: true,
     bloom: false,
-    volumetrics: false,
-    motionBlurReveal: false,
     maxAnisotropy: 2,
-    textureLodBias: 0.5,
     clutterDensity: 0.4,
-    particleScale: 0.35,
   },
   light: {
     tier: "light",
@@ -137,20 +89,10 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     shadowMapSize: 512,
     shadowedLocalLights: 0,
     dynamicShadows: false,
-    contactShadows: false,
     gtao: false,
-    ssgi: false,
-    ssr: false,
-    temporalAA: false,
-    smaa: false,
-    fxaa: true,
     bloom: false,
-    volumetrics: false,
-    motionBlurReveal: false,
     maxAnisotropy: 1,
-    textureLodBias: 1,
     clutterDensity: 0.25,
-    particleScale: 0.2,
   },
 };
 
