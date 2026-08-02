@@ -1,5 +1,70 @@
 # STATUS
 
+## Paint parity: the glow channel, and an undo that undoes paint (2026-08-02)
+
+**Two halves of MECCHA's paint panel were still missing** (CLAUDE.md override 3).
+The panel promised Metallic, Smoothness and Emissive; only the first two existed.
+And Ctrl+Z after a brush stroke reverted the previous *pose* edit while leaving
+every stamp on the body, because paint lived outside the Forge's history
+altogether. That is worse than an undo that does nothing: the player loses work
+they were not asking to lose and keeps the work they were.
+
+**Emissive is now a per-stroke channel, end to end**, from the panel slider
+through `PaintStroke`, the wire, the atlas and both material binders.
+
+**A painted stroke glows in its own colour**, which is the reading the original
+gives. Three multiplies `emissiveMap` by the material's `emissive` colour, so a
+single-channel mask could only ever glow in one colour for the whole body, and
+the material atlas has no free colour to lend: its red is held at full so an
+aoMap bound to the same texture reads unoccluded. The glow therefore needs a
+third RGB atlas, and **that atlas is allocated only when a stroke first asks for
+one**. A full atlas is four megabytes, so a body with no glowing paint on it pays
+nothing: no texture, no shader variant, and not one texel of its image moved.
+Allocation replays the whole stroke log rather than only the stroke that
+triggered it, because matt paint already on the body has to go on covering the
+swatch's own glow. Both binders bake the part's own emissive into the unpainted
+texel and set the material's emissive to white, the same passthrough already used
+for roughness and metalness, so a self-lit swatch under an empty layer is
+unchanged. `RenderPipeline` bloom reads the emissive buffer at threshold 0.25, so
+a marking painted up reads as a lit sign.
+
+**The wire is version 3 and a stroke is twelve bytes.** A full room of twelve
+maximum layers measures 123,031 bytes and uses sixteen of the twenty
+`PAINT_STATE_KEYS`, printed by the "body paint range" test. The decoder refuses
+version 2 outright rather than widening old strokes with defaults.
+
+**Paint joins the Forge's history as one entry per drag.** `PaintLayer` opens a
+batch on the press and closes it on the release, so eighty stamps are one undo.
+Both commands are *recorded* rather than applied on push: the brush painted the
+drag as the pointer moved, so replaying it would paint it twice, which is what
+`ForgeCommandStack.pushApplied` exists for. Undo pops the batch and reprints the
+atlas from the surviving log, and it restores the strokes the 768-stroke ceiling
+evicted to make room, so undoing at the ceiling does not leave the body
+permanently short of its oldest marks. `clearAll` is undoable too, carrying the
+whole log it threw away. A revert whose batch is no longer the end of the log
+throws rather than erasing somebody else's strokes.
+
+**How it was checked.** 33 new tests, 907 green across the four projects,
+typecheck and `vite build` clean. The undo tests assert the *old* behaviour is
+gone, not only that the new one exists: a Forge integration test applies an
+arrangement, drives a real drag through the real pointer handlers, and asserts
+the undo label is "paint stroke", the strokes go, and the pose command is still
+sitting behind it untouched. The eviction test paints the log to its ceiling and
+checks the restored image hashes identical. Atlas checks compare texels, not just
+stroke counts, because a log and an image that disagree is exactly what a peer
+would then fail to reproduce.
+
+**Not verified: how the glow actually looks.** Every check here is headless or
+jsdom. That the emissive map reaches the node material's emissive MRT output
+under WebGL2, and that the bloom threshold is a good one for painted markings
+specifically, has not been seen in a browser and wants an eye on it.
+
+**Also touched, outside the task's file list**, and flagged deliberately:
+`MergedMimicBody` (the hunt's merged path is the *other* paint binder — without
+it a peer's glow would render only in the Forge) and `disguiseTheatre`'s prewarm,
+which now warms the glowing paint variant on a second body so a glowing peer
+turning up mid-hunt costs no shader compile.
+
 ## Two connections of one account are two players (2026-08-02)
 
 **The gap this closes**, found by running the real Portals editor's two-player

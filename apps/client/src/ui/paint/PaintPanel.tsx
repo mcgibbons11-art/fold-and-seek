@@ -289,6 +289,23 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
         }}
       />
 
+      {/* A stroke glows in its own colour, so this is a strength and not a
+          second colour to pick. Bloom reads the emissive buffer, which is why a
+          marking painted up here reads as a lit sign rather than a pale one. */}
+      <div style={labelStyle}>Emissive {Math.round(state.emissive * 100)}</div>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        aria-label="Emissive"
+        value={state.emissive}
+        style={sliderStyle}
+        onChange={(event) => {
+          tool.setEmissive(Number(event.target.value));
+        }}
+      />
+
       <div style={{ ...labelStyle, marginTop: 10, display: "flex", justifyContent: "space-between" }}>
         <span>Saved</span>
         <button

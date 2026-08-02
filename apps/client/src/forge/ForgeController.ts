@@ -81,6 +81,8 @@ import {
   createAnchorCommand,
   createCompositeCommand,
   createMaterialCommand,
+  createPaintClearCommand,
+  createPaintStrokeCommand,
   createPanelCommand,
   createPoseCommand,
   createReplaceCommand,
@@ -88,6 +90,7 @@ import {
   ForgeCommandStack,
   poseSnapshotsEqual,
   type ForgeCommand,
+  type PaintHistoryTarget,
   type PoseSnapshot,
 } from "./forgeCommands";
 import { resolveSurfaceSwatch } from "./roomSwatches";
@@ -524,6 +527,26 @@ export class ForgeController {
   private readonly visiblePaintMeshes: THREE.Object3D[] = [];
   private readonly paintPickTargets: THREE.Object3D[] = [];
   private readonly paintTool: PaintTool;
+  /**
+   * How a recorded paint command reaches the brushwork. The tool is built in the
+   * constructor and these are only ever called from a command, long after, so
+   * reading it through `this` here is safe and keeps the commands free of any
+   * knowledge of the atlas.
+   */
+  private readonly paintHistory: PaintHistoryTarget = {
+    reapplyBatch: (batch) => {
+      this.paintTool.reapplyBatch(batch);
+    },
+    revertBatch: (batch) => {
+      this.paintTool.revertBatch(batch);
+    },
+    restoreLog: (strokes) => {
+      this.paintTool.restoreLog(strokes);
+    },
+    clearPaint: () => {
+      this.paintTool.clearSilently();
+    },
+  };
 
   private state: DisguiseState;
   private lockedPayload: LockedDisguise | null = null;
@@ -661,6 +684,25 @@ export class ForgeController {
       },
       setCastShadow: (enabled) => {
         this.mimic.setCastShadow(enabled);
+      },
+      // Paint joins the same history as the pose, so Ctrl+Z after a brush stroke
+      // takes back the brush stroke. Both are recorded rather than applied: the
+      // brush painted the drag as the pointer moved and the clear already threw
+      // the log away, so the history only has to remember how to undo them.
+      onStrokeBatch: (batch) => {
+        this.commands.pushApplied(
+          createPaintStrokeCommand(this.paintHistory, batch, performance.now()),
+          this.state,
+        );
+        this.emit();
+      },
+      onClear: (cleared) => {
+        if (cleared.length === 0) return;
+        this.commands.pushApplied(
+          createPaintClearCommand(this.paintHistory, cleared, performance.now()),
+          this.state,
+        );
+        this.emit();
       },
       ownsPointerEvent: (event) => this.ownsPointerEvent(event),
     });

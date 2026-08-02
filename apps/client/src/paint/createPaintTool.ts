@@ -1,8 +1,10 @@
 import * as THREE from "three/webgpu";
 
+import type { PaintStrokeWire } from "@foldseek/shared";
+
 import { Eyedropper } from "./Eyedropper";
 import { PaintBrushController, DEFAULT_BRUSH_RADIUS } from "./PaintBrushController";
-import { PaintLayer, type PaintStroke } from "./PaintLayer";
+import { PaintLayer, type PaintStroke, type PaintStrokeBatch } from "./PaintLayer";
 import { PaintMaterialBinder } from "./PaintMaterialBinder";
 import { PaintStore, type PaintPanelState } from "./paintStore";
 import type { Hsv, Rgb } from "./color";
@@ -26,7 +28,14 @@ export interface PaintToolDeps {
   /** Everything the eyedropper may sample. Defaults to the Mimic alone. */
   readonly getPickTargets?: () => readonly THREE.Object3D[];
   readonly onStroke?: (stroke: PaintStroke) => void;
-  readonly onClear?: () => void;
+  /**
+   * One completed drag, for a caller that keeps a history. Fired on pointer-up
+   * rather than per stamp, because a drag is one thing the player did and so
+   * one thing an undo should take back.
+   */
+  readonly onStrokeBatch?: (batch: PaintStrokeBatch) => void;
+  /** The whole log as it stood before `clearAll` threw it away. */
+  readonly onClear?: (cleared: readonly PaintStrokeWire[]) => void;
   /** Wired to MimicVisual.setCastShadow for the panel's shadow toggle. */
   readonly setCastShadow?: (enabled: boolean) => void;
   /** False for a pointer event the HUD owns. */
@@ -47,7 +56,16 @@ export interface PaintTool {
   setOpacity(opacity: number): void;
   setMetallic(metallic: number): void;
   setSmoothness(smoothness: number): void;
+  setEmissive(emissive: number): void;
   setEraser(enabled: boolean): void;
+  /** Puts a reverted batch back on the body, for the history's redo. */
+  reapplyBatch(batch: PaintStrokeBatch): void;
+  /** Takes a batch off the body, for the history's undo. */
+  revertBatch(batch: PaintStrokeBatch): void;
+  /** Restores a whole log, for undoing a clear. */
+  restoreLog(strokes: readonly PaintStrokeWire[]): void;
+  /** Clears without telling `onClear`, for a history replaying its own clear. */
+  clearSilently(): void;
   /** Pins or unpins the current colour on the quick-swap row. */
   toggleSavedColor(): void;
   setShadow(enabled: boolean): void;
@@ -112,6 +130,13 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
       store.patch({ strokeCount: layer.strokeCount });
       deps.onStroke?.(stroke);
     },
+    onStrokeStart: () => {
+      layer.beginStrokeBatch();
+    },
+    onStrokeEnd: () => {
+      const batch = layer.endStrokeBatch();
+      if (batch !== null) deps.onStrokeBatch?.(batch);
+    },
   });
 
   brush.setColor(store.getState().color);
@@ -172,6 +197,26 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
       store.patch({ smoothness: brush.getSmoothness() });
     },
 
+    setEmissive(emissive: number): void {
+      brush.setEmissive(emissive);
+      store.patch({ emissive: brush.getEmissive() });
+    },
+
+    reapplyBatch(batch: PaintStrokeBatch): void {
+      layer.reapplyStrokeBatch(batch);
+      store.patch({ strokeCount: layer.strokeCount });
+    },
+
+    revertBatch(batch: PaintStrokeBatch): void {
+      layer.revertStrokeBatch(batch);
+      store.patch({ strokeCount: layer.strokeCount });
+    },
+
+    restoreLog(strokes: readonly PaintStrokeWire[]): void {
+      layer.restoreStrokeLog(strokes);
+      store.patch({ strokeCount: layer.strokeCount });
+    },
+
     toggleSavedColor(): void {
       store.toggleSavedColor(store.getState().color);
     },
@@ -203,9 +248,15 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
     },
 
     clearAll(): void {
+      const cleared = layer.captureStrokeLog();
       layer.clear();
       store.patch({ strokeCount: 0, status: "Paint cleared." });
-      deps.onClear?.();
+      deps.onClear?.(cleared);
+    },
+
+    clearSilently(): void {
+      layer.clear();
+      store.patch({ strokeCount: 0 });
     },
 
     getState(): PaintPanelState {

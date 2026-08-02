@@ -1,4 +1,7 @@
+import type { PaintStrokeWire } from "@foldseek/shared";
+
 import type { AnchorState, DisguiseState, MaterialAssignment } from "../mimic/disguiseState";
+import type { PaintStrokeBatch } from "../paint/PaintLayer";
 import { clonePanelState, type PanelState } from "../mimic/panels";
 import { SEGMENT_BONES } from "../mimic/rig";
 import { cloneSegmentForm, type SegmentFormState } from "../mimic/segmentForm";
@@ -263,6 +266,62 @@ export function createAnchorCommand(
 }
 
 /**
+ * Body paint in the same history as the pose (§7.14, CLAUDE.md override 3).
+ *
+ * Paint is the one edit that does not live in `DisguiseState`: the strokes are
+ * in the PaintLayer, which owns the atlas they rasterize into. The command
+ * therefore ignores the state it is handed and drives the layer through the
+ * seams the paint tool exposes. Everything else about it is ordinary, which is
+ * the point: Ctrl+Z after a brush stroke has to take back the brush stroke, not
+ * whatever the player did with the handles before it.
+ */
+export interface PaintHistoryTarget {
+  reapplyBatch(batch: PaintStrokeBatch): void;
+  revertBatch(batch: PaintStrokeBatch): void;
+  restoreLog(strokes: readonly PaintStrokeWire[]): void;
+  clearPaint(): void;
+}
+
+/** One drag: however many stamps it laid down, it is one entry. */
+export function createPaintStrokeCommand(
+  paint: PaintHistoryTarget,
+  batch: PaintStrokeBatch,
+  issuedAt: number,
+): ForgeCommand {
+  return {
+    id: nextCommandId("paint"),
+    issuedAt,
+    label: "paint stroke",
+    apply: () => {
+      paint.reapplyBatch(batch);
+    },
+    revert: () => {
+      paint.revertBatch(batch);
+    },
+  };
+}
+
+/** Clearing the paint, which is the one gesture that can throw away a lot of it. */
+export function createPaintClearCommand(
+  paint: PaintHistoryTarget,
+  cleared: readonly PaintStrokeWire[],
+  issuedAt: number,
+): ForgeCommand {
+  const before = [...cleared];
+  return {
+    id: nextCommandId("paint"),
+    issuedAt,
+    label: "clear paint",
+    apply: () => {
+      paint.clearPaint();
+    },
+    revert: () => {
+      paint.restoreLog(before);
+    },
+  };
+}
+
+/**
  * Groups commands so one gesture is one undo. A mirrored edit writes two
  * segments; the player made a single move and expects a single undo to take it
  * back. Reverting runs in reverse order so overlapping writes unwind cleanly.
@@ -354,6 +413,15 @@ export class ForgeCommandStack {
   /** Applies `command` to `state` and records it. */
   push(command: ForgeCommand, state: DisguiseState): void {
     command.apply(state);
+    this.pushApplied(command, state);
+  }
+
+  /**
+   * Records a command whose effect the player has already produced. A brush
+   * paints as the pointer moves, so the drag is on the body before the history
+   * hears about it and applying the command again would paint it twice.
+   */
+  pushApplied(command: ForgeCommand, state: DisguiseState): void {
     state.revision += 1;
     this.commands.length = this.cursor;
     this.commands.push(command);

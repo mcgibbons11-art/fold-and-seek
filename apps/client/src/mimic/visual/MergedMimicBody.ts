@@ -1,6 +1,7 @@
 import * as THREE from "three/webgpu";
 
 import type { PaintLayer } from "../../paint/PaintLayer";
+import { baseEmissiveOf } from "../../paint/PaintMaterialBinder";
 import { paintTargetOfObject, paintTileTransform } from "../../paint/paintTargets";
 import type { MimicVisual } from "./MimicVisual";
 
@@ -69,6 +70,9 @@ interface ColoredMaterial extends THREE.Material {
   metalness?: number;
   roughnessMap?: THREE.Texture | null;
   metalnessMap?: THREE.Texture | null;
+  emissive?: THREE.Color;
+  emissiveIntensity?: number;
+  emissiveMap?: THREE.Texture | null;
 }
 
 function isColored(material: THREE.Material): material is ColoredMaterial {
@@ -126,6 +130,8 @@ export class MergedMimicBody {
   private readonly groups = new Map<string, MergedGroup>();
   /** One paint clone per source material, so a pose change never mints one. */
   private readonly paintClones = new Map<string, THREE.Material>();
+  /** Whether those clones were cut carrying the layer's glow atlas. */
+  private paintEmissiveBound = false;
   private readonly rootInverse = new THREE.Matrix4();
   private readonly partMatrix = new THREE.Matrix4();
   private readonly normalMatrix = new THREE.Matrix3();
@@ -188,6 +194,7 @@ export class MergedMimicBody {
         clone.dispose();
       }
       this.paintClones.clear();
+      this.paintEmissiveBound = false;
       this.paint = layer;
     }
     this.bindPaint();
@@ -486,6 +493,20 @@ export class MergedMimicBody {
     const layer = this.paint;
     const baseColors: [number, readonly [number, number, number]][] = [];
     const baseMaterials: [number, number, number][] = [];
+    const baseEmissives: [number, readonly [number, number, number]][] = [];
+
+    // A layer grows its glow atlas the first time a stroke asks for one, which
+    // can happen after these clones were cut. The clones are keyed by source
+    // material, so the only way to pick the map up is to cut them again, and
+    // this flips once per layer at most.
+    const wantEmissive = layer !== null && layer.hasEmissive;
+    if (wantEmissive !== this.paintEmissiveBound) {
+      for (const clone of this.paintClones.values()) {
+        clone.dispose();
+      }
+      this.paintClones.clear();
+      this.paintEmissiveBound = wantEmissive;
+    }
 
     for (const group of this.groups.values()) {
       const source = group.source;
@@ -495,7 +516,7 @@ export class MergedMimicBody {
       }
       let clone = this.paintClones.get(source.uuid);
       if (clone === undefined) {
-        clone = paintCloneOf(source, layer);
+        clone = paintCloneOf(source, layer, wantEmissive);
         this.paintClones.set(source.uuid, clone);
       }
       group.mesh.material = clone;
@@ -508,12 +529,16 @@ export class MergedMimicBody {
         if (source.roughness !== undefined && source.metalness !== undefined) {
           baseMaterials.push([target, source.roughness, source.metalness]);
         }
+        if (source.emissive !== undefined) {
+          baseEmissives.push([target, baseEmissiveOf(source.emissive, source.emissiveIntensity)]);
+        }
       }
     }
 
     if (layer === null) return;
     if (baseColors.length > 0) layer.setBaseColors(baseColors);
     if (baseMaterials.length > 0) layer.setBaseMaterials(baseMaterials);
+    if (baseEmissives.length > 0) layer.setBaseEmissives(baseEmissives);
   }
 }
 
@@ -523,7 +548,11 @@ export class MergedMimicBody {
  * to one: every one of these maps multiplies its scalar in three, and an empty
  * layer has to look exactly like the material underneath it.
  */
-function paintCloneOf(source: ColoredMaterial, layer: PaintLayer): THREE.Material {
+function paintCloneOf(
+  source: ColoredMaterial,
+  layer: PaintLayer,
+  withEmissive: boolean,
+): THREE.Material {
   const clone = source.clone() as ColoredMaterial;
   clone.name = `${source.name}+paint`;
   clone.color.setRGB(1, 1, 1);
@@ -534,6 +563,13 @@ function paintCloneOf(source: ColoredMaterial, layer: PaintLayer): THREE.Materia
     const response = layer.getMaterialTexture();
     clone.roughnessMap = response;
     clone.metalnessMap = response;
+  }
+  // The glow atlas carries the colour as well as the strength of the glow, so
+  // the material's own emissive goes to white and lets the map decide both.
+  if (withEmissive && clone.emissive !== undefined) {
+    clone.emissive.setRGB(1, 1, 1);
+    clone.emissiveIntensity = 1;
+    clone.emissiveMap = layer.getEmissiveTexture();
   }
   return clone;
 }

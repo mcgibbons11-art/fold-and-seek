@@ -27,6 +27,7 @@ function stroke(index: number): PaintStrokeWire {
     opacity: 0.2 + ((index * 0.011) % 0.8),
     metallic: ((index * 17) % 256) / 255,
     smoothness: ((index * 23) % 256) / 255,
+    emissive: ((index * 29) % 256) / 255,
     erase: index % 5 === 0,
     continued: index % 3 !== 0,
   });
@@ -91,10 +92,10 @@ describe("paint layer encoding", () => {
     // transport quietly skips. Base64 is ASCII, so characters are bytes.
     const strokes = Array.from({ length: MAX_PAINT_STROKES }, (_, index) => stroke(index));
     expect(MAX_PAINT_STROKES).toBe(768);
-    expect(PAINT_STROKE_BYTES).toBe(11);
-    expect(PAINT_WIRE_MAX_BYTES).toBe(8_451);
-    expect(PAINT_WIRE_MAX_BASE64_LENGTH).toBe(11_268);
-    expect(encodePaintLayer(strokes).length).toBe(11_268);
+    expect(PAINT_STROKE_BYTES).toBe(12);
+    expect(PAINT_WIRE_MAX_BYTES).toBe(9_219);
+    expect(PAINT_WIRE_MAX_BASE64_LENGTH).toBe(12_292);
+    expect(encodePaintLayer(strokes).length).toBe(12_292);
     // One relay value holds 8,192 bytes, so a full layer needs two chunks, and
     // a full room of twelve needs twenty keys rather than the twelve a pose
     // book uses. Raising this without widening PAINT_STATE_KEYS would make the
@@ -114,6 +115,7 @@ describe("paint layer encoding", () => {
         opacity: 1,
         metallic: 1,
         smoothness: 0,
+        emissive: 0,
         erase: false,
         continued: false,
       }),
@@ -126,6 +128,7 @@ describe("paint layer encoding", () => {
         opacity: 1,
         metallic: 0,
         smoothness: 1,
+        emissive: 0,
         erase: false,
         continued: true,
       }),
@@ -140,10 +143,46 @@ describe("paint layer encoding", () => {
     expect(decoded.layer.strokes).toEqual(strokes);
   });
 
-  it("refuses a version 1 layer outright", () => {
-    // A v1 stroke was nine bytes and carried no material response. Reading one
-    // as v2 would silently reinterpret the next stroke's bytes as this one's
-    // metallic and smoothness, so the version check has to come first.
+  it("carries emissive through the wire, and leaves an unlit stroke unlit", () => {
+    const glowing = quantizePaintStroke({
+      target: 5,
+      u: 0.4,
+      v: 0.6,
+      radius: 0.08,
+      color: [0.2, 0.9, 1],
+      opacity: 1,
+      metallic: 0,
+      smoothness: 0.5,
+      emissive: 1,
+      erase: false,
+      continued: false,
+    });
+    const matt = { ...glowing, u: 0.6, emissive: 0 };
+    const half = { ...glowing, v: 0.2, emissive: quantizePaintStroke({ ...glowing, emissive: 0.5 }).emissive };
+
+    const decoded = decodePaintLayer(encodePaintLayer([glowing, matt, half]));
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) return;
+    expect(decoded.layer.strokes[0]?.emissive).toBe(1);
+    expect(decoded.layer.strokes[1]?.emissive).toBe(0);
+    expect(decoded.layer.strokes[2]?.emissive).toBeCloseTo(0.5, 2);
+    // Emissive is the last byte of the stroke, so a wrong stride would show up
+    // as the next stroke's target rather than as a wrong glow.
+    expect(decoded.layer.strokes).toEqual([glowing, matt, half]);
+  });
+
+  it("refuses an older layer version outright", () => {
+    // A v2 stroke was eleven bytes and carried no emissive. Reading one as v3
+    // would silently reinterpret the next stroke's bytes as this one's glow, so
+    // the version check has to come first.
+    const v2 = new Uint8Array(3 + 11);
+    v2[0] = 2;
+    v2[2] = 1;
+    expect(decodePaintLayer(bytesToBase64(v2))).toEqual({
+      ok: false,
+      issue: "paint_version_mismatch",
+    });
+    // A v1 stroke was nine bytes and carried no material response at all.
     const v1 = new Uint8Array(3 + 9);
     v1[0] = 1;
     v1[2] = 1;
@@ -151,7 +190,7 @@ describe("paint layer encoding", () => {
       ok: false,
       issue: "paint_version_mismatch",
     });
-    expect(PAINT_WIRE_VERSION).toBe(2);
+    expect(PAINT_WIRE_VERSION).toBe(3);
   });
 
   it("reports why a bad payload was refused", () => {

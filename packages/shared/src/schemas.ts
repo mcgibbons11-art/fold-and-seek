@@ -389,6 +389,8 @@ export const PaintStrokeWireSchema = z.strictObject({
   /** Material response painted with the colour; the renderer inverts smoothness. */
   metallic: unitScalar,
   smoothness: unitScalar,
+  /** How much the stroke glows, in its own colour. */
+  emissive: unitScalar,
   erase: z.boolean(),
   /** Sampled while the pointer was already down, so a replay draws the join. */
   continued: z.boolean(),

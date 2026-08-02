@@ -53,6 +53,7 @@ interface PointerRecord {
 
 class Harness {
   readonly controller: ForgeController;
+  readonly scene = new THREE.Scene();
   readonly windowListeners = new ListenerTable();
   readonly canvasListeners = new ListenerTable();
   readonly canvas: { style: { cursor: string } };
@@ -79,10 +80,31 @@ class Harness {
     };
 
     this.controller = new ForgeController({
-      scene: new THREE.Scene(),
+      scene: this.scene,
       canvas: canvas as unknown as HTMLCanvasElement,
       quality: qualitySettingsFor("medium"),
     });
+  }
+
+  /**
+   * Where a paintable shell sits on screen. Nothing renders under the runner,
+   * so the world matrices are brought up to date by hand and the part's centre
+   * is projected through the Forge's own camera: a drag aimed here is one the
+   * brush's raycast can actually land.
+   */
+  pointOnBody(): [number, number] | null {
+    this.scene.updateMatrixWorld(true);
+    this.controller.camera.updateMatrixWorld(true);
+    const point = new THREE.Vector3();
+    let found: [number, number] | null = null;
+    this.scene.traverse((object) => {
+      if (found !== null || !(object instanceof THREE.Mesh) || !object.visible) return;
+      if (typeof object.userData["segmentSlot"] !== "number") return;
+      object.getWorldPosition(point).project(this.controller.camera);
+      if (Math.abs(point.x) > 1 || Math.abs(point.y) > 1) return;
+      found = [((point.x + 1) / 2) * 800, ((1 - point.y) / 2) * 600];
+    });
+    return found;
   }
 
   /** Runs a pointer event through the Forge's window handlers. */
@@ -107,7 +129,7 @@ class Harness {
     return record;
   }
 
-  key(key: string): void {
+  key(key: string, modifiers: Record<string, unknown> = {}): void {
     this.windowListeners.dispatch("keydown", {
       key,
       target: this.canvas,
@@ -115,7 +137,33 @@ class Harness {
       metaKey: false,
       shiftKey: false,
       preventDefault: () => undefined,
+      ...modifiers,
     });
+  }
+
+  /**
+   * A brush drag on the body: a press on the canvas, a move, and a release.
+   * The brush listens on the canvas for the press and on the window for the
+   * rest, which is why this dispatches through both tables.
+   */
+  drag(points: readonly (readonly [number, number])[]): void {
+    const [first, ...rest] = points;
+    if (first === undefined) return;
+    const make = (x: number, y: number): Record<string, unknown> => ({
+      pointerId: 7,
+      button: 0,
+      shiftKey: false,
+      clientX: x,
+      clientY: y,
+      target: this.canvas,
+      stopPropagation: () => undefined,
+      preventDefault: () => undefined,
+    });
+    this.canvasListeners.dispatch("pointerdown", make(first[0], first[1]));
+    for (const [x, y] of rest) {
+      this.windowListeners.dispatch("pointermove", make(x, y));
+    }
+    this.windowListeners.dispatch("pointerup", make(first[0], first[1]));
   }
 
   dispose(): void {
@@ -206,6 +254,69 @@ describe("paint as a forge tool mode", () => {
     const status = harness.controller.snapshot().status;
     harness.key("f");
     expect(harness.controller.snapshot().status).toBe(status);
+  });
+});
+
+describe("paint in the forge history", () => {
+  /** One drag on the body, through the real pointer handlers. */
+  function paintOnce(): void {
+    harness.controller.setToolMode("paint");
+    const at = harness.pointOnBody();
+    expect(at).not.toBeNull();
+    const [x, y] = at ?? [0, 0];
+    const before = harness.controller.paint.layer.strokeCount;
+    harness.drag([
+      [x, y],
+      [x + 14, y + 9],
+      [x + 28, y + 18],
+    ]);
+    expect(harness.controller.paint.layer.strokeCount).toBeGreaterThan(before);
+  }
+
+  it("offers an undo for the drag rather than for the pose before it", () => {
+    // The regression: with paint outside the history, this undo reverted the
+    // last POSE command and left every stamp on the body.
+    harness.controller.applyArrangement("compact");
+    const poseLabel = harness.controller.snapshot().undoLabel;
+    expect(poseLabel).not.toBe("paint stroke");
+
+    paintOnce();
+    const painted = harness.controller.paint.layer.strokeCount;
+
+    const snapshot = harness.controller.snapshot();
+    expect(snapshot.canUndo).toBe(true);
+    expect(snapshot.undoLabel).toBe("paint stroke");
+
+    harness.controller.undo();
+    expect(harness.controller.paint.layer.strokeCount).toBe(0);
+    expect(harness.controller.snapshot().status).toBe("Undid paint stroke.");
+    // The pose command is still there, untouched, and is what the next undo takes.
+    expect(harness.controller.snapshot().undoLabel).toBe(poseLabel);
+
+    harness.controller.redo();
+    expect(harness.controller.paint.layer.strokeCount).toBe(painted);
+  });
+
+  it("records one entry per drag, not one per stamp", () => {
+    paintOnce();
+    const stamps = harness.controller.paint.layer.strokeCount;
+    expect(stamps).toBeGreaterThan(1);
+
+    harness.controller.undo();
+    expect(harness.controller.paint.layer.strokeCount).toBe(0);
+    expect(harness.controller.snapshot().canUndo).toBe(false);
+  });
+
+  it("puts the whole layer back when a clear is undone", () => {
+    paintOnce();
+    const painted = harness.controller.paint.layer.toDataForWire();
+
+    harness.controller.paint.clearAll();
+    expect(harness.controller.paint.layer.strokeCount).toBe(0);
+    expect(harness.controller.snapshot().undoLabel).toBe("clear paint");
+
+    harness.controller.undo();
+    expect(harness.controller.paint.layer.toDataForWire()).toBe(painted);
   });
 });
 

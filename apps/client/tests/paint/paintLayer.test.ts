@@ -26,12 +26,16 @@ function makeLayer(): PaintLayer {
 }
 
 /**
- * FNV-1a over both atlases, so "identical image" is one comparison and every
- * determinism check below covers the material response as well as the colour.
+ * FNV-1a over every atlas the layer holds, so "identical image" is one
+ * comparison and every determinism check below covers the material response and
+ * the glow as well as the colour. The glow atlas only exists once a stroke has
+ * asked for one, which is why it is filtered rather than assumed.
  */
 function hashOf(layer: PaintLayer): number {
   let hash = 0x811c9dc5;
-  for (const source of [layer.pixelSource(), layer.materialPixelSource()]) {
+  const sources = [layer.pixelSource(), layer.materialPixelSource(), layer.emissivePixelSource()];
+  for (const source of sources) {
+    if (source === null) continue;
     const { data } = source;
     for (let i = 0; i < data.length; i++) {
       hash ^= data[i] ?? 0;

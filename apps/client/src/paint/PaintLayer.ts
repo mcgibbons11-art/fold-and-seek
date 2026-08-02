@@ -51,6 +51,12 @@ export interface PaintStroke {
    */
   readonly metallic?: number;
   readonly smoothness?: number;
+  /**
+   * How much the stroke glows, 0..1, in the stroke's own colour. Zero by
+   * default, so a stroke that says nothing about emissive costs nothing: the
+   * emissive atlas is not even allocated until the first glowing stamp.
+   */
+  readonly emissive?: number;
   readonly kind: "brush" | "eraser";
   /**
    * Sampled while the pointer was already down on this target. A continued
@@ -58,6 +64,15 @@ export interface PaintStroke {
    * line instead of a row of dots, on replay as much as on the painter's screen.
    */
   readonly continued?: boolean;
+}
+
+/**
+ * One gesture's worth of stamps, as the Forge's history holds it: what the drag
+ * appended, and what the stroke ceiling dropped off the front to make room.
+ */
+export interface PaintStrokeBatch {
+  readonly added: readonly PaintStrokeWire[];
+  readonly evicted: readonly PaintStrokeWire[];
 }
 
 export interface PaintLayerOptions {
@@ -83,9 +98,10 @@ const DEFAULT_BASE_COLOR: readonly [number, number, number] = [236, 226, 210];
 const DEFAULT_BASE_ROUGHNESS = 77;
 const DEFAULT_BASE_METALNESS = 0;
 
-/** A dab of paint with no material intent: matt, and not a metal. */
+/** A dab of paint with no material intent: matt, not a metal, and not lit. */
 const DEFAULT_STROKE_METALLIC = 0;
 const DEFAULT_STROKE_SMOOTHNESS = 0.35;
+const DEFAULT_STROKE_EMISSIVE = 0;
 
 /** Stamp spacing along an interpolated drag, as a fraction of the brush radius. */
 const STAMP_SPACING = 0.35;
@@ -108,6 +124,7 @@ function toWire(stroke: PaintStroke): PaintStrokeWire {
     opacity: stroke.opacity,
     metallic: stroke.metallic ?? DEFAULT_STROKE_METALLIC,
     smoothness: stroke.smoothness ?? DEFAULT_STROKE_SMOOTHNESS,
+    emissive: stroke.emissive ?? DEFAULT_STROKE_EMISSIVE,
     erase: stroke.kind === "eraser",
     continued: stroke.continued === true,
   });
@@ -125,17 +142,37 @@ export class PaintLayer {
    * carries no colour space and must never be tagged sRGB.
    */
   private readonly materialPixels: Uint8ClampedArray<ArrayBuffer>;
+  /**
+   * The third atlas: the glow, in sRGB, allocated only once a stroke actually
+   * asks for one.
+   *
+   * It holds a colour rather than a mask because a painted marking glows in the
+   * colour it was painted in, which is what MECCHA's panel does. Three
+   * multiplies `emissiveMap` by the material's own `emissive` colour, so a
+   * single-channel mask could only ever glow in one colour for the whole body.
+   * The material atlas cannot lend its spare red channel either: red is held at
+   * full so an aoMap bound to the same texture reads unoccluded, and one channel
+   * could not carry a colour in any case.
+   *
+   * A full atlas is four megabytes, which is why it waits: a body with no
+   * glowing paint on it never pays for one.
+   */
+  private emissivePixels: Uint8ClampedArray<ArrayBuffer> | null = null;
   private readonly strokes: PaintStrokeWire[] = [];
   private readonly tiles: readonly PaintTile[];
   /** sRGB bytes each tile is cleared to, one per paint target. */
   private readonly baseColors: Uint8Array;
   /** Roughness and metalness bytes each tile is cleared to, per paint target. */
   private readonly baseMaterials: Uint8Array;
+  /** sRGB glow each tile is cleared to, so a self-lit swatch survives an empty layer. */
+  private readonly baseEmissives: Uint8Array;
   /** Last stamp on each target, so a continued stamp knows what to join to. */
   private readonly lastU: Float64Array;
   private readonly lastV: Float64Array;
   private readonly hasLast: Uint8Array;
 
+  /** True under a test runner told to work without a DOM. */
+  private readonly headless: boolean;
   private readonly canvas: HTMLCanvasElement | null;
   private context: CanvasRenderingContext2D | null = null;
   private texture: THREE.CanvasTexture | null = null;
@@ -145,6 +182,14 @@ export class PaintLayer {
   private materialContext: CanvasRenderingContext2D | null = null;
   private materialTexture: THREE.CanvasTexture | null = null;
   private readonly targetMaterialTextures = new Map<number, THREE.Texture>();
+
+  private emissiveCanvas: HTMLCanvasElement | null = null;
+  private emissiveContext: CanvasRenderingContext2D | null = null;
+  private emissiveTexture: THREE.CanvasTexture | null = null;
+  private readonly targetEmissiveTextures = new Map<number, THREE.Texture>();
+
+  /** Open undo batch, collecting what to take back when the drag ends. */
+  private batch: { added: PaintStrokeWire[]; evicted: PaintStrokeWire[] } | null = null;
 
   private dirty = true;
 
@@ -157,6 +202,7 @@ export class PaintLayer {
     );
     this.baseColors = new Uint8Array(PAINT_TARGET_COUNT * 3);
     this.baseMaterials = new Uint8Array(PAINT_TARGET_COUNT * 2);
+    this.baseEmissives = new Uint8Array(PAINT_TARGET_COUNT * 3);
     this.lastU = new Float64Array(PAINT_TARGET_COUNT);
     this.lastV = new Float64Array(PAINT_TARGET_COUNT);
     this.hasLast = new Uint8Array(PAINT_TARGET_COUNT);
@@ -169,27 +215,35 @@ export class PaintLayer {
       this.baseMaterials[index * 2 + 1] = DEFAULT_BASE_METALNESS;
     }
 
-    const makeCanvas = (): HTMLCanvasElement | null => {
-      if (typeof document === "undefined") return null;
-      const canvas = document.createElement("canvas");
-      canvas.width = this.atlasSize;
-      canvas.height = this.atlasSize;
-      return canvas;
-    };
-    this.canvas = options.canvas !== undefined ? options.canvas : makeCanvas();
+    this.headless = options.canvas === null;
+    this.canvas = options.canvas !== undefined ? options.canvas : this.makeAtlasCanvas();
     if (this.canvas !== null) {
       this.canvas.width = this.atlasSize;
       this.canvas.height = this.atlasSize;
     }
     // The material atlas always owns its canvas: it is never the one a caller
     // hands in, because a caller only ever supplies the visible one.
-    this.materialCanvas = options.canvas === null ? null : makeCanvas();
+    this.materialCanvas = this.headless ? null : this.makeAtlasCanvas();
 
     this.fillAllTiles();
   }
 
   get strokeCount(): number {
     return this.strokes.length;
+  }
+
+  /**
+   * True once this layer has carried a glowing stroke, which is when the
+   * emissive atlas exists and a material may bind it.
+   *
+   * Deliberately monotonic. Erasing the last glowing stroke leaves the atlas
+   * bound and printing its base fill, which is exactly the passthrough an
+   * unbound material would have shown, so nothing is gained by unbinding and a
+   * material that flickered between two shader variants would cost a recompile
+   * each way.
+   */
+  get hasEmissive(): boolean {
+    return this.emissivePixels !== null;
   }
 
   /** The log itself, for a caller that wants to publish it without encoding. */
@@ -264,22 +318,62 @@ export class PaintLayer {
     if (changed) this.rebuild();
   }
 
+  /**
+   * Glow an unpainted texel of a target reports, in sRGB 0..1. The same
+   * passthrough the other two base setters provide: the binder moves the part's
+   * own emissive in here and sets the material's emissive colour to white, so
+   * an empty layer leaves a self-lit swatch looking exactly as it did.
+   */
+  setBaseEmissives(
+    entries: readonly (readonly [number, readonly [number, number, number]])[],
+  ): void {
+    let changed = false;
+    for (const [targetIndex, emissive] of entries) {
+      if (targetIndex < 0 || targetIndex >= PAINT_TARGET_COUNT) continue;
+      const r = Math.round(clamp01(emissive[0]) * 255);
+      const g = Math.round(clamp01(emissive[1]) * 255);
+      const b = Math.round(clamp01(emissive[2]) * 255);
+      if (
+        this.baseEmissives[targetIndex * 3] === r &&
+        this.baseEmissives[targetIndex * 3 + 1] === g &&
+        this.baseEmissives[targetIndex * 3 + 2] === b
+      ) {
+        continue;
+      }
+      this.baseEmissives[targetIndex * 3] = r;
+      this.baseEmissives[targetIndex * 3 + 1] = g;
+      this.baseEmissives[targetIndex * 3 + 2] = b;
+      changed = true;
+    }
+    if (changed && this.emissivePixels !== null) this.rebuild();
+  }
+
   applyStroke(stroke: PaintStroke): void {
     const wire = toWire(stroke);
     if (wire.target < 0 || wire.target >= PAINT_TARGET_COUNT) return;
+
+    // The first glowing stamp is what buys the emissive atlas. Allocating it
+    // replays the whole log into it, because a matt stroke already on the body
+    // has to have put out the swatch's own glow underneath it.
+    if (wire.emissive > 0 && this.emissivePixels === null) {
+      this.allocateEmissiveAtlas();
+    }
 
     if (this.strokes.length >= MAX_PAINT_STROKES) {
       // The ceiling drops the oldest stamp rather than refusing the newest: a
       // brush that dies mid-drag reads as a broken tool. Dropping one changes
       // the image, so the atlas is rebuilt from the surviving log and the two
       // stay identical.
-      this.strokes.splice(0, this.strokes.length - MAX_PAINT_STROKES + 1);
+      const evicted = this.strokes.splice(0, this.strokes.length - MAX_PAINT_STROKES + 1);
       this.strokes.push(wire);
+      this.batch?.evicted.push(...evicted);
+      this.batch?.added.push(wire);
       this.rebuild();
       return;
     }
 
     this.strokes.push(wire);
+    this.batch?.added.push(wire);
     this.rasterize(wire);
   }
 
@@ -289,10 +383,84 @@ export class PaintLayer {
     }
   }
 
+  /**
+   * Opens an undo batch. Every stamp applied until `endStrokeBatch` belongs to
+   * one entry in the Forge's history, which is what makes a drag one undo
+   * rather than the eighty stamps it rasterized.
+   */
+  beginStrokeBatch(): void {
+    this.batch = { added: [], evicted: [] };
+  }
+
+  /** Closes the batch, returning what to hand the history, or null if nothing was painted. */
+  endStrokeBatch(): PaintStrokeBatch | null {
+    const batch = this.batch;
+    this.batch = null;
+    if (batch === null || batch.added.length === 0) return null;
+    return { added: batch.added, evicted: batch.evicted };
+  }
+
+  /**
+   * Takes a batch back off the log and reprints from what survives.
+   *
+   * The batch is always the newest paint in the log, because the history is
+   * last in, first out and nothing else appends while it holds one. Finding
+   * otherwise means the log and the history have diverged, which would silently
+   * erase somebody else's strokes, so it throws instead.
+   */
+  revertStrokeBatch(batch: PaintStrokeBatch): void {
+    const start = this.strokes.length - batch.added.length;
+    if (start < 0) {
+      throw new Error("Paint undo asked for more strokes than the layer holds");
+    }
+    for (let i = 0; i < batch.added.length; i++) {
+      if (this.strokes[start + i] !== batch.added[i]) {
+        throw new Error("Paint undo does not match the end of the stroke log");
+      }
+    }
+    this.strokes.length = start;
+    // Strokes the ceiling dropped to make room for this batch go back where
+    // they were, so undoing a stamp painted at the ceiling restores the image
+    // the painter had rather than one missing its oldest marks.
+    if (batch.evicted.length > 0) this.strokes.unshift(...batch.evicted);
+    this.rebuild();
+  }
+
+  /**
+   * Replays a reverted batch. Re-appending the same stamps to the same log
+   * evicts the same strokes again, so a redo needs no record of its own.
+   */
+  reapplyStrokeBatch(batch: PaintStrokeBatch): void {
+    for (const stroke of batch.added) {
+      if (stroke.emissive > 0 && this.emissivePixels === null) this.allocateEmissiveAtlas();
+      if (this.strokes.length >= MAX_PAINT_STROKES) {
+        this.strokes.splice(0, this.strokes.length - MAX_PAINT_STROKES + 1);
+      }
+      this.strokes.push(stroke);
+    }
+    this.rebuild();
+  }
+
   /** Drops every stamp and returns the body to its materials. */
   clear(): void {
     this.strokes.length = 0;
+    this.batch = null;
     this.fillAllTiles();
+  }
+
+  /** The whole log, copied, for a command that has to be able to put it back. */
+  captureStrokeLog(): readonly PaintStrokeWire[] {
+    return [...this.strokes];
+  }
+
+  /** Replaces the log wholesale, for undoing a clear. */
+  restoreStrokeLog(strokes: readonly PaintStrokeWire[]): void {
+    this.strokes.length = 0;
+    for (const stroke of strokes) {
+      if (stroke.emissive > 0 && this.emissivePixels === null) this.allocateEmissiveAtlas();
+      this.strokes.push(stroke);
+    }
+    this.rebuild();
   }
 
   toDataForWire(): string {
@@ -305,7 +473,9 @@ export class PaintLayer {
     if (!decoded.ok) return false;
     this.strokes.length = 0;
     for (const stroke of decoded.layer.strokes) {
-      if (stroke.target < PAINT_TARGET_COUNT) this.strokes.push(stroke);
+      if (stroke.target >= PAINT_TARGET_COUNT) continue;
+      if (stroke.emissive > 0 && this.emissivePixels === null) this.allocateEmissiveAtlas();
+      this.strokes.push(stroke);
     }
     this.rebuild();
     return true;
@@ -368,6 +538,82 @@ export class PaintLayer {
       this.targetMaterialTextures,
       "material_tile",
     );
+  }
+
+  /**
+   * The glow atlas, for `emissiveMap`. Null until a stroke has asked for one,
+   * which is what keeps an unlit body from paying four megabytes for a channel
+   * it does not use. It is a colour map, so it is tagged sRGB: three converts it
+   * to linear before multiplying the material's emissive.
+   */
+  getEmissiveTexture(): THREE.CanvasTexture | null {
+    if (this.emissiveTexture === null && this.emissiveCanvas !== null) {
+      const texture = new THREE.CanvasTexture(this.emissiveCanvas);
+      texture.name = "mimic_paint_emissive_atlas";
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.generateMipmaps = false;
+      texture.minFilter = THREE.LinearFilter;
+      texture.magFilter = THREE.LinearFilter;
+      texture.wrapS = THREE.ClampToEdgeWrapping;
+      texture.wrapT = THREE.ClampToEdgeWrapping;
+      this.emissiveTexture = texture;
+      this.dirty = true;
+      this.flush();
+    }
+    return this.emissiveTexture;
+  }
+
+  /** One target's tile of the glow atlas. */
+  getTargetEmissiveTexture(targetIndex: number): THREE.Texture | null {
+    return this.tileView(
+      this.getEmissiveTexture(),
+      targetIndex,
+      this.targetEmissiveTextures,
+      "emissive_tile",
+    );
+  }
+
+  /** Live glow pixels, for a test or a tool reading the atlas back. */
+  emissivePixelSource(): PaintPixelSource | null {
+    if (this.emissivePixels === null) return null;
+    return { width: this.atlasSize, height: this.atlasSize, data: this.emissivePixels };
+  }
+
+  /** sRGB glow currently shown at a point, or null where the layer has none. */
+  readTargetEmissivePixel(
+    targetIndex: number,
+    u: number,
+    v: number,
+  ): [number, number, number] | null {
+    const pixels = this.emissivePixels;
+    if (pixels === null) return null;
+    const index = this.texelIndex(targetIndex, u, v);
+    if (index === null) return null;
+    return [
+      (pixels[index] ?? 0) / 255,
+      (pixels[index + 1] ?? 0) / 255,
+      (pixels[index + 2] ?? 0) / 255,
+    ];
+  }
+
+  private makeAtlasCanvas(): HTMLCanvasElement | null {
+    if (typeof document === "undefined") return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = this.atlasSize;
+    canvas.height = this.atlasSize;
+    return canvas;
+  }
+
+  /**
+   * Brings the glow atlas into existence and reprints everything into it. The
+   * whole log is replayed rather than only the stroke that triggered this: the
+   * matt paint already on the body has to go on covering the swatch's own glow.
+   */
+  private allocateEmissiveAtlas(): void {
+    if (this.emissivePixels !== null) return;
+    this.emissivePixels = new Uint8ClampedArray(this.atlasSize * this.atlasSize * 4);
+    this.emissiveCanvas = this.headless ? null : this.makeAtlasCanvas();
+    this.rebuild();
   }
 
   private tileView(
@@ -464,11 +710,25 @@ export class PaintLayer {
         0,
       );
     }
-    if (this.canvas === null && this.materialCanvas === null) return;
+    const emissive = this.emissivePixels;
+    if (this.emissiveCanvas !== null && emissive !== null) {
+      if (this.emissiveContext === null) {
+        this.emissiveContext = this.emissiveCanvas.getContext("2d");
+      }
+      this.emissiveContext?.putImageData(
+        new ImageData(emissive, this.atlasSize, this.atlasSize),
+        0,
+        0,
+      );
+    }
+    if (this.canvas === null && this.materialCanvas === null && this.emissiveCanvas === null) {
+      return;
+    }
 
     this.dirty = false;
     if (this.texture !== null) this.texture.needsUpdate = true;
     if (this.materialTexture !== null) this.materialTexture.needsUpdate = true;
+    if (this.emissiveTexture !== null) this.emissiveTexture.needsUpdate = true;
     // The tile views are what the body actually wears, and the renderer decides
     // whether to re-upload from each texture's own version. Marking only the
     // atlas leaves every view holding the image it was first bound with, so the
@@ -477,6 +737,9 @@ export class PaintLayer {
       view.needsUpdate = true;
     }
     for (const view of this.targetMaterialTextures.values()) {
+      view.needsUpdate = true;
+    }
+    for (const view of this.targetEmissiveTextures.values()) {
       view.needsUpdate = true;
     }
   }
@@ -488,14 +751,21 @@ export class PaintLayer {
     for (const view of this.targetMaterialTextures.values()) {
       view.dispose();
     }
+    for (const view of this.targetEmissiveTextures.values()) {
+      view.dispose();
+    }
     this.targetTextures.clear();
     this.targetMaterialTextures.clear();
+    this.targetEmissiveTextures.clear();
     this.texture?.dispose();
     this.materialTexture?.dispose();
+    this.emissiveTexture?.dispose();
     this.texture = null;
     this.materialTexture = null;
+    this.emissiveTexture = null;
     this.context = null;
     this.materialContext = null;
+    this.emissiveContext = null;
   }
 
   /** Repaints every tile from its base colour and replays the surviving log. */
@@ -524,6 +794,10 @@ export class PaintLayer {
     // bound to the same texture would take red as fully unoccluded.
     const roughness = this.baseMaterials[targetIndex * 2] ?? 255;
     const metalness = this.baseMaterials[targetIndex * 2 + 1] ?? 0;
+    const emissive = this.emissivePixels;
+    const er = this.baseEmissives[targetIndex * 3] ?? 0;
+    const eg = this.baseEmissives[targetIndex * 3 + 1] ?? 0;
+    const eb = this.baseEmissives[targetIndex * 3 + 2] ?? 0;
     for (let y = tile.y; y < tile.y + tile.height; y++) {
       let index = (y * this.atlasSize + tile.x) * 4;
       for (let x = 0; x < tile.width; x++) {
@@ -535,6 +809,12 @@ export class PaintLayer {
         this.materialPixels[index + 1] = roughness;
         this.materialPixels[index + 2] = metalness;
         this.materialPixels[index + 3] = 255;
+        if (emissive !== null) {
+          emissive[index] = er;
+          emissive[index + 1] = eg;
+          emissive[index + 2] = eb;
+          emissive[index + 3] = 255;
+        }
         index += 4;
       }
     }
@@ -563,6 +843,9 @@ export class PaintLayer {
           b: this.baseColors[stroke.target * 3 + 2] ?? 255,
           roughness: this.baseMaterials[stroke.target * 2] ?? 255,
           metalness: this.baseMaterials[stroke.target * 2 + 1] ?? 0,
+          emissiveR: this.baseEmissives[stroke.target * 3] ?? 0,
+          emissiveG: this.baseEmissives[stroke.target * 3 + 1] ?? 0,
+          emissiveB: this.baseEmissives[stroke.target * 3 + 2] ?? 0,
         }
       : {
           r: Math.round(clamp01(stroke.color[0]) * 255),
@@ -571,6 +854,12 @@ export class PaintLayer {
           // three's map is roughness; the painter's slider is smoothness.
           roughness: Math.round((1 - clamp01(stroke.smoothness)) * 255),
           metalness: Math.round(clamp01(stroke.metallic) * 255),
+          // The glow is the stroke's own colour turned down by the emissive
+          // amount, so a stroke lights up in the colour it was painted in and a
+          // matt one lays black over whatever was glowing underneath it.
+          emissiveR: Math.round(clamp01(stroke.color[0]) * clamp01(stroke.emissive) * 255),
+          emissiveG: Math.round(clamp01(stroke.color[1]) * clamp01(stroke.emissive) * 255),
+          emissiveB: Math.round(clamp01(stroke.color[2]) * clamp01(stroke.emissive) * 255),
         };
 
     if (stroke.continued && this.hasLast[stroke.target] === 1) {
@@ -660,6 +949,12 @@ export class PaintLayer {
           this.materialPixels[index + 2] ?? 0,
           coverage,
         );
+        const emissive = this.emissivePixels;
+        if (emissive !== null) {
+          emissive[index] = blend(source.emissiveR, emissive[index] ?? 0, coverage);
+          emissive[index + 1] = blend(source.emissiveG, emissive[index + 1] ?? 0, coverage);
+          emissive[index + 2] = blend(source.emissiveB, emissive[index + 2] ?? 0, coverage);
+        }
       }
     }
   }
@@ -672,6 +967,9 @@ interface StampSource {
   readonly b: number;
   readonly roughness: number;
   readonly metalness: number;
+  readonly emissiveR: number;
+  readonly emissiveG: number;
+  readonly emissiveB: number;
 }
 
 /** Integer source-over, so the same log produces the same bytes everywhere. */

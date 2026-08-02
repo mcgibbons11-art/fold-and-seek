@@ -24,6 +24,13 @@ export interface PaintBrushOptions {
   readonly layer: PaintLayer;
   /** Called for every stamp, in log order, for the caller to publish. */
   readonly onStroke?: (stroke: PaintStroke) => void;
+  /**
+   * Called on the press that starts a drag, before its first stamp, and again
+   * when that pointer lets go. A drag is one gesture, so it is also one entry in
+   * the Forge's history, and these two are the bounds that entry covers.
+   */
+  readonly onStrokeStart?: () => void;
+  readonly onStrokeEnd?: () => void;
   /** Returns true when something else consumed the press (the eyedropper). */
   readonly interceptPointerDown?: (pointer: THREE.Vector2, event: PointerEvent) => boolean;
   /** False for a press the HUD owns. Defaults to presses landing on the canvas. */
@@ -46,6 +53,7 @@ export class PaintBrushController {
   private opacity = 1;
   private metallic = 0;
   private smoothness = 0.35;
+  private emissive = 0;
   private eraser = false;
 
   private active = false;
@@ -99,6 +107,14 @@ export class PaintBrushController {
     return this.smoothness;
   }
 
+  setEmissive(emissive: number): void {
+    this.emissive = Math.min(1, Math.max(0, emissive));
+  }
+
+  getEmissive(): number {
+    return this.emissive;
+  }
+
   setEraser(enabled: boolean): void {
     this.eraser = enabled;
   }
@@ -124,6 +140,7 @@ export class PaintBrushController {
       this.pointerId = event.pointerId;
       this.options.canvas.setPointerCapture(event.pointerId);
       this.strokeTarget = hit.target;
+      this.options.onStrokeStart?.();
       this.emit(hit.target, hit.u, hit.v, false);
     };
 
@@ -148,6 +165,7 @@ export class PaintBrushController {
       }
       this.pointerId = -1;
       this.strokeTarget = -1;
+      this.options.onStrokeEnd?.();
     };
 
     const canvas = this.options.canvas;
@@ -166,13 +184,17 @@ export class PaintBrushController {
   deactivate(): void {
     if (!this.active) return;
     this.active = false;
-    if (this.pointerId >= 0 && this.options.canvas.hasPointerCapture(this.pointerId)) {
+    const wasPainting = this.pointerId >= 0;
+    if (wasPainting && this.options.canvas.hasPointerCapture(this.pointerId)) {
       this.options.canvas.releasePointerCapture(this.pointerId);
     }
     this.pointerId = -1;
     this.strokeTarget = -1;
     this.detach?.();
     this.detach = null;
+    // Leaving paint mode mid-drag still ends the drag, so the gesture reaches
+    // the history rather than staying open behind an inactive tool.
+    if (wasPainting) this.options.onStrokeEnd?.();
   }
 
   dispose(): void {
@@ -184,7 +206,10 @@ export class PaintBrushController {
     this.setPointerFromClient(clientX, clientY);
     const hit = this.pick();
     if (hit === null) return null;
-    return this.emit(hit.target, hit.u, hit.v, false);
+    this.options.onStrokeStart?.();
+    const stroke = this.emit(hit.target, hit.u, hit.v, false);
+    this.options.onStrokeEnd?.();
+    return stroke;
   }
 
   /** The paint target and UV under a screen point, or null over nothing. */
@@ -236,6 +261,7 @@ export class PaintBrushController {
       opacity: this.opacity,
       metallic: this.metallic,
       smoothness: this.smoothness,
+      emissive: this.emissive,
       kind: this.eraser ? "eraser" : "brush",
       continued,
     };

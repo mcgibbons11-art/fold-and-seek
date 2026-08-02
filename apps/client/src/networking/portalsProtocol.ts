@@ -84,19 +84,17 @@ export const POSE_STATE_KEYS = [
  * public appearance, too large for the publication, and written only when the
  * set of layers changes.
  *
- * Twenty keys because a paint layer is much larger than a pose, and about to
- * grow again. The range is sized for the wire's own ceiling rather than for
- * what a layer costs today, so that raising the stroke format does not quietly
- * take a room past the keys it has: a full room of maximum layers must fit, or
- * nothing in the range publishes at all.
+ * Twenty keys because a paint layer is much larger than a pose. The range is
+ * sized for the wire's own ceiling rather than for what a layer costs today, so
+ * that raising the stroke format does not quietly take a room past the keys it
+ * has: a full room of maximum layers must fit, or nothing in the range publishes
+ * at all.
  *
- * At MAX_PAINT_STROKES stamps and PAINT_STROKE_BYTES per stamp, the worst case
- * the settings allow is roughly 135 KB of JSON, which needs seventeen 8 KB
- * values. Twenty leaves headroom for the key-name overhead and one more
- * per-stroke channel after that. Derive the numbers from the constants rather
- * than trusting this paragraph: the measurement is printed by the "body paint
- * range" test in portalsProtocol.test.ts, which fails if the ceiling outgrows
- * the range.
+ * At MAX_PAINT_STROKES stamps and PAINT_STROKE_BYTES per stamp, a full room of
+ * twelve costs about 123 KB of JSON and uses sixteen of these keys, the emissive
+ * channel included. Derive the numbers from the constants rather than trusting
+ * this paragraph: the measurement is printed by the "body paint range" test in
+ * portalsProtocol.test.ts, which fails if the ceiling outgrows the range.
  *
  * The relay allows 64 keys per session; this whole protocol uses forty.
  */

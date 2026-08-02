@@ -24,6 +24,7 @@ function stroke(index: number): PaintStrokeWire {
     radius: 0.25,
     color: [0.8, 0.2, 0.4],
     opacity: 1,
+    emissive: index % 4 === 0 ? 1 : 0,
     metallic: 0,
     smoothness: 0.5,
     erase: false,

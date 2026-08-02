@@ -267,26 +267,44 @@ export class DisguiseTheatre {
     // materials and a paint clone of the same shape over the same attributes,
     // so this builds the shaders a merged one needs, and precompiling the
     // bodies before they are merged keeps the prewarm out of the merge's way.
-    const paintTarget = bodies > 1 ? built[bodies - 1] : undefined;
-    const warmPaint =
-      paintTarget === undefined
-        ? null
-        : (() => {
-            const layer = new PaintLayer();
-            const binder = new PaintMaterialBinder(layer, () => [
-              ...paintTarget.segmentMeshes,
-              ...paintTarget.panelMeshes,
-            ]);
-            binder.sync();
-            return { layer, binder };
-          })();
+    //
+    // Glowing paint is a second variant again, because the layer only grows its
+    // emissive atlas once a stroke asks for one and the clone that carries it
+    // reads a map the plain paint clone does not. One body wears each, so a peer
+    // whose disguise turns up glowing costs no compile either.
+    const warmPaint: { layer: PaintLayer; binder: PaintMaterialBinder }[] = [];
+    const dressInPaint = (target: MimicVisual | undefined, glowing: boolean): void => {
+      if (target === undefined) return;
+      const layer = new PaintLayer();
+      if (glowing) {
+        layer.applyStroke({
+          segmentId: 0,
+          uv: [0.5, 0.5],
+          radius: 0.2,
+          color: [1, 1, 1],
+          opacity: 1,
+          emissive: 1,
+          kind: "brush",
+        });
+      }
+      const binder = new PaintMaterialBinder(layer, () => [
+        ...target.segmentMeshes,
+        ...target.panelMeshes,
+      ]);
+      binder.sync();
+      warmPaint.push({ layer, binder });
+    };
+    dressInPaint(bodies > 1 ? built[bodies - 1] : undefined, false);
+    dressInPaint(bodies > 2 ? built[bodies - 2] : undefined, true);
 
     await compile();
 
     // The clones go back before the body is parked, so a disguise that takes it
     // over starts from the pool's own materials exactly as a fresh body does.
-    warmPaint?.binder.dispose();
-    warmPaint?.layer.dispose();
+    for (const warm of warmPaint) {
+      warm.binder.dispose();
+      warm.layer.dispose();
+    }
     for (const visual of built) this.park(visual);
   }
 

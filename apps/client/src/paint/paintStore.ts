@@ -24,6 +24,8 @@ export interface PaintPanelState {
   readonly opacity: number;
   readonly metallic: number;
   readonly smoothness: number;
+  /** How much the brush glows, in its own colour. */
+  readonly emissive: number;
   readonly eraser: boolean;
   readonly eyedropperArmed: boolean;
   readonly shadow: boolean;
@@ -50,6 +52,7 @@ export class PaintStore {
       opacity: 1,
       metallic: 0,
       smoothness: 0.35,
+      emissive: 0,
       eraser: false,
       eyedropperArmed: false,
       shadow: true,

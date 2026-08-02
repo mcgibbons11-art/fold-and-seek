@@ -9,8 +9,9 @@ import { PANEL_SOCKET_NAMES, RIG_SEGMENT_BONES } from "./config";
  * the rasterizer in apps/client/src/paint/PaintLayer.ts is integer software
  * compositing rather than a browser canvas primitive.
  *
- * Every stroke is nine bytes and the whole layer travels as base64 text, so a
- * full layer is a bounded ASCII payload the same way an encoded pose is.
+ * Every stroke is PAINT_STROKE_BYTES bytes and the whole layer travels as base64
+ * text, so a full layer is a bounded ASCII payload the same way an encoded pose
+ * is.
  */
 
 /**
@@ -23,23 +24,24 @@ export const PAINT_TARGET_IDS = [...RIG_SEGMENT_BONES, ...PANEL_SOCKET_NAMES] as
 export type PaintTargetId = (typeof PAINT_TARGET_IDS)[number];
 
 /**
- * Version 2 added the per-stroke material response (metallic, smoothness). The
- * decoder refuses version 1 outright rather than widening old strokes with
- * defaults: nothing has shipped, so there is no v1 layer in the world worth
- * carrying, and a silent upgrade path is a bug waiting for the first real one.
+ * Version 2 added the per-stroke material response (metallic, smoothness) and
+ * version 3 added emissive, which completes MECCHA's panel. The decoder refuses
+ * an older version outright rather than widening its strokes with defaults:
+ * nothing has shipped, so there is no old layer in the world worth carrying, and
+ * a silent upgrade path is a bug waiting for the first real one.
  */
-export const PAINT_WIRE_VERSION = 2;
+export const PAINT_WIRE_VERSION = 3;
 
 /**
  * Ceiling on a layer's stroke log. Older strokes are dropped, never refused.
  *
- * A full log is 8,451 bytes, which is 11,268 base64 characters: more than one
+ * A full log is 9,219 bytes, which is 12,292 base64 characters: more than one
  * relay value holds, so a paint layer always travels on a chunked key range of
  * its own and never inside an encoded pose.
  */
 export const MAX_PAINT_STROKES = 768;
 
-export const PAINT_STROKE_BYTES = 11;
+export const PAINT_STROKE_BYTES = 12;
 export const PAINT_WIRE_HEADER_BYTES = 3;
 
 export const PAINT_WIRE_MAX_BYTES =
@@ -80,6 +82,13 @@ export interface PaintStrokeWire {
    */
   readonly metallic: number;
   readonly smoothness: number;
+  /**
+   * How much the stroke glows, 0..1. The glow takes the stroke's own colour
+   * rather than a fixed one, which is the reading MECCHA's panel gives: a
+   * painted marking lights up in the colour it was painted in. Zero is the
+   * default, so a stroke that says nothing about emissive does not glow.
+   */
+  readonly emissive: number;
   readonly erase: boolean;
   readonly continued: boolean;
 }
@@ -125,6 +134,7 @@ export function quantizePaintStroke(stroke: PaintStrokeWire): PaintStrokeWire {
     opacity: dequantize(quantize(stroke.opacity, BYTE_STEPS), BYTE_STEPS),
     metallic: dequantize(quantize(stroke.metallic, BYTE_STEPS), BYTE_STEPS),
     smoothness: dequantize(quantize(stroke.smoothness, BYTE_STEPS), BYTE_STEPS),
+    emissive: dequantize(quantize(stroke.emissive, BYTE_STEPS), BYTE_STEPS),
     erase: stroke.erase,
     continued: stroke.continued,
   };
@@ -151,6 +161,7 @@ export function writePaintStroke(
     (stroke.continued ? CONTINUED_FLAG : 0);
   bytes[offset + 9] = quantize(stroke.metallic, BYTE_STEPS);
   bytes[offset + 10] = quantize(stroke.smoothness, BYTE_STEPS);
+  bytes[offset + 11] = quantize(stroke.emissive, BYTE_STEPS);
 }
 
 export function readPaintStroke(bytes: Uint8Array, offset: number): PaintStrokeWire {
@@ -172,6 +183,7 @@ export function readPaintStroke(bytes: Uint8Array, offset: number): PaintStrokeW
     opacity: dequantize(bytes[offset + 7] ?? 0, BYTE_STEPS),
     metallic: dequantize(bytes[offset + 9] ?? 0, BYTE_STEPS),
     smoothness: dequantize(bytes[offset + 10] ?? 0, BYTE_STEPS),
+    emissive: dequantize(bytes[offset + 11] ?? 0, BYTE_STEPS),
     erase: (flags & ERASE_FLAG) !== 0,
     continued: (flags & CONTINUED_FLAG) !== 0,
   };
