@@ -104,6 +104,28 @@ export const JUMP_HEIGHT_M = PLAYER_HEIGHT_M * JUMP_BODY_HEIGHTS;
 const FOCUS_BODY_HEIGHTS = 6;
 const ACCUSATION_BODY_HEIGHTS = 3;
 
+/**
+ * How near an Inspector's eye must come to a disguise for the pass to count as
+ * a close one (§6.4), in body heights, measured the same way the two distances
+ * above are: eye to the nearest point of the target's bounds.
+ *
+ * Two body heights is 0.7 m, which is two thirds of the 1.05 m gun reach. That
+ * relation is the point of the number. A close pass is the beat where the
+ * Inspector was near enough to take the shot and walked on instead, so it has
+ * to sit inside `accusationDistance` rather than merely inside the 2.1 m
+ * reticle, where being noticed at range would pay the same as being brushed
+ * past. It is also well clear of the body itself: a 0.35 m creature folded into
+ * a prop is credited when the hunter comes within two of its own standing
+ * heights, not when the two are touching.
+ *
+ * Scaled up to a 1.75 m person this is 3.5 m in a 75 m shop, the width of an
+ * aisle you could cross by leaning.
+ */
+const CLOSE_PASS_BODY_HEIGHTS = 2;
+
+/** Proximity that earns a close pass, in world metres. */
+export const CLOSE_PASS_DISTANCE_M = PLAYER_HEIGHT_M * CLOSE_PASS_BODY_HEIGHTS;
+
 export const DEFAULT_MATCH_SETTINGS = {
   minPlayers: 2,
   maxPlayers: 12,

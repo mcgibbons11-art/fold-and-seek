@@ -143,7 +143,7 @@ export class CuriosityShop {
     this.root = root;
 
     const geometry = new GeometryCache(this.bag);
-    const materials = new ShopMaterials(this.bag);
+    const materials = new ShopMaterials(this.bag, quality);
     const batcher = new PropBatcher(root, this.bag);
     this.materials = materials;
     this.batcher = batcher;

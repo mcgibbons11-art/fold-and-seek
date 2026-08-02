@@ -1,9 +1,10 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import type { ForgeController, ForgeHudState, ForgeToolMode } from "../../forge/ForgeController";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { ForgeToolPanels } from "../ForgeHud";
 import { ActionRail } from "./ActionRail";
+import { columnDensityFor, forgePanelsOpenByDefault, type ColumnDensity } from "./columnFit";
 import { ControlStrip, ModeNote } from "./ControlStrip";
 import { HiderHud } from "./HiderHud";
 import {
@@ -17,7 +18,7 @@ import {
 } from "./huntControls";
 import { HuntStatus } from "./HuntStatus";
 import { InspectorSight, InspectorStatusCard, warrantsRemainingOf, type InspectorGunView } from "./InspectorHud";
-import { HudLayout, type RegionAssignment } from "./layout";
+import { HudLayout, REGION_GAP, useRegionHeight, type RegionAssignment } from "./layout";
 import { MissedFindsHud } from "./MissedFindsHud";
 import { Toast, rejectionToast } from "./Toast";
 import { BRASS, EDGE, INK, labelStyle } from "./theme";
@@ -64,9 +65,41 @@ function useForgeState(controller: ForgeController | null): ForgeHudState | null
   return state;
 }
 
+/**
+ * Whether the Forge's tool panels are unfolded. They start folded wherever the
+ * column cannot hold them whole, and unfold on any deliberate change of tool, so
+ * a hider who presses a tool key is never left pressing it at a folded panel.
+ */
+function useForgePanelsOpen(columnHeight: number, mode: ForgeToolMode | null): {
+  readonly open: boolean;
+  toggle: () => void;
+} {
+  const [open, setOpen] = useState(() => forgePanelsOpenByDefault(columnHeight));
+  const lastMode = useRef(mode);
+
+  useEffect(() => {
+    setOpen(forgePanelsOpenByDefault(columnHeight));
+  }, [columnHeight]);
+
+  useEffect(() => {
+    if (mode !== null && lastMode.current !== null && mode !== lastMode.current) setOpen(true);
+    lastMode.current = mode;
+  }, [mode]);
+
+  return {
+    open,
+    toggle: () => {
+      setOpen((current) => !current);
+    },
+  };
+}
+
 export function HuntHud(props: HuntHudProps): ReactElement {
   const { state, gun, forge, pointerLocked, boardOpen, onToggleBoard, onTaunt } = props;
   const forgeState = useForgeState(forge);
+  const columnHeight = useRegionHeight("leftColumn");
+  const density = columnDensityFor(columnHeight);
+  const panels = useForgePanelsOpen(columnHeight, forgeState?.mode ?? null);
 
   const role = state.self.role;
   const isInspector = role === "inspector";
@@ -115,7 +148,7 @@ export function HuntHud(props: HuntHudProps): ReactElement {
   const regions: RegionAssignment = {
     topCenter: <HuntStatus state={state} />,
     topRight: toasts.length === 0 ? undefined : <Toast entries={toasts} />,
-    leftColumn: leftColumn({ state, isInspector, isLiveHider, forge, board }),
+    leftColumn: leftColumn({ state, isInspector, isLiveHider, forge, board, density, panels }),
     rightRail: <ActionRail actions={rail} onPress={onRailPress} />,
     bottomCenter:
       isInspector && !pointerLocked ? <PointerLockPrompt /> : <ControlStrip hints={hints} />,
@@ -132,12 +165,16 @@ function leftColumn({
   isLiveHider,
   forge,
   board,
+  density,
+  panels,
 }: {
   readonly state: RoundViewState;
   readonly isInspector: boolean;
   readonly isLiveHider: boolean;
   readonly forge: ForgeController | null;
   readonly board: ReactNode;
+  readonly density: ColumnDensity;
+  readonly panels: { readonly open: boolean; readonly toggle: () => void };
 }): ReactNode {
   if (isInspector) {
     return (
@@ -149,9 +186,13 @@ function leftColumn({
   }
   if (isLiveHider) {
     return (
-      <HiderHud state={state}>
+      <HiderHud state={state} density={density}>
         {board}
-        {forge === null ? null : <ForgeToolPanels controller={forge} width={288} />}
+        {forge === null ? null : (
+          <ForgePanelsDisclosure density={density} open={panels.open} onToggle={panels.toggle}>
+            <ForgeToolPanels controller={forge} width={288} />
+          </ForgePanelsDisclosure>
+        )}
       </HiderHud>
     );
   }
@@ -160,6 +201,63 @@ function leftColumn({
       <SpectatorStatusCard state={state} />
       {board}
     </>
+  );
+}
+
+/**
+ * The Forge's tool panels, folded behind their own header where the column
+ * cannot hold them whole. At 1280x720 the hider's column was drawing 661 px of
+ * content into a 558 px region and the status card — the one part that has to be
+ * readable at a glance — was behind a scrollbar because of it.
+ *
+ * The header is a button rather than a caption, and it declares its height, so
+ * the folded column is an arithmetic `hudLayout.test.ts` can check. It adds no
+ * scroll container of its own: the region's is the only one in the column.
+ */
+function ForgePanelsDisclosure({
+  density,
+  open,
+  onToggle,
+  children,
+}: {
+  readonly density: ColumnDensity;
+  readonly open: boolean;
+  readonly onToggle: () => void;
+  readonly children: ReactNode;
+}): ReactElement {
+  return (
+    <div
+      data-forge-panels={open ? "open" : "folded"}
+      style={{ display: "flex", flexDirection: "column", gap: REGION_GAP, width: "100%" }}
+    >
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          height: density.disclosureHeight,
+          width: "100%",
+          boxSizing: "border-box",
+          overflow: "hidden",
+          padding: density.cardPadding,
+          background: INK,
+          border: EDGE,
+          borderRadius: 10,
+          backdropFilter: "blur(6px)",
+          color: BRASS,
+          font: "inherit",
+          cursor: "pointer",
+          pointerEvents: "auto",
+        }}
+      >
+        <span style={{ ...labelStyle, opacity: 1 }}>Forge tools</span>
+        <span aria-hidden>{open ? "▾" : "▸"}</span>
+      </button>
+      {open ? children : null}
+    </div>
   );
 }
 

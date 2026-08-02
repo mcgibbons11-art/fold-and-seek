@@ -22,6 +22,7 @@ import {
 } from "./commands";
 import {
   CLOSE_PASS_COOLDOWN_MS,
+  CLOSE_PASS_DWELL_MS,
   CORRECT_ACCUSATION_COOLDOWN_MS,
   CREEP_SPEED_TOLERANCE,
   LOADING_TIMEOUT_MS,
@@ -494,6 +495,17 @@ export class MatchSimulation {
   // can be released exactly when they leave.
   private readonly lastEscapeAt = new Map<string, Map<string, number>>();
   private readonly lastClosePassAt = new Map<string, Map<string, number>>();
+  // When each inspector/object pair came inside close-pass range, cleared as
+  // soon as they separate. Only the tick writes here.
+  //
+  // Deliberately absent from the migration snapshot, which carries every other
+  // clock in this block. A new host has to watch a pair for the dwell again
+  // before it credits them, which costs an Inspector standing beside a disguise
+  // at most one more `CLOSE_PASS_DWELL_MS`. The cooldown, which is what stops
+  // the same pair being paid twice, does travel, so the omission can only ever
+  // delay a payment and never duplicate one, and it keeps a size-constrained
+  // snapshot free of an entry per inspector per disguise.
+  private readonly closePassDwellSince = new Map<string, Map<string, number>>();
 
   private readonly resultVotes = new Map<string, Map<ResultVoteCategory, string>>();
   private readonly rematchVotes = new Map<string, boolean>();
@@ -582,6 +594,7 @@ export class MatchSimulation {
     this.rematchVotes.delete(playerId);
     this.lastEscapeAt.delete(playerId);
     this.lastClosePassAt.delete(playerId);
+    this.closePassDwellSince.delete(playerId);
     this.privateQueues.delete(playerId);
     this.pendingEscapes = this.pendingEscapes.filter((entry) => entry.inspectorId !== playerId);
     this.withdrawResultVotes(playerId);
@@ -646,6 +659,10 @@ export class MatchSimulation {
     this.expireDisconnectedPlayers();
     this.resolvePendingEscapes();
     this.advanceAll();
+    // After the phase machine, so a pass is never credited into a hunt that
+    // ended on this same tick, and before the board, so what it publishes
+    // includes what was just earned.
+    this.detectClosePasses();
     if (this.isInspectionPhase() && this.nowMs >= this.nextMissedFindsAtMs) {
       this.emitMissedFinds(false);
     }
@@ -1020,21 +1037,36 @@ export class MatchSimulation {
   }
 
   /**
-   * Close-pass telemetry from the geometry owner (§6.4). Like accusation range
-   * checks, proximity lives outside the pure simulation.
+   * Close-pass telemetry pushed in from outside (§6.4). The simulation finds
+   * these itself every tick from the same geometry it validates accusations
+   * with, so nothing in the game calls this; it stays because an authority that
+   * knows about a pass the geometry seam cannot express should still be able to
+   * report one, and because it is the smallest surface the rule can be tested
+   * through.
    */
   recordClosePass(inspectorPlayerId: string, publicObjectId: string, nowMs?: number): SimOutput {
     if (nowMs !== undefined) this.setNow(nowMs);
+    this.creditClosePass(inspectorPlayerId, publicObjectId);
+    return this.drain();
+  }
+
+  /**
+   * Credits one close pass if the rule allows it, without draining: the tick
+   * calls this too, and draining mid-tick would throw away every event the rest
+   * of the tick has already queued. Returns whether it paid, so a caller can
+   * tell a refused pass from a scored one.
+   */
+  private creditClosePass(inspectorPlayerId: string, publicObjectId: string): boolean {
     const inspector = this.players.get(inspectorPlayerId);
-    if (!inspector || inspector.role !== "inspector") return this.drain();
-    if (!this.isInspectionPhase()) return this.drain();
+    if (!inspector || inspector.role !== "inspector") return false;
+    if (!this.isInspectionPhase()) return false;
 
     const record = this.unresolvedDisguise(publicObjectId);
-    if (!record) return this.drain();
+    if (!record) return false;
 
     const byObject = this.lastClosePassAt.get(inspectorPlayerId) ?? new Map<string, number>();
     const last = byObject.get(publicObjectId);
-    if (last !== undefined && this.nowMs - last < CLOSE_PASS_COOLDOWN_MS) return this.drain();
+    if (last !== undefined && this.nowMs - last < CLOSE_PASS_COOLDOWN_MS) return false;
 
     byObject.set(publicObjectId, this.nowMs);
     this.lastClosePassAt.set(inspectorPlayerId, byObject);
@@ -1046,7 +1078,60 @@ export class MatchSimulation {
       publicObjectId,
       inspectorPublicId: inspector.publicPlayerId,
     });
-    return this.drain();
+    return true;
+  }
+
+  /**
+   * Finds the close passes of §6.4 from the geometry the authority already
+   * holds. Every Inspector is asked, once per live disguise, whether they are
+   * inside `CLOSE_PASS_DISTANCE_M` of it, and a pair that has been there for
+   * `CLOSE_PASS_DWELL_MS` scores at whatever rate `creditClosePass` permits.
+   *
+   * Detecting it here rather than accepting a reported one is what makes the
+   * beat work on all three transports without a wire verb of its own: the eye
+   * positions are already in the validator, because accusations are checked
+   * against them. It also means a client cannot claim a pass that did not
+   * happen, which a self-reported one would let a hider do for 50 points a go.
+   *
+   * The dwell clock is kept per inspector and object and is dropped the moment
+   * the pair separates, so an Inspector who walks by twice starts afresh each
+   * time rather than accumulating credit across the gap.
+   */
+  private detectClosePasses(): void {
+    if (!this.isInspectionPhase()) {
+      this.closePassDwellSince.clear();
+      return;
+    }
+
+    for (const inspector of this.players.values()) {
+      if (inspector.role !== "inspector" || !inspector.connected) {
+        this.closePassDwellSince.delete(inspector.playerId);
+        continue;
+      }
+      let dwell = this.closePassDwellSince.get(inspector.playerId);
+      if (!dwell) {
+        dwell = new Map<string, number>();
+        this.closePassDwellSince.set(inspector.playerId, dwell);
+      }
+
+      for (const record of this.disguises.values()) {
+        const objectId = record.publicObjectId;
+        const near =
+          record.caughtAtMs === null &&
+          this.spatial.isNearby(inspector.playerId, objectId).ok;
+        if (!near) {
+          dwell.delete(objectId);
+          continue;
+        }
+        const since = dwell.get(objectId);
+        if (since === undefined) {
+          dwell.set(objectId, this.nowMs);
+          continue;
+        }
+        if (this.nowMs - since < CLOSE_PASS_DWELL_MS) continue;
+        this.creditClosePass(inspector.playerId, objectId);
+      }
+    }
   }
 
   // -------------------------------------------------------------------- views
@@ -2072,6 +2157,7 @@ export class MatchSimulation {
     this.focusHolds.clear();
     this.lastEscapeAt.clear();
     this.lastClosePassAt.clear();
+    this.closePassDwellSince.clear();
     this.pendingEscapes = [];
     this.objectIdPool = [];
     this.accusationCounter = 0;

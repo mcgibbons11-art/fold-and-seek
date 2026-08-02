@@ -1,7 +1,7 @@
-import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 
 import type { RailAction, RailTone } from "./huntControls";
-import { regionRect } from "./layout";
+import { useRegionHeight } from "./layout";
 import { BRASS, CREAM, EDGE, INK } from "./theme";
 
 /**
@@ -106,34 +106,6 @@ export function railSizeFor(actions: readonly RailAction[], availableHeight: num
   return RAIL_SIZES[RAIL_SIZES.length - 1] as RailSize;
 }
 
-/**
- * The rail region's height in the current viewport, from the layout table.
- * Without a window it answers for 1280x720, the smallest size the HUD is
- * checked at, so a rail rendered before layout is never larger than it can be.
- */
-function railRegionHeight(): number {
-  const width = typeof window === "undefined" ? 1280 : window.innerWidth;
-  const height = typeof window === "undefined" ? 720 : window.innerHeight;
-  const rect = regionRect("rightRail", width, height);
-  return rect.bottom - rect.top;
-}
-
-function useRailRegionHeight(): number {
-  const [height, setHeight] = useState(railRegionHeight);
-
-  useEffect(() => {
-    const onResize = (): void => {
-      setHeight(railRegionHeight());
-    };
-    window.addEventListener("resize", onResize);
-    return () => {
-      window.removeEventListener("resize", onResize);
-    };
-  }, []);
-
-  return height;
-}
-
 const TONE_ACCENTS: Readonly<Record<RailTone, string>> = {
   primary: BRASS,
   normal: "rgba(232, 221, 205, 0.45)",
@@ -234,7 +206,7 @@ function ChipBody({
 }
 
 export function ActionRail({ actions, onPress, availableHeight }: ActionRailProps): ReactElement {
-  const measured = useRailRegionHeight();
+  const measured = useRegionHeight("rightRail");
   const size = railSizeFor(actions, availableHeight ?? measured);
 
   return (

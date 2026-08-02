@@ -12,6 +12,7 @@ import {
   MAX_PHASE_DURATION_MS,
   MIN_FORGE_DWELL_MS,
   MIN_LOCK_GRACE_MS,
+  PERMISSIVE_SPATIAL_VALIDATOR,
   SCORE_INSPECTOR_MAX_FOCUSED_OBJECTS,
   type ObjectRegistry,
   type SpatialValidator,
@@ -343,9 +344,8 @@ describe("P1-5 focus is validated, capped and gated on observation", () => {
 
   it("awards no direct-look escape for an object the Inspector cannot see", () => {
     const blind: SpatialValidator = {
-      canAccuse: () => ({ ok: true }),
+      ...PERMISSIVE_SPATIAL_VALIDATOR,
       canObserve: () => ({ ok: false, reason: "occluded" }),
-      canOccupy: () => ({ ok: true }),
     };
     const harness = new Harness({ players: 4, seed: 499, spatial: blind });
     harness.toInspection();

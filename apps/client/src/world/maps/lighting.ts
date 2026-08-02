@@ -46,10 +46,10 @@ export interface FillDirectional {
  *
  * The rig is four-way on purpose, so a silhouette is lit from every side by
  * something and the hue still tells the player which way they are facing:
- * a cool sky and a warm floor bounce from the hemisphere, a cool wash from the
- * window side, and a warm wash from the opposite corner standing in for the
- * light the lamps throw back off the walnut. Flat ambient alone would reach the
- * same level and read as fog.
+ * a cool hemisphere overhead and underfoot, a cool wash from the window side,
+ * and a warm wash from the opposite corner standing in for the light the lamps
+ * throw back off the walnut. Flat ambient alone would reach the same level and
+ * read as fog.
  *
  * `dressing.test.ts` measures it: it is data rather than lights so the check
  * runs without a graphics device, and so the numbers in the test are the same
@@ -59,9 +59,23 @@ export const SHOP_FILL_RIG = {
   /** Cold, because every practical in the room is amber and the shadows are not. */
   ambientColor: 0x232c3c,
   ambientIntensity: 0.85,
-  /** Moonlit air above, lamplit walnut below. */
+  /**
+   * Moonlit air above, and moonlit air below as well.
+   *
+   * The lower half used to be a warm brown standing in for lamplight bouncing
+   * off the boards, and it put that brown on every face turned away from the
+   * room: shadows came out muddy, which is the opposite of the reference, where
+   * a cool ambient sits behind the warm pools rather than under them. The warm
+   * bounce is still delivered, but by the warm directional below and by the
+   * practicals themselves, which are the lights that actually have a colour.
+   *
+   * Blue-grey is also very slightly *brighter* than the brown it replaces, so
+   * the readability floor `dressing.test.ts` measures went up rather than down:
+   * a white body at the worst comparable normal reads 0.193 against 0.187, and
+   * its separation from a mid tone 0.159 against 0.155.
+   */
   skyColor: 0x4f68a0,
-  groundColor: 0x6a4a30,
+  groundColor: 0x4a566e,
   hemisphereIntensity: 1.3,
   directionals: [
     // Cold wash from high over the back corner: the back rooms are out of the

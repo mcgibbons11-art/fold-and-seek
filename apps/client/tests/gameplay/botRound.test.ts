@@ -4,7 +4,7 @@ import * as THREE from "three/webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { BOT_HIDE_PLANS, botCreeps, createBotDisguise } from "../../src/gameplay/botDisguises";
-import { MAX_STEP_MS } from "../../src/gameplay/botInspector";
+import { MAX_CATCH_UP_MS, MAX_STEP_MS } from "../../src/gameplay/botInspector";
 import { DisguiseTheatre } from "../../src/gameplay/disguiseTheatre";
 import { createLocalRound, LOCAL_ROUND_NAME, type LocalRound } from "../../src/gameplay/localRound";
 import { RoundSpatialBridge } from "../../src/gameplay/roundSpatial";
@@ -177,6 +177,42 @@ async function playOut(seed: number): Promise<Outcome> {
   return outcome;
 }
 
+/**
+ * Plays a round with the hunt ticked at `huntStepMs` instead of `STEP_MS`, which
+ * is how a stalled main thread reaches the bots: the interval driving them is
+ * coalesced, so whole seconds of the match arrive as one turn.
+ */
+async function playOutAt(seed: number, huntStepMs: number): Promise<Outcome> {
+  const fixture = await soloRound(seed);
+  const hunting = new Set([MatchPhase.Inspection, MatchPhase.FinalCountdown]);
+  for (let index = 0; index < 4_000; index += 1) {
+    const phase = fixture.round.adapter.getSync().publicState?.phase;
+    if (phase === MatchPhase.Results) break;
+    if (phase === MatchPhase.Lobby || phase === MatchPhase.Loading) {
+      fixture.round.adapter.sendCommand({ type: "player_ready", ready: true });
+    }
+    fixture.advanceBy(phase !== undefined && hunting.has(phase) ? huntStepMs : STEP_MS);
+  }
+
+  const resolved = fixture.events.filter((event) => event.type === "accusation_resolved");
+  const correct = resolved.filter(
+    (event) => event.type === "accusation_resolved" && event.correct,
+  ).length;
+  const results = fixture.round.adapter.getSync().publicState?.results;
+  const hiders = (results?.players ?? []).filter((player) => player.role === "mimic");
+  const outcome: Outcome = {
+    selfWasInspector: fixture.round.adapter.getSync().privateState?.role === "inspector",
+    correct,
+    wrong: resolved.length - correct,
+    creeps: fixture.events.filter((event) => event.type === "disguise_updated" && event.moved).length,
+    botsCaught: [],
+    hidersCaught: hiders.filter((player) => !player.fullRoundSurvival).length,
+    hidersAway: hiders.filter((player) => player.fullRoundSurvival).length,
+  };
+  fixture.dispose();
+  return outcome;
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -300,6 +336,62 @@ describe("a solo round with a bot Inspector", () => {
       "hiding in cover and holding still bought almost nothing",
     ).toBeLessThan(restlessCaught);
   }, 120_000);
+
+  it("spends several warrants and catches somebody in every round it is dealt the gun", async () => {
+    vi.useFakeTimers();
+    // The round-6 critic reported one warrant spent in about 200 seconds of a
+    // live round, which would leave a 75-second hunt with no stakes at all. It
+    // does not reproduce through the production wiring: over these seeds the bot
+    // fires between four and seven times and always finds at least one hider.
+    // The bounds are drawn around that measurement, wide enough that a change of
+    // map or of body size does not fail them for no reason, and tight enough
+    // that a hunt collapsing to a shot or two does.
+    const shots: number[] = [];
+    const caught: number[] = [];
+    for (let seed = 1; seed <= 6; seed += 1) {
+      const outcome = await playOut(seed);
+      if (outcome.selfWasInspector) continue;
+      shots.push(outcome.correct + outcome.wrong);
+      caught.push(outcome.hidersCaught);
+    }
+
+    expect(shots.length, "no deal in this spread gave a bot the gun").toBeGreaterThan(3);
+    for (const spent of shots) {
+      expect(spent, "a hunt this quiet has no stakes").toBeGreaterThanOrEqual(3);
+      expect(spent, "the bot is emptying its warrants mechanically").toBeLessThanOrEqual(10);
+    }
+    for (const found of caught) expect(found, "a hunt that found nobody").toBeGreaterThan(0);
+
+    const mean = shots.reduce((total, spent) => total + spent, 0) / shots.length;
+    expect(mean).toBeGreaterThan(4);
+  }, 120_000);
+
+  it("loses the hunt when the thread stalls for longer than the catch-up ceiling", async () => {
+    vi.useFakeTimers();
+    // This is what the critic's count is consistent with, and it is not a tuning
+    // problem. `MAX_CATCH_UP_MS` is how much match time one turn may make up, and
+    // anything past it is dropped rather than owed, so a hunt whose turns arrive
+    // further apart than that walks a fraction of its own length. The same seeds
+    // ticked at four times the ceiling fire well under half as often and catch
+    // nobody. Nothing in the bot fixes this; keeping the main thread free does.
+    let healthy = 0;
+    let stalled = 0;
+    let healthyCatches = 0;
+    let stalledCatches = 0;
+    for (let seed = 1; seed <= 6; seed += 1) {
+      const fast = await playOutAt(seed, STEP_MS);
+      if (fast.selfWasInspector) continue;
+      const slow = await playOutAt(seed, MAX_CATCH_UP_MS * 4);
+      healthy += fast.correct + fast.wrong;
+      stalled += slow.correct + slow.wrong;
+      healthyCatches += fast.hidersCaught;
+      stalledCatches += slow.hidersCaught;
+    }
+
+    expect(healthyCatches, "the control hunt caught nobody either").toBeGreaterThan(0);
+    expect(stalled * 2, "a stalled hunt is no longer measurably worse").toBeLessThan(healthy);
+    expect(stalledCatches).toBeLessThan(healthyCatches);
+  }, 180_000);
 
   it("walks to what it shoots rather than reaching across the shop", async () => {
     vi.useFakeTimers();

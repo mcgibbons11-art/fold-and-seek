@@ -178,6 +178,13 @@ const BOOK_SIZES: readonly BookSize[] = [
   { width: 0.19, thickness: 0.038, depth: 0.14 },
 ];
 
+/**
+ * How far a book's binding may drift from the cloth it was dealt, as a multiple
+ * of the material's own spread. Books carry the widest variance in the room
+ * because a shelf is the one place the same part stands twenty times in a row.
+ */
+const BOOK_TINT_SPREAD = 2.4;
+
 const BOOK_CLOTHS = [
   "velvet_burgundy_01",
   "wool_midnight_03",
@@ -212,7 +219,7 @@ export function buildBookStack(ctx: PropContext, placement: PropPlacement): void
       ),
       bookCloth(ctx, placement, i),
       { x: shift, y: height + size.thickness / 2, ry: yaw },
-      { shadow: false },
+      { shadow: false, tint: BOOK_TINT_SPREAD },
     );
     b.part(
       ctx.geometry.get(sized("book.pages", size.width, size.thickness, size.depth), () =>
@@ -250,7 +257,10 @@ export function buildBookRow(ctx: PropContext, placement: PropPlacement): void {
       ),
       bookCloth(ctx, placement, index),
       { x: cursor + size.thickness / 2, y: height / 2, rz: lean },
-      { shadow: false },
+      // A shelf run draws from two or three cloths, so without a wide spread a
+      // metre of books is three colours repeating and reads as brickwork. The
+      // spread is hashed off each book's own position, so neighbours differ.
+      { shadow: false, tint: BOOK_TINT_SPREAD },
     );
     b.part(
       ctx.geometry.get(sized("bookRow.pages", size.thickness, height, size.depth), () =>

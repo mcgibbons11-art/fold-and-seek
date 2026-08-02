@@ -33,15 +33,41 @@ export const MAX_FRAME_DELTA = FIXED_STEP * MAX_STEPS_PER_FRAME;
 const BOOT_TIER: QualityTier = "high";
 
 /**
- * Work the round still has after the map is built: the hunt's bodies, and the
- * shader pass over the finished scene. Counted so the progress a player is shown
- * does not sit at 100% through the longest wait of the load.
+ * How the loading bar is divided between the three things opening a round does:
+ * building the map, warming the hunt's bodies, and compiling the shop's shaders.
+ *
+ * The shares are the shape of a real load rather than a count of steps. Counting
+ * steps is what this replaced, and it read as a hung tab: the map's own zones
+ * reported `done / total` and the tail was two more steps on the end, so the
+ * shader sweep — much the longest part of a load on a weak GPU, and the part
+ * that can run into a 20-second deadline — was given a single step's width and
+ * ran from 91% to 100%. The round-6 critic photographed the result sitting on
+ * "91% · the shaders" for the whole sweep. Every batch still reports, and now it
+ * has room to show.
  */
-const LOAD_TAIL_STEPS = 2;
+export const LOAD_ZONES_END = 0.36;
+export const LOAD_MIMICS_END = 0.4;
+export const LOAD_SHADERS_END = 0.95;
+
+/** `done` of `total` as a share, with an empty pass counting as finished. */
+function share(done: number, total: number): number {
+  if (total <= 0) return 1;
+  return Math.min(1, Math.max(0, done / total));
+}
+
+/** Where the bar sits once `done` of `total` map-build steps are in. */
+export function zoneLoadFraction(done: number, total: number): number {
+  return LOAD_ZONES_END * share(done, total);
+}
+
+/** Where the bar sits once `done` of `total` drawables have been compiled. */
+export function shaderLoadFraction(done: number, total: number): number {
+  return LOAD_MIMICS_END + (LOAD_SHADERS_END - LOAD_MIMICS_END) * share(done, total);
+}
 
 /** What a loading screen is told while a round opens. */
 export interface RoundLoadProgress {
-  /** Names what was just finished, in the player's language. */
+  /** Names the piece of the load this figure covers, in the player's language. */
   readonly label: string;
   /** 0 to 1. */
   readonly fraction: number;
@@ -237,14 +263,12 @@ export class GameHost {
     const token = (this.roundToken += 1);
     const abandoned = (): boolean => this.disposed || this.roundToken !== token;
 
-    let tail = LOAD_TAIL_STEPS;
     const shop = await ShopWorld.createIncremental(
       this.renderer.renderer,
       this.settings,
       async (step) => {
         if (abandoned()) return;
-        tail = step.total + LOAD_TAIL_STEPS;
-        onProgress({ label: step.label, fraction: step.done / tail });
+        onProgress({ label: step.label, fraction: zoneLoadFraction(step.done, step.total) });
         await nextFrame();
       },
     );
@@ -263,22 +287,23 @@ export class GameHost {
     });
 
     try {
-      onProgress({ label: "the mimics", fraction: (tail - 1) / tail });
+      onProgress({ label: "the mimics", fraction: LOAD_ZONES_END });
       await session.prewarmDisguises(PREWARM_BODY_COUNT, async () => {
-        onProgress({ label: "the shaders", fraction: (tail - 1) / tail });
+        onProgress({ label: "the shaders", fraction: LOAD_MIMICS_END });
         await nextFrame();
         this.compilingShop = true;
         try {
           // The bar advances across the shader sweep rather than sitting on one
           // number: this is the longest part of the load on a weak GPU, and a
-          // frozen figure is indistinguishable from a hung tab.
+          // frozen figure is indistinguishable from a hung tab. The sweep owns
+          // more than half the bar because it is more than half the wait.
           await shop.precompile(
             this.renderer.renderer,
             this.renderer.post,
             session.camera,
             async (done, total) => {
               if (abandoned()) return;
-              onProgress({ label: "the shaders", fraction: (tail - 1 + done / total) / tail });
+              onProgress({ label: "the shaders", fraction: shaderLoadFraction(done, total) });
               await nextFrame();
             },
           );
@@ -315,7 +340,10 @@ export class GameHost {
     // the beauty pass only: the shadow pipelines come from the shadow camera and
     // the post chain from its own passes, and both are built by the first frame
     // that needs them. Paying for that frame here means the player is looking at
-    // a loading screen for it rather than at a stalled first second of play.
+    // a loading screen for it rather than at a stalled first second of play. It
+    // is announced before it is drawn, because it is the one step of the load
+    // that cannot hand the frame back part way through.
+    onProgress({ label: "the first frame", fraction: LOAD_SHADERS_END });
     this.renderer.render(shop.scene, session.camera);
     onProgress({ label: "the shop", fraction: 1 });
     return session;

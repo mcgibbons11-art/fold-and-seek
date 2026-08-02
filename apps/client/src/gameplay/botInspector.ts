@@ -102,7 +102,7 @@ export const MAX_STEP_MS = 120;
  * long as the stall lasted, on the thread that was already the problem. Six
  * seconds is fifty steps, which is a few metres of shop.
  */
-const MAX_CATCH_UP_MS = 6_000;
+export const MAX_CATCH_UP_MS = 6_000;
 
 /**
  * Floor grid the walk is planned on, a body's width to a cell. The shop is a

@@ -58,6 +58,10 @@ export class RoundSpatialBridge implements SpatialValidator {
     return this.impl.canOccupy(playerId, position);
   }
 
+  isNearby(inspectorId: string, targetObjectId: string): SpatialDecision {
+    return this.impl.isNearby(inspectorId, targetObjectId);
+  }
+
   /**
    * Adopts the room's current reach, which the host may change in the lobby.
    * Nothing else in the settings is geometry, so nothing else is read.

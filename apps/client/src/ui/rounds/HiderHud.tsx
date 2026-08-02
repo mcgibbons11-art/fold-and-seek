@@ -1,7 +1,8 @@
-import type { ReactElement, ReactNode } from "react";
+import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import { DECEPTION_TITLE, deceptionLabel, HIDER_CREEP_HINT } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
+import { COLUMN_DENSITIES, type ColumnDensity } from "./columnFit";
 import { ALARM, BRASS, EDGE, INK, labelStyle } from "./theme";
 
 /**
@@ -24,20 +25,35 @@ const WATCHED_COPY = ["Unobserved", "In the cone", "Held at close range"] as con
 
 export interface HiderStatusCardProps {
   readonly state: RoundViewState;
+  /** Geometry for the viewport this column is being drawn into. */
+  readonly density?: ColumnDensity;
 }
 
-const cardStyle = {
-  background: INK,
-  border: EDGE,
-  borderRadius: 10,
-  padding: "12px 14px",
-  backdropFilter: "blur(6px)",
-  width: "100%",
-  boxSizing: "border-box" as const,
-  pointerEvents: "none" as const,
-};
+/**
+ * The card takes its height from the density rather than from what its text
+ * measures, and clips whatever outgrows it, which is the rule the rail's chips
+ * and the regions themselves already follow. Without a declared height there is
+ * no arithmetic for `hudLayout.test.ts` to check the column against.
+ */
+function cardStyle(density: ColumnDensity, scored: boolean): CSSProperties {
+  return {
+    background: INK,
+    border: EDGE,
+    borderRadius: 10,
+    padding: density.cardPadding,
+    height: scored ? density.statusScoredHeight : density.statusHeight,
+    overflow: "hidden",
+    backdropFilter: "blur(6px)",
+    width: "100%",
+    boxSizing: "border-box",
+    pointerEvents: "none",
+  };
+}
 
-export function HiderStatusCard({ state }: HiderStatusCardProps): ReactElement {
+export function HiderStatusCard({
+  state,
+  density = COLUMN_DENSITIES[0] as ColumnDensity,
+}: HiderStatusCardProps): ReactElement {
   const level = state.self.watchedLevel;
   const caught = state.self.lifeState !== "active";
   const accent = level === 2 ? ALARM : BRASS;
@@ -45,15 +61,17 @@ export function HiderStatusCard({ state }: HiderStatusCardProps): ReactElement {
   // the disguise and for nobody else, which is what keeps it from being a hint.
   const deception = state.deception;
   const latest = deception.recent[0];
+  const scored = deception.points > 0;
+  const hintStyle: CSSProperties = density.wrapHint
+    ? { marginTop: 4, opacity: 0.85 }
+    : { marginTop: 4, opacity: 0.85, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 
   return (
-    <div style={cardStyle}>
+    <div style={cardStyle(density, scored)}>
       <div style={labelStyle}>{caught ? "Status" : "In the room"}</div>
-      <div style={{ marginTop: 4, opacity: 0.85 }}>
-        {caught ? "OBJECT STATUS REVOKED" : HIDER_CREEP_HINT}
-      </div>
+      <div style={hintStyle}>{caught ? "OBJECT STATUS REVOKED" : HIDER_CREEP_HINT}</div>
 
-      <div style={{ ...labelStyle, marginTop: 14 }}>Being watched</div>
+      <div style={{ ...labelStyle, marginTop: density.headingGap }}>Being watched</div>
       <div
         style={{ display: "flex", gap: 4, marginTop: 6 }}
         role="meter"
@@ -79,9 +97,9 @@ export function HiderStatusCard({ state }: HiderStatusCardProps): ReactElement {
         {WATCHED_COPY[level]}
       </div>
 
-      {deception.points > 0 ? (
+      {scored ? (
         <>
-          <div style={{ ...labelStyle, marginTop: 14 }}>{DECEPTION_TITLE}</div>
+          <div style={{ ...labelStyle, marginTop: density.headingGap }}>{DECEPTION_TITLE}</div>
           <div style={{ font: "600 22px/1.2 system-ui, sans-serif", color: BRASS }}>
             {deception.points}
           </div>
@@ -101,15 +119,16 @@ export function HiderStatusCard({ state }: HiderStatusCardProps): ReactElement {
 
 export interface HiderHudProps {
   readonly state: RoundViewState;
+  readonly density?: ColumnDensity;
   /** The board and the hider's tool panels, stacked under the status card. */
   readonly children?: ReactNode;
 }
 
 /** The whole of a hider's left column, in the order it reads top to bottom. */
-export function HiderHud({ state, children }: HiderHudProps): ReactElement {
+export function HiderHud({ state, density, children }: HiderHudProps): ReactElement {
   return (
     <>
-      <HiderStatusCard state={state} />
+      <HiderStatusCard state={state} density={density} />
       {children}
     </>
   );

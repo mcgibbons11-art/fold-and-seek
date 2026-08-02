@@ -42,19 +42,42 @@ export class RenderPipeline {
   private readonly renderer: THREE.WebGPURenderer;
   private readonly overrides = new Map<PipelineEffect, boolean>();
 
+  /**
+   * The only camera the graph is ever built against.
+   *
+   * Both `pass()` and `ao()` bind to the camera OBJECT handed to them — the pass
+   * renders through `this.camera`, and the AO node holds
+   * `uniform(camera.projectionMatrix)` and `reference('near', 'float', camera)`.
+   * Keying the graph on camera identity therefore rebuilt it at every phase
+   * transition, because the Forge, the survey and the Inspector each own a
+   * camera. A rebuilt pass allocates a new render target, a render context in
+   * three r185 is keyed on the render target and the MRT, and a render object is
+   * cached against its context: the whole shop's programs were orphaned and
+   * relinked on the next frame, ~103 of them per round.
+   *
+   * The gameplay cameras are untouched and go on being owned by whoever owns
+   * them. This one is copied from whichever of them is drawing, so the graph's
+   * view of "the camera" never changes identity and the compiled programs
+   * survive every phase.
+   */
+  private readonly passCamera = new THREE.PerspectiveCamera();
+
   private settings: QualitySettings;
   private pipeline: THREE.RenderPipeline | null = null;
   private scenePass: PassNodeHandle | null = null;
   private aoNode: GtaoNodeHandle | null = null;
   private bloomNode: BloomNodeHandle | null = null;
   private boundScene: THREE.Scene | null = null;
-  private boundCamera: THREE.Camera | null = null;
   /** Effect set the current graph was built for; null while nothing is built. */
   private builtKey: string | null = null;
+  private builds = 0;
 
   constructor(renderer: THREE.WebGPURenderer, settings: QualitySettings) {
     this.renderer = renderer;
     this.settings = settings;
+    // The pass camera is driven by a world matrix copied whole, never by its own
+    // position and quaternion, so nothing may recompose it from them.
+    this.passCamera.matrixAutoUpdate = false;
   }
 
   /** False while the direct `renderer.render` path is in use. */
@@ -66,6 +89,15 @@ export class RenderPipeline {
   get activeEffects(): readonly PipelineEffect[] {
     const key = this.builtKey;
     return key === null ? [] : PIPELINE_EFFECTS.filter((_, index) => key[index] === "1");
+  }
+
+  /**
+   * How many times the node graph has been built. A change of scene or of effect
+   * set moves it; a change of camera must not, which is the whole of the
+   * relink defect and is otherwise invisible from outside.
+   */
+  get graphBuilds(): number {
+    return this.builds;
   }
 
   isEnabled(effect: PipelineEffect): boolean {
@@ -83,7 +115,7 @@ export class RenderPipeline {
     this.overrides.set(effect, enabled);
   }
 
-  render(scene: THREE.Scene, camera: THREE.Camera): void {
+  render(scene: THREE.Scene, camera: THREE.PerspectiveCamera): void {
     this.bind(scene, camera);
     if (this.pipeline === null) {
       this.renderer.render(scene, camera);
@@ -93,23 +125,72 @@ export class RenderPipeline {
   }
 
   /**
-   * Builds the graph for this scene and camera without drawing anything, so a
+   * Points the graph at this scene and camera without drawing anything, so a
    * precompile can run against the pipeline the frames will actually use.
    *
-   * The graph is a function of the scene, the camera, and the effect set and
-   * nothing else, so a tier change that happens to keep the same effects (a
-   * shadow or anisotropy change, say) reuses the compiled shaders and the
-   * allocated targets instead of paying to rebuild them.
+   * The graph is a function of the scene and the effect set and nothing else. A
+   * tier change that happens to keep the same effects (a shadow or anisotropy
+   * change, say) reuses the compiled shaders and the allocated targets, and so
+   * does a change of camera, which the pass camera absorbs instead.
    */
-  bind(scene: THREE.Scene, camera: THREE.Camera): void {
-    const rebound = scene !== this.boundScene || camera !== this.boundCamera;
+  bind(scene: THREE.Scene, camera: THREE.PerspectiveCamera): void {
+    this.syncPassCamera(camera);
+    const rebound = scene !== this.boundScene;
     if (rebound) {
       this.boundScene = scene;
-      this.boundCamera = camera;
     }
     if (rebound || this.builtKey !== this.effectKey()) {
       this.rebuild();
     }
+  }
+
+  /**
+   * Copies whichever camera the frame is drawing from onto the pass camera.
+   *
+   * `PassNode.updateBefore` reads `near`, `far` and `layers` and then calls
+   * `renderer.render(scene, camera)`, which culls and draws through
+   * `projectionMatrix` and `matrixWorldInverse`. The source's world matrix is
+   * brought up to date first under exactly three's own rule, because the copy
+   * happens before the point at which the pass would have done it.
+   *
+   * The view matrix is handed over as `matrix` and turned into a world matrix
+   * and its inverse by three rather than by hand. `Camera.updateMatrixWorld`
+   * strips scale before inverting, so an inverse computed here would differ from
+   * a real camera's in the last place for no reason at all.
+   *
+   * The projection is recomputed rather than copied. `updateProjectionMatrix`
+   * writes in place into the same `projectionMatrix` and `projectionMatrixInverse`
+   * that `GTAONode` holds through `uniform()`, and a `Matrix4NodeUniform` reads
+   * its node's value and re-uploads on an element-wise difference, so the AO
+   * node tracks a changed projection without being rebuilt. Copying the matrix
+   * across would instead take the source's depth convention, which is the
+   * renderer's to decide and which it decides on this camera.
+   */
+  private syncPassCamera(source: THREE.PerspectiveCamera): void {
+    const pass = this.passCamera;
+    if (source === pass) {
+      return;
+    }
+
+    if (source.parent === null && source.matrixWorldAutoUpdate) {
+      source.updateMatrixWorld();
+    }
+    pass.matrix.copy(source.matrixWorld);
+    pass.matrixWorldNeedsUpdate = true;
+    pass.updateMatrixWorld();
+
+    // No gameplay camera masks a layer today, and the merged Mimic bodies park
+    // their source parts out of sight by moving the PARTS rather than the mask.
+    // It travels anyway because the shader sweep now selects drawables through
+    // this camera: a mask that stayed behind would compile a different set from
+    // the one the frames draw, which is the failure this whole change is about.
+    pass.layers.mask = source.layers.mask;
+
+    pass.fov = source.fov;
+    pass.aspect = source.aspect;
+    pass.near = source.near;
+    pass.far = source.far;
+    pass.updateProjectionMatrix();
   }
 
   /**
@@ -131,20 +212,20 @@ export class RenderPipeline {
    */
   async compileInScenePass<T>(
     scene: THREE.Scene,
-    camera: THREE.Camera,
-    compile: () => Promise<T>,
+    camera: THREE.PerspectiveCamera,
+    compile: (passCamera: THREE.PerspectiveCamera) => Promise<T>,
   ): Promise<T> {
     this.bind(scene, camera);
     const scenePass = this.scenePass;
     if (scenePass === null) {
-      return compile();
+      return compile(this.passCamera);
     }
     const previousTarget = this.renderer.getRenderTarget();
     const previousMrt = this.renderer.getMRT();
     this.renderer.setRenderTarget(scenePass.renderTarget);
     this.renderer.setMRT(scenePass.getMRT());
     try {
-      return await compile();
+      return await compile(this.passCamera);
     } finally {
       this.renderer.setRenderTarget(previousTarget);
       this.renderer.setMRT(previousMrt);
@@ -154,7 +235,6 @@ export class RenderPipeline {
   dispose(): void {
     this.teardown();
     this.boundScene = null;
-    this.boundCamera = null;
   }
 
   private effectKey(): string {
@@ -163,11 +243,12 @@ export class RenderPipeline {
 
   private rebuild(): void {
     this.teardown();
+    this.builds += 1;
     this.builtKey = this.effectKey();
 
     const scene = this.boundScene;
-    const camera = this.boundCamera;
-    if (scene === null || camera === null) {
+    const camera = this.passCamera;
+    if (scene === null) {
       return;
     }
 

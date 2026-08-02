@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { RAIL_SIZES, railHeight, railSizeFor } from "../../src/ui/rounds/ActionRail";
+import {
+  COLUMN_DENSITIES,
+  columnDensityFor,
+  forgePanelsOpenByDefault,
+  hiderColumnHeight,
+  type ColumnDensity,
+} from "../../src/ui/rounds/columnFit";
 import { hiderRailActions, inspectorRailActions } from "../../src/ui/rounds/huntControls";
 import {
   HUD_REGIONS,
@@ -129,6 +136,57 @@ describe("HUD region table", () => {
     const actions = inspectorRailActions({ boardOpen: false, outOfWarrants: false });
     const rect = regionRect("rightRail", 1280, 720);
     expect(railSizeFor(actions, rect.bottom - rect.top).id).toBe("roomy");
+  });
+
+  it("fits a live hider's left column inside its region at every size, board closed", () => {
+    // The measured defect: 661 px of content in the 558 px region at 1280x720,
+    // which put the status card behind a scrollbar for the whole hunt. The
+    // tallest a hider's column gets with the board closed is a scored status
+    // card over the tool panels, so that is the case that has to fit.
+    for (const viewport of VIEWPORTS) {
+      const rect = regionRect("leftColumn", viewport.width, viewport.height);
+      const available = rect.bottom - rect.top;
+      const density = columnDensityFor(available);
+      const height = hiderColumnHeight(density, {
+        scored: true,
+        forgeOpen: forgePanelsOpenByDefault(available),
+      });
+      expect(height, `column at ${viewport.name}`).toBeLessThanOrEqual(available);
+    }
+  });
+
+  it("folds the tool panels at 720p and leaves them open at 1080p", () => {
+    // Folding is what buys the room, so it has to happen exactly where the
+    // panels do not fit whole and nowhere else: a hider at 1080p who has to
+    // click a header to reach a slider has been charged for nothing.
+    const short = regionRect("leftColumn", 1280, 720);
+    const tall = regionRect("leftColumn", 1920, 1080);
+
+    expect(forgePanelsOpenByDefault(short.bottom - short.top)).toBe(false);
+    expect(forgePanelsOpenByDefault(tall.bottom - tall.top)).toBe(true);
+    expect(columnDensityFor(short.bottom - short.top).id).toBe("compact");
+    expect(columnDensityFor(tall.bottom - tall.top).id).toBe("roomy");
+  });
+
+  it("trims the 720p column by more than the 103 px it was over by", () => {
+    // The two levers are separable and both are measured against the column the
+    // critic photographed. Folding is the larger, but the compact density is the
+    // one that still helps once a player has opened the panels and the column is
+    // scrolling anyway.
+    const [roomy, compact] = COLUMN_DENSITIES as readonly [ColumnDensity, ColumnDensity];
+    const open = { scored: true, forgeOpen: true } as const;
+
+    expect(hiderColumnHeight(roomy, open) - hiderColumnHeight(compact, open)).toBeGreaterThan(40);
+    expect(
+      hiderColumnHeight(roomy, open) - hiderColumnHeight(compact, { scored: true, forgeOpen: false }),
+    ).toBeGreaterThan(103);
+  });
+
+  it("lets the missed-spot board scroll rather than shrinking the column for it", () => {
+    // The board is opened deliberately and closed again, so it is the one part
+    // of the column allowed to outgrow the region. That is only safe because the
+    // region scrolls, which is what this asserts.
+    expect(REGION_RULES.leftColumn.overflowY).toBe("auto");
   });
 
   it("clips or scrolls every region so content cannot leave its box", () => {

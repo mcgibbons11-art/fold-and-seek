@@ -9,6 +9,7 @@ import {
 } from "@foldseek/shared";
 import {
   MatchSimulation,
+  PERMISSIVE_SPATIAL_VALIDATOR,
   SCORE_MIMIC_MAX_LINE_OF_SIGHT_POINTS,
   SCORE_MIMIC_MAX_OBSERVED_TAUNTS,
   SCORE_MIMIC_PER_OBSERVED_TAUNT,
@@ -118,8 +119,7 @@ describe("post-lock adjustments", () => {
 
   it("refuses a creep the geometry owner rejects", () => {
     const walled: SpatialValidator = {
-      canAccuse: () => ({ ok: true }),
-      canObserve: () => ({ ok: true }),
+      ...PERMISSIVE_SPATIAL_VALIDATOR,
       canOccupy: (_playerId, position) =>
         position[0] > 0.2 ? { ok: false, reason: "inside_wall" } : { ok: true },
     };
@@ -311,9 +311,8 @@ describe("taunts", () => {
 
   it("pays nothing for a taunt the Inspector cannot actually see", () => {
     const blind: SpatialValidator = {
-      canAccuse: () => ({ ok: true }),
+      ...PERMISSIVE_SPATIAL_VALIDATOR,
       canObserve: () => ({ ok: false, reason: "occluded" }),
-      canOccupy: () => ({ ok: true }),
     };
     const harness = new Harness({ players: 4, seed: 1_343, spatial: blind });
     harness.toForge();

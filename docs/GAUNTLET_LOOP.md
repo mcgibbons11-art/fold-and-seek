@@ -39,3 +39,11 @@ Adapted from https://somethingbig.ai/gauntlet-loop (reviewed 2026-08-01).
 - Critics get: the bar artifacts, the component's acceptance criteria, and
   access to run the app — not the builder's self-report.
 - The lead adjudicates critic findings; it does not blindly apply them.
+- MEASUREMENT PROTOCOL (learned 2026-08-02, round-6 control experiment): on
+  this machine, automation-browser frame timing is untrustworthy — a single
+  fullscreen triangle measured 1.3 fps in the same session that ran rAF at
+  143 fps, so absolute fps/load numbers from Playwright/DevTools Chromium
+  are harness artifacts. Critics judge by COUNTS (pipeline/link/draw/call
+  counters), DOM geometry, and event sequences. Frame-rate and feel verdicts
+  come from the user's own headed Chrome only. Always run the triangle
+  control before trusting any perf number.

@@ -153,6 +153,37 @@ describe("Curiosity Shop fill rig", () => {
     expect(warmth(towardWindow)).toBeGreaterThan(warmth(towardOffice) * 1.5);
   });
 
+  it("keeps the shadow side cool rather than muddy", () => {
+    // The references put a cool ambient *behind* the warm pools, and the rig
+    // used to put a warm brown under everything instead: the hemisphere's lower
+    // half stood in for lamplight bouncing off the boards, so every face turned
+    // away from the room came back brown and the shadows read as mud.
+    //
+    // A shadowed face is one neither fill directional reaches, so that is what
+    // is measured rather than "anything pointing downwards": a downward face
+    // turned towards the window corner is lit by the warm directional and is
+    // *supposed* to come back warm. What is left when both are gone is the
+    // ambient and the hemisphere, and that has to be blue.
+    const unreached = sampleNormals(600).filter((normal) =>
+      SHOP_FILL_RIG.directionals.every((light) => {
+        const d = [light.position[0], light.position[1] - 0.6, light.position[2]];
+        return normal[0] * d[0] + normal[1] * d[1] + normal[2] * d[2] <= 0;
+      }),
+    );
+    expect(unreached.length).toBeGreaterThan(40);
+    for (const normal of unreached) {
+      const irradiance = fillIrradiance(normal);
+      expect(irradiance[2], `normal ${normal.map((c) => c.toFixed(2)).join(",")}`).toBeGreaterThan(
+        irradiance[0] * 1.5,
+      );
+    }
+
+    // And the warm corner is still warm, so this is a contrast rather than a
+    // room that has simply gone blue everywhere.
+    const towardWarmCorner = fillIrradiance([-1, 0.2, -1]);
+    expect(towardWarmCorner[0]).toBeGreaterThan(towardWarmCorner[2]);
+  });
+
   it("adds no shadow-casting light", () => {
     // The shadowed-light budget is tier-gated and spent on the moon key and the
     // counter spot. The fill rig is free precisely because none of it casts.

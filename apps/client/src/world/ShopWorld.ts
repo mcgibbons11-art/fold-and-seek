@@ -228,14 +228,18 @@ export class ShopWorld {
   async precompile(
     renderer: THREE.WebGPURenderer,
     post: RenderPipeline,
-    camera: THREE.Camera,
+    camera: THREE.PerspectiveCamera,
     onBatch?: (done: number, total: number) => Promise<void> | void,
   ): Promise<BatchedCompileResult> {
-    return post.compileInScenePass(this.scene, camera, () =>
+    // The sweep compiles through the pass's own camera rather than the one the
+    // round happens to be holding, because that is the camera every later frame
+    // binds: the post chain builds its graph once, against a camera of its own,
+    // and copies whichever gameplay camera is drawing onto it.
+    return post.compileInScenePass(this.scene, camera, (passCamera) =>
       compileSceneInBatches({
         scene: this.scene,
-        camera,
-        compile: (object) => renderer.compileAsync(object, camera, this.scene),
+        camera: passCamera,
+        compile: (object) => renderer.compileAsync(object, passCamera, this.scene),
         onBatch,
       }),
     );

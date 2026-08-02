@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MatchPhase, PrivateSimEventSchema, SimEventSchema } from "@foldseek/shared";
 import {
   MatchSimulation,
+  PERMISSIVE_SPATIAL_VALIDATOR,
   TAUNT_COOLDOWN_MS,
   WATCHED_THROTTLE_MS,
   type SpatialValidator,
@@ -265,9 +266,8 @@ describe("8: the being-watched signal", () => {
 
   it("takes the weaker reading when the geometry owner supplies one", () => {
     const distant: SpatialValidator = {
-      canAccuse: () => ({ ok: true }),
+      ...PERMISSIVE_SPATIAL_VALIDATOR,
       canObserve: () => ({ ok: true, level: 1 }),
-      canOccupy: () => ({ ok: true }),
     };
     const harness = huntHarness(2_099, 5, distant);
     const mimicId = harness.mimicIds()[0] as string;

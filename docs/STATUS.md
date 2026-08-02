@@ -1,5 +1,515 @@
 # STATUS
 
+## The room is made of something now: grain, tooth, veining, leaves and weave (2026-08-02)
+
+**The gap two critics named as the largest one left**: every surface was a solid
+colour with a PBR response, where the references are carried by material. The
+floor was the exception and was already right, and it is the pattern the rest of
+the room now follows.
+
+**The measurement says the critics were right, and says exactly where.** The old
+detail maps were three generic value noises shared by nine families, and
+measured on what a texel actually does to its swatch — its linear level over the
+map's own mean, which is what the material divides by to land back on the
+published colour — they moved this far between the second and ninety-eighth
+centile:
+
+| replaced map | colour, as a multiple of the swatch | roughness |
+| --- | --- | --- |
+| wood | x0.80..1.34 | x0.57..0.83 |
+| paint, stone and paper | x0.93..1.08 | x0.69..0.87 |
+| fabric | x0.88..1.14 | x0.70..0.89 |
+
+The plaster line is the finding. A fifteen per cent total swing on the family
+that wears **the walls** is not a surface, and a wall fills half of many frames.
+The eight surfaces that replace them measure:
+
+| surface | colour | roughness | tile |
+| --- | --- | --- | --- |
+| plank (unchanged field) | x0.41..1.58 | x0.77..0.94 | 2 m board |
+| wall_plaster | x0.78..1.16 | x0.70..0.82 | 3.2 m run, full wall height |
+| painted_plaster | x0.85..1.14 | x0.74..0.82 | 0.5 m |
+| wood_grain | x0.60..1.29 | x0.71..0.89 | 1.4 m along grain, 0.35 m across |
+| marble | x0.69..1.07 | x0.85..0.90 | 2.4 m |
+| paper_leaf | x0.64..1.16 | x0.74..0.86 | 62 mm across the leaves |
+| paper_fibre | x0.81..1.19 | x0.79..0.86 | 0.3 m |
+| weave | x0.78..1.16 | x0.70..0.81 | 0.12 m over sixteen threads |
+
+The swing understates the change on wood, which went from a stretched blob noise
+to grain bands with pores, ray fleck and figure drifting along the board; the
+number cannot tell a band from a blur. The tests print both tables.
+
+### Where a texture coordinate comes from, which decided everything else
+
+`ExtrudeGeometry` hands out **object-space metres** — three's `WorldUVGenerator`
+returns the shape's `x, y` on a cap and `x`-or-`y` with `1 - z` on a side wall,
+all raw model units. So a `repeat` is wraps per metre and a feature authored once
+is that many centimetres wide wherever it lands, on a drawer front or on a
+ceiling beam. That is why there is no triplanar work here and none was needed.
+
+It also fixes the one axis a shared map cannot adapt to. **Grain runs along u**,
+which is the long axis of every slab, panel, drawer front, carcass face and beam
+in the shop, and is across the short axis of an upright post. Posts are five
+centimetres of the room. A test asserts the grain varies at least three times
+faster across v than along u, so the direction cannot be flipped by accident.
+
+The page block falls out of the same rule and is the neat case: a book upright on
+a shelf shows the extruder's cap, whose u is the book's thickness, and a book
+lying in a stack shows a side wall, whose u is the thickness again. **Leaves
+stack along u either way up**, so one map serves both, and a test pins that too.
+
+### The walls are re-projected, and the reason is the grime
+
+The walls get their own material and their own space: u along the run in 3.2 m
+tiles, v from the skirting at 0 to the ceiling at 1 **across the whole room**
+rather than across each piece. The map carries dirt rising off the floor, so a
+piece mapped 0 to 1 in its own height would print that dirt along the top of the
+spandrel above the window as a dark band hanging in mid air. Taking v from world
+height means the spandrel shows the clean upper reach of the same wall.
+
+`WALL_PLASTER_MATERIAL` exists because one material cannot answer two
+conventions — the painted boxes and partitions wearing the same swatch ride the
+extruder's metres — and it publishes `paint_cream_01` exactly as before, so
+sampling a wall hands back the id it always did.
+
+### Height and roughness point opposite ways, and now say so
+
+The detail map was one greyscale bound to both `roughnessMap` and `bumpMap`,
+which forced the two to agree. They should not: a grain line is a groove **and**
+is rougher than the planed face beside it, and a thread crown stands proud
+**and** takes a cleaner highlight than the shadow between threads. Three's node
+path samples `bumpMap.r` and `roughnessMap.g` (`MaterialNode.js` lines 248 and
+196, checked rather than assumed), so one RGBA canvas carries height in red and
+roughness in green at opposite polarity, at no extra texture and no extra
+upload. The swatch's own roughness is still the ceiling, so what a sample
+publishes is still the roughest the surface ever gets (§7.12).
+
+**The floor's specular behaviour changed as a result and was compensated.**
+Flipping the polarity would have made its clean boards glossier than its grain
+used to be, so its roughness floor moved from 0.66 to 0.74: the floor is now
+nowhere glossier than it was, which is the arithmetic the table above shows as
+x0.77..0.94.
+
+### Edge wear is a vertex colour, not a texture
+
+A tiled map cannot know where a prop's edges are. `extrudeProfile` now lifts the
+chamfer facets 12% in vertex colour, by how far a facet has turned off its axis,
+which is the edge wear the references are carried by — the arris of a shelf or a
+drawer front is where the finish is rubbed back and where a lamp catches first.
+An extrusion is non-indexed and three gives it flat per-triangle normals, so the
+transition at the arris is a clean line rather than a gradient bleeding across
+the face, and both the instanced and the merged paths already multiply the
+per-copy tint onto that same attribute. It is applied to every extruded part
+rather than to wood alone, which is what `geometry.ts` already said it wanted
+from its bevels.
+
+Books also got the spread they were missing: a shelf run draws from two or three
+cloths, so `BOOK_TINT_SPREAD` widens the per-copy tint 2.4-fold and a metre of
+books stops being three colours repeating.
+
+### The shadows are cool
+
+`SHOP_FILL_RIG.groundColor` was a warm brown standing in for lamplight bouncing
+off the boards, and it put that brown on every face turned away from the room.
+It is now blue-grey, `0x4a566e`, which is **slightly brighter** than the brown,
+so the readability floor went up rather than down: a white body at the worst
+comparable normal reads 0.193 against 0.187, its separation from a mid tone
+0.159 against 0.155, the lamp-pool radius is 2.27 m against 2.28, and the hue
+split is unmoved. The colour was solved against all four of those constraints
+numerically before it was written down.
+
+A new case in `dressing.test.ts` measures the claim on the normals **neither
+fill directional reaches**, which is what a shadowed face is. Measuring "anything
+pointing downwards" was the first attempt and it failed correctly: a downward
+face turned toward the window corner is lit by the warm directional and is
+supposed to come back warm.
+
+### What it costs
+
+**8.83 MB of video memory at full resolution** including mip chains, against
+2.67 MB before, so 6.17 MB added on a 24 MB budget. Sixteen canvases, two per
+surface, one pair per family however many swatches wear it — a test walks every
+swatch and asserts they resolve onto eight maps rather than onto one each. Weak
+tiers halve both canvas axes and pay 2.21 MB; the scale is fixed at the tier the
+map is built at and deliberately not revisited on an adaptive tier change, since
+regenerating every field mid-session would cost more of a frame than the memory
+is worth and every material would need re-binding.
+
+**Generating the fields measures 256 ms** for all 868,352 texels at full
+resolution on this machine, and that lands in the frame that opens the map build,
+behind the loading screen and before its first yield. Rendering both maps in one
+pass over the texels rather than evaluating each field twice is what keeps it
+there; the floorboards alone are 68 ms of it at 1,045 ns a texel, and that field
+is unchanged and was previously evaluated twice. A light tier pays about a
+quarter.
+
+### Verified, and not
+
+`pnpm -r typecheck` clean across five projects. `pnpm -r test` green: 753 client
+over 71 files, 172 game-sim, 47 shared, 23 server. `npx vite build` green at 246
+modules, 1.72 MB / 487 KB gzip, to a scratch `--outDir`. Eighteen new cases:
+eleven in `tests/maps/surfaces.test.ts` against the fields, six in
+`tests/maps/shopMaterials.test.ts` against the library they are built into, and
+one in `tests/maps/dressing.test.ts` for the fill rig.
+
+`shopMaterials.test.ts` runs **the real constructor** against the smallest 2D
+context that satisfies it, because the field tests cannot catch a swatch bound
+to the wrong map, a material registered under an id nothing asks for, or a
+canvas built per prop instead of per family, and those are how this would go
+wrong. It counts the canvases — seventeen, two per surface and one lampshade
+gradient, against fifty-odd if a map were built per swatch — and asserts every
+swatch of a family holds the *identical* texture object rather than an equal one.
+
+Three of those cases failed on the first run and each was a real finding rather
+than a threshold to loosen: `painted_plaster` and `paper_fibre` were genuinely
+too flat and their fields were widened, and the weave and seam checks were
+sampling the wrong points — the seam test now compares u = 0 against u = 1,
+which are the *same point* of a periodic field and must be equal, instead of two
+samples either side of the edge, which only measured the field's own gradient.
+
+**Not verified: nothing here has been seen in a browser.** Every figure above is
+a number out of a field or out of the lighting arithmetic. Whether the plaster
+tooth reads at giant scale, whether the wall's 3.2 m tile is visible as tiling
+across a twelve-metre run, whether the marble veining looks like stone, and
+whether the cool shadows fight the amber practicals are all judgements only
+looking at it can make, and they are what the next critic should be pointed at.
+
+**The wall projection is hand-checked rather than tested.** `projectWallUv` is
+internal to `architecture.ts` and the piece list with it, so what was done
+instead was to work all nine authored pieces through against the `zones.ts`
+constants: every north piece is wider than the 0.18 m wall thickness so the run
+axis resolves to X and the two side walls to Z, and every piece's world height
+falls inside 0 to `WALL_HEIGHT`, the tightest being the spandrel over the window
+at v 0.806 to 1. A piece that broke either would show as rotated grime or as a
+clamped smear, both visible on sight, but neither is guarded.
+
+**Two limitations, stated rather than hidden.** Turned and cylindrical parts —
+stool seats, chair legs, ladder rungs — carry 0..1 lathe or cylinder coordinates
+rather than metres, so their grain lands at roughly three times its intended
+scale. It still reads as grain and nothing looks broken, but it is not to scale,
+and fixing it properly means either per-geometry UV scaling (what the floor and
+the walls each got) or real triplanar shader work. Second, the metals are left
+deliberately smooth: the steel rack was to stay metal and the room's brass is
+spun and cast, but "flat solid colour" is still literally true of them.
+
+**Outside this pass, and a diagnosis rather than a fix.** The critic's note that
+adaptive render scale sits at 0.55–0.70 on integrated GPUs and makes everything
+soft is not a tonemap problem and a contrast tweak would not touch it:
+`RendererManager.applySize` implements the scale as `setPixelRatio(capped *
+scale)`, so the backing store is genuinely smaller and the *browser* upscales it
+bilinearly to CSS size. The fix is a sharpening pass at the end of
+`RenderPipeline`'s chain, or rendering into a target and upscaling explicitly.
+Both live in `rendering/`, which this pass did not touch.
+
+## A bar that was moving too slowly to look like it was moving (2026-08-02)
+
+Three findings from the round-6 critic. Two were defects and are fixed. The
+third does not reproduce, and what does reproduce in its place is worth more
+than the fix that was asked for.
+
+### 91% was the arithmetic, not the wiring
+
+**The critic photographed "91% · THE SHADERS" and read it as a frozen bar.** The
+sweep was reporting every batch and always had. What it reported through was
+`(tail - 1 + done / total) / tail`, where `tail` is the map's own build-step
+count plus two, and the map builds in nine steps. So the shader sweep, much the
+longest part of a load on a weak GPU and the only part that can run into a
+20-second deadline, was given one eleventh of the bar and opened at ten
+elevenths, which is 91%. A sweep cut off a third of the way through never got
+past 94%.
+
+**The bar is now divided by how long each piece takes rather than by how many
+pieces there are.** Zones take 0 to 36%, the hunt's bodies 36 to 40%, the shader
+sweep 40 to 95%, and the first real frame the last five. `zoneLoadFraction` and
+`shaderLoadFraction` are the whole of it and both are exported, because the
+arithmetic is the thing that was wrong and a test can only reach it if it is
+reachable. The first frame is now announced before it is drawn rather than after,
+since it is the one step of the load that cannot hand the frame back part way
+through.
+
+`tests/engine/loadProgress.test.ts` drives the real `compileSceneInBatches` with
+a stubbed compile and reads the fractions back. Six cases: the sweep holds more
+than half the bar, the four phases never go backwards end to end, an empty pass
+counts as finished instead of dividing by zero, a count outside its own range is
+clamped into it, every batch of a 40-drawable sweep moves the printed percentage,
+and a sweep at the shop's own size (176 drawables, 22 batches) shows at least ten
+distinct figures. **Two of those were confirmed to fail with the old arithmetic
+put back**, printing "expected 94 to be less than 70" for the case a third of the
+way through the sweep, which is the number the critic was looking at.
+
+### The hider's column folds what it cannot hold
+
+At 1280x720 a live hider's left column drew 661 px into a 558 px region. It
+stacks the status card, the missed-spot board and the whole of the Forge's tool
+panels, and override 2 keeps those panels live for the entire hunt, so that is
+the ordinary case rather than a corner of one. The region scrolls, so nothing was
+lost, but the status card was behind a scrollbar for the whole round.
+
+**`columnFit.ts` is `ActionRail`'s answer applied to the other column.** The
+geometry is declared rather than measured, the cards take their padding and their
+heights from it, and `hudLayout.test.ts` checks the arithmetic against the region
+box the layout table resolves. Two levers, and they are separable. The status
+card has a compact density that takes 8 px off its padding, holds the creep hint
+to one line and halves its heading margins, which is 44 px. And the Forge's tool
+panels fold behind their own header, which is the larger share.
+
+**Folding is decided by whether the panels fit whole, not by a breakpoint.**
+`FORGE_PANELS_MIN_HEIGHT` is 480, derived from the tallest of them (the Shape
+panel is a heading, seven sliders, a profile label and a select, about 425 px
+inside its card, with the undo row and a gap under it). At 1080p the open column
+comes to 782 px against 918 and stays open. At 720p it comes to 732 against 558
+at either density, so it starts folded, and the folded column is 242 px.
+
+**A folded panel is out of the way, never out of reach.** The rail still carries
+the tool keys through the hunt, so pressing one at a folded header would be the
+HUD lying. Any deliberate change of tool unfolds the panels, and a jsdom test
+drives exactly that by re-rendering with a different tool mode and asserting the
+wrapper opens. The header is a button with a declared height, so the folded
+column is arithmetic a test can check, and it adds no scroll container of its
+own, which keeps the existing "exactly one scrollbar" guard honest rather than
+relaxed.
+
+`useRailRegionHeight` and the hook the column needed were the same twelve lines,
+so `useRegionHeight(region)` moved into `layout.tsx` beside the region table and
+`ActionRail` now calls it. `REGION_GAP` is exported for the same reason, since
+the column arithmetic and `regionStyle` were both spelling 10.
+
+### The bot Inspector's fire rate: the count does not reproduce, and what does is worse
+
+**The brief was to raise `INSPECTION_RATE` if the bot fires fewer than twice per
+75-second hunt. Measured through the production `createLocalRound` wiring, it
+fires six times.** Twelve seeds, eleven of which dealt the gun to a bot: 66
+accusations, a mean of 6.0 a round, a range of four to seven, 22 catches, and at
+least one hider found in every single round. Raising the rate would have pushed a
+hunt that is already above the requested band of two to four further past it.
+
+**What does reproduce the critic's count is a stalled main thread, and it is not
+a tuning problem.** `MAX_CATCH_UP_MS` is how much match time one bot turn may
+make up, and time past it is dropped rather than owed. Driving the same eight
+seeds with the hunt ticked at a range of periods gives a clean knee at exactly
+that ceiling:
+
+| tick | mean shots | mean catches |
+| --- | --- | --- |
+| 100 ms | 6.13 | 1.63 |
+| 1 s | 6.00 | 1.63 |
+| 3 s | 5.63 | 1.63 |
+| 6 s | 3.50 | 1.00 |
+| 10 s | 2.25 | 0.75 |
+| 20 s | 0.75 | 0.00 |
+| 40 s | 0.00 | 0.00 |
+
+At 20 seconds a turn the hunt fires under one warrant and catches nobody, which
+is the critic's reading. **Nothing in the bot fixes this.** The two alternatives
+to dropping the time are both worse and were rejected in the original design for
+reasons that still hold. Raising the ceiling plans hundreds of route steps in one
+turn on the thread that was already the problem, and carrying the debt forward
+repays 34 seconds of walking inside a few real frames, which is a bot crossing
+the shop at a hundred times its own speed. Keeping the main thread free is the
+fix, which is the shader-sweep work already landed and the relink and texture
+work beside this.
+
+**So nothing was retuned, and two tests were added instead.** One fixes the
+measured rate in place over six seeds, asserting three to ten warrants a round
+with a mean above four and a catch in every round, so a future change that
+quietly guts the hunt fails rather than passes. The other drives the same seeds
+at four times the catch-up ceiling and asserts the stalled hunt fires under half
+as often and catches strictly fewer, which states the real mechanism with a
+number attached. `MAX_CATCH_UP_MS` is exported for it. The existing suite,
+including the thin `stillCaught` bound its own comment warns about, is green
+untouched.
+
+### Verified
+
+`pnpm -r typecheck` clean across five projects. `npx vite build` green at 246
+modules, 1.72 MB and 487 KB gzipped, to a scratch `--outDir`. `pnpm -r test` was
+green at 69 client files and 735 tests, plus shared, game-sim and server, on a
+run taken after every change here. **A later run has one client failure**,
+`tests/maps/surfaces.test.ts` on "paper_fibre is too flat to read", which is a
+file written minutes earlier by the concurrent procedural-texture work and
+imports nothing this pass touches. The 15 test files covering everything changed
+here were re-run against the current tree and are green.
+
+**Not verified: none of this was seen in a browser.** Whether 40 to 95% across
+the sweep actually reads as steady progress on a weak GPU, and whether a folded
+"Forge tools" header is somewhere a hider mid-hunt thinks to press, are both
+judgements only playing it can make. The bot measurements are headless, and the
+browser count that started this is unexplained by anything except the stall table
+above.
+
+## Close passes now happen (2026-08-02)
+
+**The 50-point nerve beat of §6.4 was unreachable.**
+`MatchSimulation.recordClosePass` had no caller anywhere outside the
+simulation's own tests, so `SCORE_MIMIC_PER_CLOSE_PASS` could not be earned in
+play and `deceptionFeedback.test.ts` said so in a comment rather than testing
+it. A hider was paid for being stared at and never for the Inspector who walked
+straight past them.
+
+**The simulation now finds them itself, and no new wire verb was added.** The
+authority already holds every Inspector's eye, because that is what range and
+line-of-sight checks for shooting are made of, and it already knows where every
+disguise is. `SpatialValidator` gained one method, `isNearby`, and
+`MatchSimulation.tick` asks it once per Inspector per live disguise. Detecting
+rather than accepting a report also closes the obvious exploit, since a
+self-reported pass would have been 50 points a client could mint at will.
+
+**Why detection lives in the tick and not in an adapter.** All three transports
+drive the same `sim.tick`, so one detector covers the loopback, the elected
+Portals host and the Colyseus room without any of them growing a message.
+`recordClosePass` survives as the pushed-in path and as the narrowest surface
+the rule can be tested through, and it now shares its body with the detector so
+the cooldown is one clock rather than two.
+
+**The three numbers, and where they come from.** Proximity is
+`CLOSE_PASS_DISTANCE_M`, two body heights or 0.7 m, derived from
+`PLAYER_HEIGHT_M` beside the focus and accusation reaches it has to sit inside.
+Two thirds of the 1.05 m gun reach is the point of it, because a close pass is
+the beat where the Inspector could have taken the shot and did not. Sight line
+is required as well as distance, since 0.7 m at this scale reaches into the next
+aisle. Dwell is `CLOSE_PASS_DWELL_MS`, 400 ms, which is 0.36 m of walking and
+four ticks of the 10 Hz loopback, so a teleport or a rejoin that puts an eye
+beside a disguise for one sample is not a pass. The cooldown is the existing
+`CLOSE_PASS_COOLDOWN_MS`, so loitering pays every four seconds rather than every
+tick, which the tests measure at 120 ticks and three payments.
+
+**`PERMISSIVE_SPATIAL_VALIDATOR` answers `isNearby` with `false`.** The other
+three methods are gates, where permissive means allow, and this one is a source,
+where permissive would mean invent a pass for every hider on every tick. The
+asymmetry is deliberate and commented at the definition.
+
+**Verified end to end through the loopback**, in `deceptionFeedback.test.ts`. An
+Inspector's eye is walked up to a disguise sitting on one of the shop's own
+props, the owner's `DeceptionView` gains a close pass worth
+`SCORE_MIMIC_PER_CLOSE_PASS`, a hider standing elsewhere is told nothing about
+the pass somebody else earned, and loitering pays per cooldown. Nine further
+tests in `packages/game-sim/tests/closePasses.test.ts` cover the dwell, the
+restart when the pair separates, the phase gate and a caught disguise. Every one
+of these was run with the detector commented out and observed to fail, so they
+measure the producer rather than the fixture.
+
+**KNOWN GAP, Colyseus.** Close passes will not fire on the dedicated server, and
+this is not new. `apps/server/src/index.ts` defines `MatchRoom` with no options,
+so `options.spatial` is undefined and the room runs on
+`PERMISSIVE_SPATIAL_VALIDATOR`, and there is no eye message in
+`COMMAND_MESSAGE_TYPES` for a client to report one through. That transport
+therefore has no geometry at all today, meaning accusations are not range-gated,
+direct-look escapes are not sight-gated, and creep destinations are not checked,
+so close passes are the smallest part of it. Fixing it needs an `eye` message
+mirroring the one `PortalsNetAdapter` already sends and a copy of the map's nav
+data reachable from `apps/server`, which currently lives in `apps/client`. Left
+undone deliberately rather than half-wired.
+
+**Not carried across a host migration.** `closePassDwellSince` is omitted from
+the snapshot on purpose. The cooldown map does travel, so the omission can delay
+a payment by one dwell after a migration and can never duplicate one, and it
+keeps an entry per Inspector per disguise out of a snapshot that has 8 KB to
+live in.
+
+## Entering the Forge no longer relinks the shop (2026-08-02)
+
+**This closes the item the compile-storm pass wrote down and left standing.** The
+game's own diagnostics counted GPU pipelines climbing 437 → 539 → 646 across
+three rounds of one loaded shop, and instrumentation counted 104 then 103 program
+relinks at two consecutive Forge entries. Nothing was leaking in the ordinary
+sense: the shop was compiling itself again, from scratch, at every phase
+transition.
+
+**The cause was one word in a cache key.** `RenderPipeline.bind` rebuilt the whole
+TSL graph whenever the bound *camera object* changed, and a round swaps camera
+instances every phase — `ForgeController` owns one, the survey and the Inspector
+share `RoundSession.viewCamera`. Rebuilding constructs a fresh `pass()`, which
+allocates a fresh render target; a render context in three r185 is
+`Renderer._renderContexts.get(renderTarget, this._mrt)`, and a render object is
+cached against its context (`RenderObjects.get` keys on object, material, render
+context and lights node — the camera is not a key, the context is). So a new
+target orphaned every program in the shop, and the next frame linked the lot
+again on the main thread.
+
+**One long-lived camera now stands between the graph and the round.** The graph is
+keyed on the scene and the effect set alone. `passCamera` is constructed once,
+built into the pass and the AO node, and each frame copied from whichever
+gameplay camera is drawing. **The gameplay cameras are untouched** — they are
+correct, and `RoundSession` goes on owning them; only the pipeline's view of "the
+camera" is stabilized.
+
+**Why a copy and not a swap of `scenePass.camera`.** That alone would have fixed
+the pass and broken the AO. `GTAONode` binds `uniform(camera.projectionMatrix)`
+and `reference('near', 'float', camera)` to the camera object it is constructed
+with (GTAONode.js:185-209), so a pass pointed at a new camera would have gone on
+reading the old one's projection. With one camera for the life of the pipeline
+that binding is stable by construction.
+
+**Three details are load-bearing rather than tidy.**
+
+`updateProjectionMatrix` is called on the pass camera rather than the projection
+being copied across. That matters because it writes **in place** into the same
+`Matrix4` the AO node holds: a `Matrix4NodeUniform` reads its node's value and
+`UniformsGroup.updateMatrix4` re-uploads on an element-wise difference, so a
+field-of-view or aspect change reaches the AO pass **without a rebuild**. That
+was read out of three's source and is also asserted directly against a real
+`GTAONode`, because the whole fix rests on it. Copying the matrix instead would
+have carried the source camera's depth convention, which is the renderer's to
+decide and which it decides on this camera.
+
+The view matrix is handed over as `matrix` and turned into `matrixWorld` and its
+inverse **by three**, not by hand. `Camera.updateMatrixWorld` in r185 strips
+scale before inverting, so a hand-rolled `copy().invert()` differs from a real
+camera's in the last place — which is how the first version of this was caught,
+by a test that demanded exactness and got an ulp.
+
+The source camera's world matrix is brought up to date **before** the copy, under
+three's own rule (`parent === null && matrixWorldAutoUpdate`), because the copy
+now happens earlier in the frame than the point at which the pass would have done
+it. Without that line a Forge orbit would draw one frame behind the pointer.
+
+**The precompile follows the same camera, which is the whole point of it.**
+`compileInScenePass` hands the pass camera to its callback and `ShopWorld`
+compiles the sweep with it, so the programs the loading screen pays for are the
+ones every later phase binds. That also made the camera's **layer mask** travel:
+the sweep selects drawables through `object.layers.test(camera.layers)`, and a
+mask left behind would compile a different set from the one drawn. No gameplay
+camera masks a layer today — the merged Mimic bodies move the parts, not the mask
+— so this is a guard rather than a fix.
+
+**What still rebuilds, correctly.** A change of scene, because the pass holds the
+scene: the menu room to the shop, and back. `GameHost.compilingShop` therefore
+still has to hold the last menu frame during the sweep, and that reasoning is
+unchanged by this.
+
+**Verified.** `pnpm -r typecheck` clean across five projects. `npx vite build`
+green at 245 modules, 1.71 MB / 486 KB gzip, to a scratch `--outDir`. Nine new
+cases in `tests/engine/renderPipeline.test.ts`, and they build the **real** node
+graph against a stub renderer rather than describing it — `pass()`, `ao()`,
+`bloom()` and three's own `RenderPipeline` allocate on the CPU and touch the
+backend only when a frame is submitted, which the file previously assumed was
+impossible. The cases: three camera objects bound in sequence with the build
+count flat; one scene-pass render target across a survey/Forge/survey/Inspector
+sequence, observed through the target `compileInScenePass` aims the renderer at,
+which is the object a render context is keyed on; an effect-set change rebuilding
+exactly once and then settling; a scene change still rebuilding; the pass camera
+carrying the gameplay camera's view matrix, projection and layer mask; a
+field-of-view change landing on the same `Matrix4` with no rebuild; the pass and
+the AO node both built against that one camera, across a rebuild; a stale source
+camera updated before the copy; and `GTAONode` holding its camera's own
+projection matrix rather than a snapshot. **Four of them were confirmed to fail
+with the camera-identity key restored**, so they reproduce the defect rather than
+describing it.
+
+**Not verified: none of this was measured in a browser.** The claim to check
+first is the simple one — that the diagnostics overlay's pipeline count is flat
+across three rounds of one loaded shop, where it read 437 → 539 → 646. The
+headless tests can prove the graph is not rebuilt; only a GPU can prove the
+programs survived.
+
+**Worth knowing for whoever runs the suite next.** `pnpm -r test` is green except
+one case in `tests/gameplay/deceptionFeedback.test.ts` ("pays a loitering
+Inspector once per cooldown"), which belongs to the close-pass producer work
+landing at the same time: it imports `CLOSE_PASS_DISTANCE_M`, `RoundActions` and
+`RoundDirector` and nothing this pass touches, and it changed from a collection
+error to an assertion failure between two runs minutes apart. Client 733 of 734,
+game-sim 172, shared 47, server 23.
+
 ## A bot in a white shell is not hiding (2026-08-02)
 
 **The round-5 critic photographed a white mannequin lying in the open on the

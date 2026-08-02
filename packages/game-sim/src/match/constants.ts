@@ -92,6 +92,21 @@ export const SCORE_INSPECTOR_MAX_FOCUSED_OBJECTS = 20;
 export const CLOSE_PASS_COOLDOWN_MS = 4_000;
 
 /**
+ * How long the Inspector must stay inside `CLOSE_PASS_DISTANCE_M` before the
+ * pass counts. It separates a walk-past from a jump in the reported eye: a
+ * teleport, a rejoin, or a camera cut puts the eye beside a disguise for a
+ * single sample, and none of those is the beat §6.4 pays for.
+ *
+ * At the Inspector's 0.91 m/s walk, a straight line through the middle of the
+ * 1.4 m proximity band takes about 1.5 s, and a grazing pass along its edge
+ * rather less. Four hundred milliseconds is 0.36 m of walking, so every real
+ * pass clears it with room to spare while a one-sample jump never does. It is
+ * also four ticks of the 10 Hz loopback and eight of the 20 Hz server, so no
+ * transport can satisfy it inside a single tick.
+ */
+export const CLOSE_PASS_DWELL_MS = 400;
+
+/**
  * Bait scoring. A taunt only pays when an Inspector is actually looking, which
  * is what makes performing one a real risk rather than free points.
  */

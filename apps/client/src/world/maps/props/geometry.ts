@@ -64,6 +64,47 @@ export interface ExtrudeOptions {
 }
 
 /**
+ * How much brighter the facet of a chamfer is than the flat face it meets.
+ *
+ * This is the edge wear the references are carried by: the arris of a shelf, a
+ * counter or a drawer front is where the finish has been rubbed back and where
+ * a lamp catches first, and without it a chamfer is only a silhouette change.
+ * Held low because it multiplies the per-copy tint and the colour map's own
+ * compensation, and a cream surface has little headroom before it clips.
+ */
+const BEVEL_WEAR = 0.12;
+
+/**
+ * Writes the wear into vertex colours, by how far a facet has turned off its
+ * axis.
+ *
+ * An extrusion is non-indexed and three gives it flat per-triangle normals, so
+ * a facet's whole triangle shares one value and the transition at the arris is
+ * a clean line rather than a gradient bleeding across the face. Repeated copies
+ * carry it whether they are instanced or merged, because both paths multiply
+ * the per-copy tint onto this same attribute.
+ */
+function wearBevelEdges(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  const position = geometry.getAttribute("position");
+  const normal = geometry.getAttribute("normal");
+  if (position === undefined || normal === undefined) {
+    return geometry;
+  }
+  const colors = new Float32Array(position.count * 3);
+  for (let i = 0; i < position.count; i += 1) {
+    const axis = Math.max(Math.abs(normal.getX(i)), Math.abs(normal.getY(i)), Math.abs(normal.getZ(i)));
+    // 1 on a face square to an axis, 0 on a facet halfway between two of them.
+    const squareness = Math.min(Math.max((axis - 0.72) / 0.28, 0), 1);
+    const lift = 1 + BEVEL_WEAR * (1 - squareness);
+    colors[i * 3] = lift;
+    colors[i * 3 + 1] = lift;
+    colors[i * 3 + 2] = lift;
+  }
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  return geometry;
+}
+
+/**
  * Extrudes a profile along local Z with a chamfer on the cap edges. The result
  * measures shapeWidth x shapeHeight x depth, centred on its own origin.
  */
@@ -80,6 +121,7 @@ export function extrudeProfile(shape: THREE.Shape, depth: number, options: Extru
     steps: 1,
   });
   geometry.translate(0, 0, -(depth / 2 - bevel));
+  wearBevelEdges(geometry);
   return geometry;
 }
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { MatchPhase } from "@foldseek/shared";
-import { CLOSE_PASS_COOLDOWN_MS, INNOCENT_REACTION_IDS, type SpatialValidator } from "../src";
+import {
+  CLOSE_PASS_COOLDOWN_MS,
+  INNOCENT_REACTION_IDS,
+  PERMISSIVE_SPATIAL_VALIDATOR,
+  type SpatialValidator,
+} from "../src";
 import { Harness } from "./harness";
 
 /** Registered but out of sight, so only the geometry seam can refuse it. */
@@ -9,12 +14,11 @@ const OUT_OF_SIGHT_PROP = "prop-vase";
 /** Approves every target the map registers except the one behind a wall. */
 function propValidator(): SpatialValidator {
   return {
+    ...PERMISSIVE_SPATIAL_VALIDATOR,
     canAccuse: (_inspectorId, targetObjectId) =>
       targetObjectId === OUT_OF_SIGHT_PROP
         ? { ok: false, reason: "no_line_of_sight" }
         : { ok: true },
-    canObserve: () => ({ ok: true }),
-    canOccupy: () => ({ ok: true }),
   };
 }
 

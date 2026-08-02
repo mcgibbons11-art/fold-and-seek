@@ -343,7 +343,7 @@ export class RendererManager {
     this.applySize();
   }
 
-  render(scene: THREE.Scene, camera: THREE.Camera): void {
+  render(scene: THREE.Scene, camera: THREE.PerspectiveCamera): void {
     this.pipeline.render(scene, camera);
   }
 

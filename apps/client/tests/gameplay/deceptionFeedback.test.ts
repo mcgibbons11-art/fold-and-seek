@@ -1,15 +1,22 @@
 import {
+  CLOSE_PASS_COOLDOWN_MS,
+  CLOSE_PASS_DWELL_MS,
+  SCORE_MIMIC_PER_CLOSE_PASS,
   SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE,
   type MatchSettingsPatch,
   type SimEvent,
 } from "@foldseek/game-sim";
-import { DEFAULT_MATCH_SETTINGS, MatchPhase } from "@foldseek/shared";
+import { CLOSE_PASS_DISTANCE_M, DEFAULT_MATCH_SETTINGS, MatchPhase } from "@foldseek/shared";
+import * as THREE from "three/webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RoundActions } from "../../src/gameplay/RoundActions";
 import { RoundDirector } from "../../src/gameplay/RoundDirector";
+import { RoundSpatialBridge } from "../../src/gameplay/roundSpatial";
 import type { RoundViewState } from "../../src/gameplay/roundView";
+import type { AABB } from "../../src/inspector/navData";
 import { LocalLoopbackAdapter } from "../../src/networking/LocalLoopbackAdapter";
+import { CURIOSITY_SHOP_OBJECTS, type MapObjectEntry } from "../../src/world/maps/registry";
 
 /**
  * Score feedback for being looked straight at and surviving it.
@@ -24,11 +31,11 @@ import { LocalLoopbackAdapter } from "../../src/networking/LocalLoopbackAdapter"
  * hold the object past `directLookMinMs`, break off past `directLookBreakMs`,
  * and the authority credits the escape on its own tick.
  *
- * `close_pass`, the other deception term, is NOT exercised end to end here
- * because nothing in the client produces it: `MatchSimulation.recordClosePass`
- * has no caller outside the simulation's own tests, so the event cannot occur
- * in play. The consumer is built and symmetrical with this one, and the missing
- * producer is reported rather than papered over with a stubbed authority.
+ * `close_pass`, the other deception term, is driven the way the game drives it
+ * too, and needs no command at all: the authority finds one by asking the round
+ * for the Inspector's eye, which is the same seam that decides whether a shot
+ * is in range. The second block below walks an eye up to a disguise through the
+ * loopback and takes the whole chain from that walk to the owner's HUD.
  */
 
 const SETTINGS: MatchSettingsPatch = {
@@ -54,6 +61,8 @@ const MIMIC_SEED = 11;
 /** Steps that comfortably outlast the hold and the break windows. */
 const HOLD_STEPS = Math.ceil(DEFAULT_MATCH_SETTINGS.directLookMinMs / STEP_MS) + 2;
 const BREAK_STEPS = Math.ceil(DEFAULT_MATCH_SETTINGS.directLookBreakMs / STEP_MS) + 2;
+/** Steps that outlast the close-pass dwell without reaching a second window. */
+const DWELL_STEPS = Math.ceil(CLOSE_PASS_DWELL_MS / STEP_MS) + 2;
 
 interface Fixture {
   readonly adapter: LocalLoopbackAdapter;
@@ -71,9 +80,14 @@ interface Fixture {
   dispose(): void;
 }
 
-async function startedFixture(seed: number): Promise<Fixture> {
+async function startedFixture(seed: number, spatial?: RoundSpatialBridge): Promise<Fixture> {
   let clock = 0;
-  const adapter = new LocalLoopbackAdapter({ settings: SETTINGS, seed, now: () => clock });
+  const adapter = new LocalLoopbackAdapter({
+    settings: SETTINGS,
+    seed,
+    now: () => clock,
+    ...(spatial === undefined ? {} : { spatial: spatial.validator }),
+  });
   const director = new RoundDirector(adapter, { now: () => clock, tickIntervalMs: 0 });
   const events: SimEvent[] = [];
   adapter.onEvent((event) => events.push(event));
@@ -242,6 +256,177 @@ describe("deception score feedback", () => {
 
     expect(fixture.state().deception.points).toBe(0);
     expect(fixture.state().deception.recent).toHaveLength(0);
+
+    fixture.dispose();
+  });
+});
+
+/**
+ * A hunt in which the room knows where every disguise is and the test says
+ * where the Inspector is standing.
+ *
+ * The bounds come from the shop's own props, which is where a folded Mimic
+ * ends up, so the sight lines are the map's rather than an empty room's. The
+ * props are chosen far enough apart that an eye beside one is nowhere near
+ * another, which is what lets a pass be attributed to one hider.
+ */
+interface WalkPast {
+  readonly fixture: Fixture;
+  /**
+   * Puts the Inspector's eye a stride from the named disguise and ticks once,
+   * which is the tick the authority first sees them there. The dwell runs from
+   * that observation, so everything advanced afterwards is time spent alongside.
+   */
+  standBy(objectId: string): void;
+  /** Takes them well outside close-pass range of everything. */
+  walkAway(): void;
+  /** Close passes the room has broadcast for one disguise, or for all of them. */
+  passes(objectId?: string): number;
+}
+
+/** Half the close-pass reach, so standing here is unambiguously inside it. */
+const STRIDE_M = CLOSE_PASS_DISTANCE_M / 2;
+
+/**
+ * How far apart the props holding two disguises must be. Six close-pass reaches
+ * is 4.2 m, so an eye a stride from one of them is more than five reaches from
+ * the other and no assertion below can be satisfied by the wrong hider.
+ */
+const SEPARATION_M = CLOSE_PASS_DISTANCE_M * 6;
+
+/** Props spread across the shop, taken greedily in the map's own order. */
+function spacedProps(count: number): readonly THREE.Box3[] {
+  const chosen: MapObjectEntry[] = [];
+  for (const prop of CURIOSITY_SHOP_OBJECTS) {
+    if (chosen.some((taken) => taken.position.distanceTo(prop.position) < SEPARATION_M)) continue;
+    chosen.push(prop);
+    if (chosen.length === count) return chosen.map((entry) => entry.focusBounds);
+  }
+  throw new Error(`the shop has no ${count} props ${SEPARATION_M} m apart`);
+}
+
+async function walkPastFixture(seed: number): Promise<WalkPast> {
+  const spatial = new RoundSpatialBridge();
+  const fixture = await startedFixture(seed, spatial);
+  fixture.runTo(MatchPhase.Inspection);
+
+  // One prop per disguise, in the order the room publishes them.
+  const disguises = fixture.state().reveal.entries;
+  const boxes = spacedProps(disguises.length);
+  const bounds = new Map<string, AABB>();
+  for (const [index, entry] of disguises.entries()) {
+    bounds.set(entry.publicObjectId, boxes[index] as THREE.Box3);
+  }
+  spatial.setDisguiseBounds((objectId) => bounds.get(objectId) ?? null);
+
+  const seat = fixture.inspectorSeat();
+  const far = { x: 1e4, y: 1e4, z: 1e4 };
+  return {
+    fixture,
+    standBy(objectId: string) {
+      const box = bounds.get(objectId);
+      if (box === undefined) throw new Error(`no bounds for ${objectId}`);
+      spatial.acceptInspectorEye(seat, {
+        x: box.max.x + STRIDE_M,
+        y: (box.min.y + box.max.y) / 2,
+        z: (box.min.z + box.max.z) / 2,
+      });
+      // The premise of every assertion below. If the shop ever puts something
+      // between this spot and the prop, the test says so instead of quietly
+      // measuring nothing.
+      expect(spatial.isNearby(seat, objectId).ok).toBe(true);
+      fixture.advance(1);
+    },
+    walkAway() {
+      spatial.acceptInspectorEye(seat, far);
+    },
+    passes: (objectId?: string) =>
+      fixture.events.filter(
+        (event) =>
+          event.type === "close_pass" &&
+          (objectId === undefined || event.publicObjectId === objectId),
+      ).length,
+  };
+}
+
+describe("close passes", () => {
+  it("pays the hider the Inspector walked past, and nobody else", async () => {
+    vi.useFakeTimers();
+    const walk = await walkPastFixture(MIMIC_SEED);
+    const fixture = walk.fixture;
+    expect(fixture.state().self.role).toBe("mimic");
+
+    const mine = fixture.state().self.ownDisguise?.publicObjectId;
+    if (mine === undefined) throw new Error("the hider holds no disguise");
+
+    // Nothing while the Inspector is on the other side of the shop.
+    walk.walkAway();
+    fixture.advance(DWELL_STEPS * 4);
+    expect(walk.passes()).toBe(0);
+    expect(fixture.state().deception.closePasses).toBe(0);
+
+    walk.standBy(mine);
+    fixture.advance(DWELL_STEPS);
+
+    // One pass, and it named this hider's object: nobody else was passed.
+    expect(walk.passes()).toBe(1);
+    expect(walk.passes(mine)).toBe(1);
+    const earned = fixture.state().deception;
+    expect(earned.closePasses).toBe(1);
+    expect(earned.directLookEscapes).toBe(0);
+    expect(earned.points).toBe(SCORE_MIMIC_PER_CLOSE_PASS);
+    expect(earned.recent[0]?.kind).toBe("close_pass");
+    expect(earned.recent[0]?.points).toBe(SCORE_MIMIC_PER_CLOSE_PASS);
+
+    fixture.dispose();
+  });
+
+  it("tells a bystanding hider nothing about the pass somebody else earned", async () => {
+    vi.useFakeTimers();
+    const walk = await walkPastFixture(MIMIC_SEED);
+    const fixture = walk.fixture;
+
+    const mine = fixture.state().self.ownDisguise?.publicObjectId;
+    const other = fixture
+      .state()
+      .reveal.entries.map((entry) => entry.publicObjectId)
+      .find((objectId) => objectId !== mine);
+    if (other === undefined) throw new Error("no other disguise in the room");
+
+    walk.standBy(other);
+    fixture.advance(DWELL_STEPS);
+
+    // The pass has to have happened, or the guard below is proving nothing.
+    expect(walk.passes(other)).toBe(1);
+    // Counting other hiders' close passes would locate the Inspector: the
+    // number moves exactly when they are standing beside somebody.
+    expect(fixture.state().deception.closePasses).toBe(0);
+    expect(fixture.state().deception.points).toBe(0);
+    expect(fixture.state().deception.recent).toHaveLength(0);
+
+    fixture.dispose();
+  });
+
+  it("pays a loitering Inspector once per cooldown rather than every tick", async () => {
+    vi.useFakeTimers();
+    const walk = await walkPastFixture(MIMIC_SEED);
+    const fixture = walk.fixture;
+    const mine = fixture.state().self.ownDisguise?.publicObjectId;
+    if (mine === undefined) throw new Error("the hider holds no disguise");
+
+    // Long enough for several windows, short enough that the hunt is still
+    // running at the end of it: a finished round clears the feed.
+    const loiterMs = 12_000;
+    walk.standBy(mine);
+    fixture.advance(loiterMs / STEP_MS);
+    expect([MatchPhase.Inspection, MatchPhase.FinalCountdown]).toContain(fixture.state().phase);
+
+    // One at the dwell, then one per cooldown for the rest of the stay. A
+    // hundred and twenty ticks in the same spot, paid three times.
+    const windows = 1 + Math.floor((loiterMs - CLOSE_PASS_DWELL_MS) / CLOSE_PASS_COOLDOWN_MS);
+    expect(fixture.state().deception.closePasses).toBe(windows);
+    expect(fixture.state().deception.points).toBe(windows * SCORE_MIMIC_PER_CLOSE_PASS);
+    expect(windows).toBeLessThan(loiterMs / STEP_MS);
 
     fixture.dispose();
   });

@@ -311,6 +311,100 @@ describe("hunt HUD region ownership", () => {
     expect(scrollers[0]).toBe(column);
   });
 
+  it("folds a hider's tool panels at 720p and leaves them open at 1080p", () => {
+    // The arithmetic is checked in `hudLayout.test.ts`; what is checked here is
+    // that the column acts on it. At 720p the panels' own contents have to be
+    // absent from the DOM rather than merely hidden, because the 661 px the
+    // critic measured is what they occupy.
+    const restore = { width: window.innerWidth, height: window.innerHeight };
+    const folded: Record<string, string | null> = {};
+    for (const viewport of VIEWPORTS) {
+      Object.defineProperty(window, "innerWidth", { value: viewport.width, configurable: true });
+      Object.defineProperty(window, "innerHeight", { value: viewport.height, configurable: true });
+      render(
+        <HuntHud
+          state={huntState({ role: "mimic" })}
+          gun={GUN}
+          forge={stubForge("pose")}
+          pointerLocked={false}
+          boardOpen={false}
+          onToggleBoard={() => undefined}
+          onTaunt={() => undefined}
+        />,
+      );
+      act(() => {
+        window.dispatchEvent(new Event("resize"));
+      });
+      folded[viewport.name] =
+        container.querySelector("[data-forge-panels]")?.getAttribute("data-forge-panels") ?? null;
+      // The header is always there, so the panels are always one press away.
+      expect(textOf("leftColumn"), viewport.name).toContain("Forge tools");
+    }
+    Object.defineProperty(window, "innerWidth", { value: restore.width, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: restore.height, configurable: true });
+
+    expect(folded["1280x720"]).toBe("folded");
+    expect(folded["1920x1080"]).toBe("open");
+  });
+
+  it("opens the folded panels when the header is pressed", () => {
+    Object.defineProperty(window, "innerHeight", { value: 720, configurable: true });
+    Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+    render(
+      <HuntHud
+        state={huntState({ role: "mimic" })}
+        gun={GUN}
+        forge={stubForge("pose")}
+        pointerLocked={false}
+        boardOpen={false}
+        onToggleBoard={() => undefined}
+        onTaunt={() => undefined}
+      />,
+    );
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    const wrapper = container.querySelector("[data-forge-panels]");
+    expect(wrapper?.getAttribute("data-forge-panels")).toBe("folded");
+    expect(textOf("leftColumn")).not.toContain("Starter arrangements");
+
+    const header = wrapper?.querySelector("button");
+    act(() => {
+      header?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(
+      container.querySelector("[data-forge-panels]")?.getAttribute("data-forge-panels"),
+    ).toBe("open");
+    expect(textOf("leftColumn")).toContain("Starter arrangements");
+  });
+
+  it("unfolds the panels when the player changes tool, so a tool key is never pressed at nothing", () => {
+    // The rail carries the tool keys through the hunt (override 2). Selecting
+    // Shape and being shown a folded header is the failure this prevents.
+    Object.defineProperty(window, "innerHeight", { value: 720, configurable: true });
+    Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+    const props = {
+      state: huntState({ role: "mimic" }),
+      gun: GUN,
+      pointerLocked: false,
+      boardOpen: false,
+      onToggleBoard: () => undefined,
+      onTaunt: () => undefined,
+    };
+    render(<HuntHud {...props} forge={stubForge("pose")} />);
+    act(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
+    expect(
+      container.querySelector("[data-forge-panels]")?.getAttribute("data-forge-panels"),
+    ).toBe("folded");
+
+    render(<HuntHud {...props} forge={stubForge("shape")} />);
+    expect(
+      container.querySelector("[data-forge-panels]")?.getAttribute("data-forge-panels"),
+    ).toBe("open");
+  });
+
   it("renders nothing outside a region", () => {
     render(
       <HuntHud

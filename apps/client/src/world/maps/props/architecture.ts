@@ -3,7 +3,8 @@ import { FLOORBOARD_SWATCH_IDS } from "../swatches";
 import { buildFloorClutter } from "./clutter";
 import type { PropContext } from "./context";
 import { chamferedBox, chamferedSlab, makeRandom } from "./geometry";
-import { GLASS_PANE_MATERIAL, MOON_BACKDROP_MATERIAL, PLANK_TILE_LENGTH_M } from "./materials";
+import { GLASS_PANE_MATERIAL, MOON_BACKDROP_MATERIAL, WALL_PLASTER_MATERIAL } from "./materials";
+import { PLANK_TILE_LENGTH_M, WALL_TILE_LENGTH_M } from "./surfaces";
 import {
   DOOR_HEIGHT,
   DOOR_MAX_X,
@@ -153,9 +154,39 @@ function buildFloor(ctx: PropContext): void {
   b.end();
 }
 
+/**
+ * Projects the plaster map onto a wall piece: u runs along the wall's own run in
+ * tiles of `WALL_TILE_LENGTH_M`, v runs from the skirting at 0 to the ceiling
+ * at 1 **across the whole room** rather than across the piece.
+ *
+ * The room-wide v is the load-bearing half. The map carries grime rising off
+ * the floor, so a piece mapped 0 to 1 in its own height would print that grime
+ * along the top of the spandrel above the window as a dark band hanging in mid
+ * air. Taking v from the piece's world height instead means the spandrel simply
+ * shows the clean upper reach of the same wall.
+ */
+function projectWallUv(
+  geometry: THREE.BufferGeometry,
+  alongZ: boolean,
+  centreY: number,
+  uOffset: number,
+): THREE.BufferGeometry {
+  const position = geometry.getAttribute("position");
+  const uv = geometry.getAttribute("uv");
+  if (position === undefined || uv === undefined) {
+    return geometry;
+  }
+  for (let i = 0; i < position.count; i += 1) {
+    const along = alongZ ? position.getZ(i) : position.getX(i);
+    uv.setXY(i, along / WALL_TILE_LENGTH_M + uOffset, (centreY + position.getY(i)) / WALL_HEIGHT);
+  }
+  uv.needsUpdate = true;
+  return geometry;
+}
+
 function buildWalls(ctx: PropContext): void {
   const b = ctx.batcher;
-  const plaster = ctx.materials.get("paint_cream_01");
+  const plaster = ctx.materials.get(WALL_PLASTER_MATERIAL);
   const trim = ctx.materials.get("walnut_dark_01");
 
   const northZ = SHOP_MIN_Z - WALL_THICKNESS / 2;
@@ -220,10 +251,21 @@ function buildWalls(ctx: PropContext): void {
   ];
 
   b.begin("shop.walls", [0, 0, 0], 0, true, 1, "standard", true);
-  for (const piece of pieces) {
+  for (let i = 0; i < pieces.length; i += 1) {
+    const piece = pieces[i];
+    if (piece === undefined) {
+      continue;
+    }
+    // The long horizontal axis is Z on the side walls and X on the rest, and
+    // the offset keeps two pieces of the same size from showing the same run.
+    const alongZ = piece.depth > piece.width;
+    const uOffset = i * 0.37;
+    const key =
+      `wall#${piece.width.toFixed(2)}x${piece.height.toFixed(2)}x${piece.depth.toFixed(2)}` +
+      `@${piece.y.toFixed(2)}+${uOffset.toFixed(2)}`;
     b.part(
-      ctx.geometry.get(`wall#${piece.width.toFixed(2)}x${piece.height.toFixed(2)}x${piece.depth.toFixed(2)}`, () =>
-        chamferedBox(piece.width, piece.height, piece.depth, 0.014),
+      ctx.geometry.get(key, () =>
+        projectWallUv(chamferedBox(piece.width, piece.height, piece.depth, 0.014), alongZ, piece.y, uOffset),
       ),
       plaster,
       { x: piece.x, y: piece.y, z: piece.z },

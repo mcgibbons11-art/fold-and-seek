@@ -26,6 +26,20 @@ export interface SpatialValidator {
     playerId: string,
     position: readonly [number, number, number],
   ): SpatialDecision;
+  /**
+   * Whether the Inspector is close enough to this object, right now, to have
+   * brushed past it (§6.4). The simulation asks once per inspector per live
+   * disguise per tick and owns everything else about a close pass: how long the
+   * Inspector has to stay there, and how often one pair may score.
+   *
+   * Unlike the three above it is a source rather than a gate. They answer
+   * "may this happen", so not knowing means refusing; this answers "is this
+   * happening", so not knowing means nothing happens. A validator with no eye
+   * position must return `ok: false` here for the same reason it refuses an
+   * accusation: an authority that has never heard where the Inspector is
+   * cannot say they walked past anybody.
+   */
+  isNearby(inspectorId: string, targetObjectId: string): SpatialDecision;
 }
 
 export interface SpatialDecision {
@@ -42,9 +56,17 @@ export interface SpatialDecision {
   readonly level?: 1 | 2;
 }
 
-/** Default used by unit tests and by hosts that have not wired geometry yet. */
+/**
+ * Default used by unit tests and by hosts that have not wired geometry yet.
+ *
+ * Permissive means every gate opens and no close pass is ever produced. Both
+ * halves are the same rule read in the right direction: a host with no geometry
+ * blocks nothing and invents nothing. Answering `ok: true` to `isNearby` would
+ * make it invent one for every hider on every tick of the hunt.
+ */
 export const PERMISSIVE_SPATIAL_VALIDATOR: SpatialValidator = {
   canAccuse: () => ({ ok: true }),
   canObserve: () => ({ ok: true }),
   canOccupy: () => ({ ok: true }),
+  isNearby: () => ({ ok: false, reason: "no_geometry" }),
 };

@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactElement, ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 
 /**
  * Screen-region ownership for the round HUD.
@@ -116,6 +116,9 @@ export const REGION_RULES: Readonly<Record<HudRegion, RegionRule>> = {
   },
 };
 
+/** Space a region leaves between the cards stacked inside it. */
+export const REGION_GAP = 10;
+
 export interface Rect {
   readonly left: number;
   readonly top: number;
@@ -181,7 +184,7 @@ export function regionStyle(region: HudRegion): CSSProperties {
     ...axisCss(rule.y, "top", "height"),
     display: "flex",
     flexDirection: "column",
-    gap: 10,
+    gap: REGION_GAP,
     justifyContent: FLEX_POSITION[rule.justify],
     alignItems: FLEX_POSITION[rule.align],
     overflowY: rule.overflowY,
@@ -190,6 +193,36 @@ export function regionStyle(region: HudRegion): CSSProperties {
     // back in, which is the same rule the rest of the HUD follows.
     pointerEvents: "none",
   };
+}
+
+/**
+ * How tall a region is in the current viewport. Without a window it answers for
+ * 1280x720, the smallest size the HUD is checked at, so anything sized from this
+ * before layout is never larger than it can be.
+ */
+export function regionHeight(region: HudRegion): number {
+  const width = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const height = typeof window === "undefined" ? 720 : window.innerHeight;
+  const rect = regionRect(region, width, height);
+  return rect.bottom - rect.top;
+}
+
+/** `regionHeight`, kept current through a window that changes size mid-round. */
+export function useRegionHeight(region: HudRegion): number {
+  const [height, setHeight] = useState(() => regionHeight(region));
+
+  useEffect(() => {
+    const onResize = (): void => {
+      setHeight(regionHeight(region));
+    };
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => {
+      window.removeEventListener("resize", onResize);
+    };
+  }, [region]);
+
+  return height;
 }
 
 /**

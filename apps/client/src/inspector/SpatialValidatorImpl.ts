@@ -1,4 +1,5 @@
 import type { SpatialDecision, SpatialValidator } from "@foldseek/game-sim";
+import { CLOSE_PASS_DISTANCE_M } from "@foldseek/shared";
 
 import { boundsVisibleFrom, distanceToBounds, SIGHT_LINE_EPSILON_M } from "./geometry";
 import { containsXZ, type AABB, type Vec3Like, type WalkableSurface } from "./navData";
@@ -76,6 +77,18 @@ export class SpatialValidatorImpl implements SpatialValidator {
 
   canObserve(inspectorId: string, targetObjectId: string): SpatialDecision {
     return this.check(inspectorId, targetObjectId, this.deps.focusDistance);
+  }
+
+  /**
+   * Proximity for the close passes of §6.4, on the same terms as the two above:
+   * the same eye, the same bounds, the same sight line, a shorter reach. Sight
+   * line is part of it on purpose. Two body heights is nothing at this scale,
+   * so an Inspector in the next aisle can be 0.7 m from a disguise with a
+   * cabinet between them, and walking along the far side of a wall is not the
+   * beat where somebody nearly had you.
+   */
+  isNearby(inspectorId: string, targetObjectId: string): SpatialDecision {
+    return this.check(inspectorId, targetObjectId, CLOSE_PASS_DISTANCE_M);
   }
 
   /**
