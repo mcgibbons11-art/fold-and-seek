@@ -7,7 +7,7 @@ import {
   missedFindsCountdown,
 } from "../../gameplay/copy";
 import type { MissedFindsRowView, RoundViewState } from "../../gameplay/roundView";
-import { BRASS, CREAM, EDGE, labelStyle, overlayStyle, panelStyle } from "./theme";
+import { BRASS, CREAM, EDGE, INK, labelStyle } from "./theme";
 
 /**
  * The missed-finds board, the original's Missed-Spot Ranking on key 6. Both
@@ -55,30 +55,31 @@ export function MissedFindsHud({ state }: MissedFindsHudProps): ReactElement {
   const board = state.missedFinds;
 
   return (
-    <div style={overlayStyle}>
-      <div
-        style={{
-          ...panelStyle,
-          top: 16,
-          right: 16,
-          width: 250,
-          pointerEvents: "none",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-          <div style={labelStyle}>{MISSED_FINDS_TITLE}</div>
-          <div style={{ ...labelStyle, opacity: 0.4 }}>{MISSED_FINDS_TOGGLE_HINT}</div>
-        </div>
+    <div
+      style={{
+        background: INK,
+        border: EDGE,
+        borderRadius: 10,
+        padding: "12px 14px",
+        backdropFilter: "blur(6px)",
+        width: "100%",
+        boxSizing: "border-box",
+        pointerEvents: "none",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+        <div style={labelStyle}>{MISSED_FINDS_TITLE}</div>
+        <div style={{ ...labelStyle, opacity: 0.4 }}>{MISSED_FINDS_TOGGLE_HINT}</div>
+      </div>
 
-        {board.received ? (
-          board.rows.map((row) => <MissedFindsRow key={row.publicPlayerId} row={row} />)
-        ) : (
-          <div style={{ padding: "6px 0", opacity: 0.6 }}>{MISSED_FINDS_AWAITING}</div>
-        )}
+      {board.received ? (
+        board.rows.map((row) => <MissedFindsRow key={row.publicPlayerId} row={row} />)
+      ) : (
+        <div style={{ padding: "6px 0", opacity: 0.6 }}>{MISSED_FINDS_AWAITING}</div>
+      )}
 
-        <div style={{ ...labelStyle, marginTop: 8 }}>
-          {board.received ? missedFindsCountdown(board.secondsToNextUpdate) : ""}
-        </div>
+      <div style={{ ...labelStyle, marginTop: 8 }}>
+        {board.received ? missedFindsCountdown(board.secondsToNextUpdate) : ""}
       </div>
     </div>
   );

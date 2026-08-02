@@ -3,7 +3,9 @@ import {
   type MatchCommand,
   type MatchSettingsPatch,
   type ObjectRegistry,
+  type PrivateMatchState,
   type PrivateSimEvent,
+  type PublicMatchState,
   type SimEvent,
   type SimOutput,
   type SpatialValidator,
@@ -53,6 +55,40 @@ export interface LocalLoopbackOptions {
    * arrangement at the world origin rather than anywhere in the room.
    */
   readonly botPose?: (index: number, playerId: string) => string | null;
+  /**
+   * Behaviour for auto-playing bots beyond readying up and locking: patrolling,
+   * accusing, creeping. Omitted, bots lock a disguise and do nothing else, and
+   * a round in which the bots inspect runs the clock out.
+   */
+  readonly botBrain?: BotBrain;
+}
+
+/**
+ * What one bot may do on one tick. A command is anything a player could send;
+ * a forge snapshot is the pose channel, which is not a command because it is
+ * validated on its own terms (creep speed, revision, play volume).
+ */
+export type BotAction =
+  | { readonly kind: "command"; readonly command: MatchCommand }
+  | { readonly kind: "forge_snapshot"; readonly encodedPose: string; readonly revision: number };
+
+export interface BotTurn {
+  /** Seat order, which is what `botPose` indexes bot disguises by. */
+  readonly index: number;
+  readonly playerId: string;
+  readonly nowMs: number;
+  readonly publicState: PublicMatchState;
+  /**
+   * This bot's own private state. No other seat's is ever offered here, so a
+   * brain cannot read another player's role or disguise even by mistake.
+   */
+  readonly privateState: PrivateMatchState;
+}
+
+export interface BotBrain {
+  act(turn: BotTurn): readonly BotAction[];
+  /** A bot that has left the room, so any state kept for it can go. */
+  release?(playerId: string): void;
 }
 
 export interface AddBotOptions {
@@ -235,6 +271,7 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
     const index = this.bots.findIndex((bot) => bot.playerId === playerId);
     if (index < 0) return;
     this.bots.splice(index, 1);
+    this.options.botBrain?.release?.(playerId);
     if (this.sim) {
       this.publish(this.sim.removePlayer(playerId));
       this.emitRoster();
@@ -314,12 +351,19 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
   }
 
   /**
-   * The smallest policy that lets a solo player reach the reveal: bots ready up
-   * in the lobby and, as Mimics, lock a placeholder pose during the Forge. They
-   * make no inspection decisions, so a bot-only round ends on the timer.
+   * Gets every bot through the round. Readying up in the lobby and locking a
+   * disguise in the Forge are the two things a seat must do for the match to
+   * progress at all, so they live here; everything a bot chooses to do after
+   * that is the brain's, and a round without one runs the clock out.
    */
   private driveBots(sim: MatchSimulation): void {
     const phase = sim.getPhase();
+    const brain = this.options.botBrain;
+    // Taken once and shared: it is a defensive copy of the whole room, and one
+    // per bot per tick would be several disguise poses of garbage a second.
+    const publicState = brain === undefined ? null : sim.getPublicState();
+    const nowMs = this.clock();
+
     for (const [index, bot] of this.bots.entries()) {
       if (!bot.autoPlay) continue;
       const state = sim.getPrivateStateFor(bot.playerId);
@@ -338,8 +382,33 @@ export class LocalLoopbackAdapter implements NetworkAdapter {
             revision: 1,
           }),
         );
+        continue;
       }
+      if (brain === undefined || publicState === null) continue;
+
+      const actions = brain.act({
+        index,
+        playerId: bot.playerId,
+        nowMs,
+        publicState,
+        privateState: state,
+      });
+      for (const action of actions) this.applyBotAction(bot.playerId, action);
     }
+  }
+
+  private applyBotAction(playerId: string, action: BotAction): void {
+    const sim = this.sim;
+    if (!sim) return;
+    if (action.kind === "command") {
+      this.sendCommandAs(playerId, action.command);
+      return;
+    }
+    // A creep is judged on its own terms, so it goes to the pose channel rather
+    // than through handleCommand, exactly as a human hider's does.
+    this.publish(
+      sim.recordForgeSnapshot(playerId, action.encodedPose, action.revision, this.clock()),
+    );
   }
 
   /**

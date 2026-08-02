@@ -13,7 +13,22 @@ export {
   WRONG_ACCUSATION_SOUND,
   type SoundCue,
 } from "./huntCues";
-export { createBotDisguise, createBotDisguisePayload } from "./botDisguises";
+export {
+  BotCreep,
+  BOT_HIDE_PLANS,
+  botCreeps,
+  botHidePlan,
+  createBotDisguise,
+  createBotDisguisePayload,
+  humanMimicSpawn,
+  type BotHidePlan,
+  type BotPoseOptions,
+} from "./botDisguises";
+export {
+  BotInspector,
+  type BotInspectorDeps,
+  type BotInspectorTurn,
+} from "./botInspector";
 export {
   RoundSession,
   type RoundCameraMode,

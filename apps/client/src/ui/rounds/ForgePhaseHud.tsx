@@ -3,7 +3,7 @@ import type { ReactElement, ReactNode } from "react";
 import { HIDER_CREEP_HINT } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { PhaseTimer } from "./PhaseTimer";
-import { BRASS, labelStyle, overlayStyle, panelStyle } from "./theme";
+import { overlayStyle } from "./theme";
 
 /**
  * Phase chrome for the Forge (§5.7, §5.8): the countdown, the FOLD headline,
@@ -12,6 +12,10 @@ import { BRASS, labelStyle, overlayStyle, panelStyle } from "./theme";
  *
  * Inspectors spend this phase in the Security Office and see the same clock
  * with none of the tools, which is what the empty children case covers.
+ *
+ * The lock is reported in the timer's own note rather than in a second panel.
+ * The Forge already owns the bottom of the screen for its status line, and two
+ * panels anchored bottom-centre draw on top of one another.
  */
 
 export interface ForgePhaseHudProps {
@@ -20,36 +24,18 @@ export interface ForgePhaseHudProps {
   readonly children?: ReactNode;
 }
 
-export function ForgePhaseHud({ state, children }: ForgePhaseHudProps): ReactElement {
-  const { self } = state;
-  const note =
-    self.role === "inspector"
-      ? "Security Office"
-      : self.disguiseLocked
-        ? "Disguise locked"
-        : null;
+function phaseNote(self: RoundViewState["self"]): string | null {
+  if (self.role === "inspector") return "Security Office";
+  if (!self.disguiseLocked) return null;
+  const lock = self.ownDisguise?.autoLocked === true ? "Locked for you" : "Locked";
+  return `${lock} · ${HIDER_CREEP_HINT}`;
+}
 
+export function ForgePhaseHud({ state, children }: ForgePhaseHudProps): ReactElement {
   return (
     <div style={overlayStyle}>
-      <PhaseTimer timer={state.timer} label={state.phaseLabel} note={note} />
+      <PhaseTimer timer={state.timer} label={state.phaseLabel} note={phaseNote(state.self)} />
       {children}
-      {self.disguiseLocked && self.role === "mimic" ? (
-        <div
-          style={{
-            ...panelStyle,
-            bottom: 24,
-            left: "50%",
-            transform: "translateX(-50%)",
-            pointerEvents: "none",
-            textAlign: "center",
-          }}
-        >
-          <div style={{ ...labelStyle, color: BRASS }}>
-            {self.ownDisguise?.autoLocked === true ? "Locked for you" : "Locked"}
-          </div>
-          <div style={{ marginTop: 4, opacity: 0.85 }}>{HIDER_CREEP_HINT}</div>
-        </div>
-      ) : null}
     </div>
   );
 }

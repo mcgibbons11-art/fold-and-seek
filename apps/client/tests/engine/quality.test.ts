@@ -28,6 +28,9 @@ const REQUIRED_KEYS: readonly (keyof QualitySettings)[] = [
   "bloom",
   "maxAnisotropy",
   "clutterDensity",
+  // Consumed by ShopLighting, which runs this many practicals as real point
+  // lights and stands a drawn pool in for every lamp past it.
+  "maxPracticalLights",
 ];
 
 describe("qualitySettingsFor", () => {

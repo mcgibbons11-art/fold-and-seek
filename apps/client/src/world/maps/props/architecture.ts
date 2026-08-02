@@ -1,7 +1,9 @@
 import * as THREE from "three/webgpu";
+import { FLOORBOARD_SWATCH_IDS } from "../swatches";
+import { buildFloorClutter } from "./clutter";
 import type { PropContext } from "./context";
-import { chamferedBox, chamferedSlab } from "./geometry";
-import { GLASS_PANE_MATERIAL, MOON_BACKDROP_MATERIAL } from "./materials";
+import { chamferedBox, chamferedSlab, makeRandom } from "./geometry";
+import { GLASS_PANE_MATERIAL, MOON_BACKDROP_MATERIAL, PLANK_TILE_LENGTH_M } from "./materials";
 import {
   DOOR_HEIGHT,
   DOOR_MAX_X,
@@ -55,41 +57,96 @@ export function buildArchitecture(ctx: PropContext): void {
   buildDisplayPlatform(ctx);
   buildThresholds(ctx);
   buildNightExterior(ctx);
+  // Dressing, and the last thing laid down: it scatters over the floor the
+  // shell has just established and reads the authored props to keep out of them.
+  buildFloorClutter(ctx);
 }
 
+/**
+ * Projects the plank maps onto a board: u runs along its length in tiles of
+ * `PLANK_TILE_LENGTH_M`, v runs from one joint across to the other.
+ *
+ * The extruder's own UVs come from the profile it was cut from, so every board
+ * of a given width received the same coordinates and therefore the same grain
+ * down to the texel. Re-projecting here is what lets each board carry its own
+ * run of the map, and `uOffset`, `uScale` and `flipV` are what stop the floor
+ * from reading as one board printed fifty times.
+ */
+function projectPlankUv(
+  geometry: THREE.BufferGeometry,
+  length: number,
+  width: number,
+  uOffset: number,
+  uScale: number,
+  flipV: boolean,
+): THREE.BufferGeometry {
+  const position = geometry.getAttribute("position");
+  const uv = geometry.getAttribute("uv");
+  if (position === undefined || uv === undefined) {
+    return geometry;
+  }
+  for (let i = 0; i < position.count; i += 1) {
+    const u = ((position.getX(i) + length / 2) / PLANK_TILE_LENGTH_M) * uScale + uOffset;
+    const across = (position.getZ(i) + width / 2) / width;
+    uv.setXY(i, u, flipV ? 1 - across : across);
+  }
+  uv.needsUpdate = true;
+  return geometry;
+}
+
+/**
+ * The floorboards.
+ *
+ * At giant scale the floor is a landscape rather than a surface: it occupies
+ * the bottom of nearly every eye-level frame, so each board is built as its own
+ * geometry carrying its own slice of the plank map. That costs one cached
+ * geometry per board and no draw calls at all — a board appears once, which
+ * puts every bucket under the merge threshold, so the whole floor bakes down to
+ * one static mesh per tone.
+ *
+ * Tones are drawn rather than cycled. The old fixed eight-board pattern put a
+ * dark board every third board exactly, which the eye reads as stripes; a
+ * deterministic draw gives runs and singletons the way sorted stock does.
+ */
 function buildFloor(ctx: PropContext): void {
   const b = ctx.batcher;
   b.begin("shop.floor", [0, 0, 0], 0, false, 1, "standard", true);
 
-  // Two close walnut tones with an occasional pale board. A wider spread reads
-  // as stripes rather than as a floor.
-  const tonePattern = [
-    "walnut_mid_02",
-    "walnut_dark_01",
-    "walnut_mid_02",
-    "walnut_mid_02",
-    "walnut_dark_01",
-    "walnut_mid_02",
-    "walnut_dark_01",
-    "walnut_mid_02",
-  ];
-  const tones = tonePattern.map((id) => ctx.materials.get(id));
+  const [oakId, bleachedId, stainedId] = FLOORBOARD_SWATCH_IDS;
+  const oak = ctx.materials.get(oakId);
+  const bleached = ctx.materials.get(bleachedId);
+  const stained = ctx.materials.get(stainedId);
+  const random = makeRandom(9137);
+
   let cursor = SHOP_MIN_Z;
   let index = 0;
   while (cursor < SHOP_MAX_Z - 0.01) {
     const width = PLANK_WIDTHS[index % PLANK_WIDTHS.length] ?? 0.48;
     const depth = Math.min(width, SHOP_MAX_Z - cursor);
-    const material = tones[index % tones.length];
-    if (material !== undefined) {
-      b.part(
-        ctx.geometry.get(`floor.plank#${depth.toFixed(3)}`, () =>
-          chamferedSlab(WIDTH, FLOOR_THICKNESS, depth - 0.012, 0.008),
+    const board = depth - 0.012;
+
+    const tone = random();
+    const material = tone < 0.58 ? oak : tone < 0.85 ? stained : bleached;
+    const uOffset = random() * 7;
+    const uScale = 0.93 + random() * 0.14;
+    const flipV = random() > 0.5;
+
+    b.part(
+      ctx.geometry.get(`floor.plank#${String(index)}`, () =>
+        projectPlankUv(
+          chamferedSlab(WIDTH, FLOOR_THICKNESS, board, 0.008),
+          WIDTH,
+          board,
+          uOffset,
+          uScale,
+          flipV,
         ),
-        material,
-        { y: -FLOOR_THICKNESS / 2, z: cursor + depth / 2 },
-        { shadow: false },
-      );
-    }
+      ),
+      material,
+      { y: -FLOOR_THICKNESS / 2, z: cursor + depth / 2 },
+      { shadow: false },
+    );
+
     cursor += depth;
     index += 1;
   }

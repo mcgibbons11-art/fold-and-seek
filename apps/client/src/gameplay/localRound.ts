@@ -1,6 +1,16 @@
-import { LocalLoopbackAdapter } from "../networking/LocalLoopbackAdapter";
+import type { MatchSettingsPatch } from "@foldseek/game-sim";
+import { MatchPhase } from "@foldseek/shared";
+
+import {
+  LocalLoopbackAdapter,
+  type BotAction,
+  type BotBrain,
+  type BotTurn,
+} from "../networking/LocalLoopbackAdapter";
 import { buildObjectRegistry } from "../world/maps/registry";
-import { createBotDisguisePayload } from "./botDisguises";
+import { NAV_DATA } from "../world/maps/nav";
+import { BotCreep, createBotDisguisePayload } from "./botDisguises";
+import { BotInspector } from "./botInspector";
 import { RoundDirector } from "./RoundDirector";
 import { RoundSpatialBridge } from "./roundSpatial";
 
@@ -10,10 +20,11 @@ import { RoundSpatialBridge } from "./roundSpatial";
  * the real Curiosity Shop registry and the real geometry validator, so a solo
  * round exercises the same rules a hosted one does.
  *
- * The bots exist to field a round, not to play one: they ready up and lock a
- * disguise, and make no inspection decisions. Three of them puts four players
- * in the shop, which is one Inspector and three Mimics whichever way the roles
- * fall.
+ * The bots play it. One dealt the Inspector's role walks the shop and spends
+ * warrants; ones dealt Mimic fold into a hiding place and, if that place is out
+ * in the open, cannot keep still. A solo round therefore ends with somebody
+ * caught and somebody else still standing, rather than with the clock running
+ * out on four identical scorelines.
  */
 
 export const LOCAL_ROUND_BOTS = 3;
@@ -30,6 +41,10 @@ export interface LocalRoundOptions {
   readonly bots?: number;
   /** Fixed seed for a repeatable round. Omitted, every round deals afresh. */
   readonly seed?: number;
+  /** Shortened phase durations, for driving a whole round headlessly. */
+  readonly settings?: MatchSettingsPatch;
+  /** Clock source. Defaults to the loopback's, which is performance.now(). */
+  readonly now?: () => number;
 }
 
 /**
@@ -52,13 +67,115 @@ export function seedFromLocation(search: string): number | undefined {
   return Number.isSafeInteger(seed) && seed >= 0 ? seed : undefined;
 }
 
+/** Which hiding place a given bot took, stable for the life of the room. */
+type HidePlanRegister = (playerId: string) => number;
+
+/**
+ * Hands out the hiding places in the order bots actually hide, rather than by
+ * seat. Seats are dealt roles by a shuffle, so a seat-ordered table gives the
+ * two bots left hiding whichever plans the Inspector's seat did not take, and
+ * one deal in three left both of them standing in the open with nobody in cover.
+ * Assigning on the way into a disguise keeps the round's mix of good and bad
+ * hides whoever ends up carrying the gun.
+ */
+function createHidePlanRegister(): HidePlanRegister {
+  const taken = new Map<string, number>();
+  return (playerId: string) => {
+    const existing = taken.get(playerId);
+    if (existing !== undefined) return existing;
+    const assigned = taken.size;
+    taken.set(playerId, assigned);
+    return assigned;
+  };
+}
+
+/** Phases in which a manifested disguise may still be adjusted (§5.12). */
+function isLiveHiderPhase(phase: MatchPhase): boolean {
+  return (
+    phase === MatchPhase.InspectionIntro ||
+    phase === MatchPhase.Inspection ||
+    phase === MatchPhase.FinalCountdown
+  );
+}
+
+/**
+ * Routes each bot to the behaviour its own role calls for. It is the one place
+ * that reads the room's list of disguises, and it reads exactly one thing from
+ * it, the object ids, which it merges into the shop's props before handing the
+ * result to the Inspector brain. The brain is therefore given a flat list of
+ * things in the room with no record of which are people, which is the same view
+ * a human client's reticle has (§8.5).
+ */
+function createBotBrain(spatial: RoundSpatialBridge, seed: number, hidePlan: HidePlanRegister): BotBrain {
+  const propIds = buildObjectRegistry().objects.map((entry) => entry.objectId);
+  const creep = new BotCreep();
+  let candidateIds: readonly string[] = propIds;
+
+  const inspector = new BotInspector(
+    {
+      nav: NAV_DATA,
+      candidateIds: () => candidateIds,
+      objectBounds: (objectId) => spatial.boundsOf(objectId),
+      setEye: (playerId, eye) => {
+        spatial.setInspectorEye(playerId, eye);
+      },
+    },
+    seed,
+  );
+
+  return {
+    act(turn: BotTurn): readonly BotAction[] {
+      const { publicState, privateState } = turn;
+      if (privateState.role === "inspector") {
+        candidateIds = [
+          ...propIds,
+          ...publicState.disguises.map((disguise) => disguise.publicObjectId),
+        ];
+        return inspector
+          .update({
+            playerId: turn.playerId,
+            nowMs: turn.nowMs,
+            phase: publicState.phase,
+            round: publicState.round,
+            settings: publicState.settings,
+            warrantsRemaining: privateState.warrantsRemaining ?? 0,
+            accusationReadyAt: privateState.accusationReadyAt ?? 0,
+          })
+          .map((command) => ({ kind: "command", command }) as const);
+      }
+
+      if (
+        privateState.role !== "mimic" ||
+        privateState.lifeState !== "active" ||
+        privateState.ownDisguise === null ||
+        !isLiveHiderPhase(publicState.phase)
+      ) {
+        return [];
+      }
+      const shift = creep.update(hidePlan(turn.playerId), turn.playerId, turn.nowMs);
+      return shift === null
+        ? []
+        : [{ kind: "forge_snapshot", encodedPose: shift.encodedPose, revision: shift.revision }];
+    },
+    release(playerId: string) {
+      inspector.release(playerId);
+      creep.release(playerId);
+    },
+  };
+}
+
 export function createLocalRound(options: LocalRoundOptions = {}): LocalRound {
+  const seed = options.seed ?? dealSeed();
   const spatial = new RoundSpatialBridge();
+  const hidePlan = createHidePlanRegister();
   const adapter = new LocalLoopbackAdapter({
-    seed: options.seed ?? dealSeed(),
+    seed,
     spatial: spatial.validator,
     objectRegistry: buildObjectRegistry(),
-    botPose: (index) => createBotDisguisePayload(index),
+    botPose: (_index, playerId) => createBotDisguisePayload(hidePlan(playerId)),
+    botBrain: createBotBrain(spatial, seed, hidePlan),
+    ...(options.settings === undefined ? {} : { settings: options.settings }),
+    ...(options.now === undefined ? {} : { now: options.now }),
   });
   for (let index = 0; index < (options.bots ?? LOCAL_ROUND_BOTS); index += 1) {
     adapter.addBot({ autoPlay: true });

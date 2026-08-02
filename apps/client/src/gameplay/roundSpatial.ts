@@ -86,6 +86,15 @@ export class RoundSpatialBridge implements SpatialValidator {
     this.disguiseBounds = lookup;
   }
 
+  /**
+   * Where the round believes an object is. A prop and a disguise answer through
+   * the same lookup, in that order, so neither is easier to reach than the other
+   * (§8.5) and nothing reading this can tell one from the other.
+   */
+  boundsOf(objectId: string): AABB | null {
+    return PROP_BOUNDS.get(objectId) ?? this.disguiseBounds(objectId);
+  }
+
   private build(): SpatialValidatorImpl {
     return new SpatialValidatorImpl({
       floors: NAV_DATA.floors,
@@ -93,9 +102,7 @@ export class RoundSpatialBridge implements SpatialValidator {
       accusationDistance: this.accusationDistance,
       focusDistance: this.focusDistance,
       inspectorEye: (inspectorId) => this.eyes.get(inspectorId) ?? null,
-      // A prop and a disguise answer through the same lookup, in that order, so
-      // neither is easier to reach than the other (§8.5).
-      objectBounds: (objectId) => PROP_BOUNDS.get(objectId) ?? this.disguiseBounds(objectId),
+      objectBounds: (objectId) => this.boundsOf(objectId),
     });
   }
 }

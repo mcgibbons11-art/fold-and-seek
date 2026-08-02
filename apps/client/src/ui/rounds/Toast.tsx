@@ -19,7 +19,7 @@ export interface ToastEntry {
 
 export interface ToastProps {
   readonly entries: readonly ToastEntry[];
-  /** Corner to stack in. Defaults to the top right. */
+  /** Extra styling for the stack. The region it sits in decides where it is. */
   readonly anchor?: CSSProperties;
 }
 
@@ -30,9 +30,6 @@ const TONE_COLORS: Readonly<Record<ToastTone, string>> = {
 };
 
 const stackStyle: CSSProperties = {
-  position: "absolute",
-  top: 16,
-  right: 16,
   display: "flex",
   flexDirection: "column",
   gap: 8,

@@ -21,6 +21,12 @@ export interface QualitySettings {
   readonly bloom: boolean;
   readonly maxAnisotropy: number;
   readonly clutterDensity: number;
+  /**
+   * Live point lights a map may run. A map that authors more fixtures than
+   * this shows the rest as emissive geometry over its own light pools, so the
+   * room keeps its lamps without paying for them (see `world/maps/lighting.ts`).
+   */
+  readonly maxPracticalLights: number;
 }
 
 export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
@@ -37,6 +43,7 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     bloom: true,
     maxAnisotropy: 16,
     clutterDensity: 1,
+    maxPracticalLights: 20,
   },
   high: {
     tier: "high",
@@ -51,6 +58,7 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     bloom: true,
     maxAnisotropy: 8,
     clutterDensity: 0.85,
+    maxPracticalLights: 17,
   },
   medium: {
     tier: "medium",
@@ -65,6 +73,7 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     bloom: true,
     maxAnisotropy: 4,
     clutterDensity: 0.6,
+    maxPracticalLights: 10,
   },
   low: {
     tier: "low",
@@ -79,6 +88,7 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     bloom: false,
     maxAnisotropy: 2,
     clutterDensity: 0.4,
+    maxPracticalLights: 7,
   },
   light: {
     tier: "light",
@@ -93,6 +103,7 @@ export const QUALITY_PRESETS: Readonly<Record<QualityTier, QualitySettings>> = {
     bloom: false,
     maxAnisotropy: 1,
     clutterDensity: 0.25,
+    maxPracticalLights: 5,
   },
 };
 
@@ -100,8 +111,50 @@ export function isQualityTier(value: string): value is QualityTier {
   return Object.prototype.hasOwnProperty.call(QUALITY_PRESETS, value);
 }
 
-export function qualitySettingsFor(tier: QualityTier): QualitySettings {
-  return QUALITY_PRESETS[tier];
+/**
+ * Live point lights the WebGPU path may run, whatever the tier asks for.
+ *
+ * Three shades every punctual light in a loop per fragment, and its WebGPU
+ * node-material path is far weaker at it than the WebGL 2 renderer: measured on
+ * a frozen production build, the shop ran 5.4 fps at the high tier on WebGPU
+ * against roughly 21 on WebGL 2 with the same seventeen lamps, GPU-bound with
+ * no CPU stall. Cutting the live count is the one lever that moved it.
+ *
+ * This is a ceiling rather than a replacement, so a tier that already asks for
+ * less still gets less. The lamps a map cannot afford to light do not vanish;
+ * `ShopLighting` draws them as emissive fixtures over their own light pools.
+ */
+const WEBGPU_PRACTICAL_CEILING: Readonly<Record<QualityTier, number>> = {
+  ultra: 6,
+  high: 6,
+  medium: 5,
+  low: 4,
+  light: 3,
+};
+
+/**
+ * Capped settings are memoised so one tier on one backend is always the same
+ * object. Callers compare settings by identity to decide whether a change is
+ * worth re-applying down the whole world.
+ */
+const cappedSettings = new Map<QualityTier, QualitySettings>();
+
+export function qualitySettingsFor(tier: QualityTier, backend: RenderBackend = "webgl2"): QualitySettings {
+  const preset = QUALITY_PRESETS[tier];
+  if (backend !== "webgpu") {
+    return preset;
+  }
+  const ceiling = Math.min(preset.maxPracticalLights, WEBGPU_PRACTICAL_CEILING[tier]);
+  if (ceiling === preset.maxPracticalLights) {
+    return preset;
+  }
+  const existing = cappedSettings.get(tier);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const capped: QualitySettings = { ...preset, maxPracticalLights: ceiling };
+  cappedSettings.set(tier, capped);
+  return capped;
 }
 
 const PROBE_WARMUP_FRAMES = 24;

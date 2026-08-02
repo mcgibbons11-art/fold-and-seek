@@ -22,6 +22,7 @@ import {
   type PanelState,
 } from "../panels";
 import {
+  BELLOWS_OUTER_RATIO,
   createBellowsGeometry,
   createPanelGeometry,
   createPuckGeometry,
@@ -48,29 +49,38 @@ import {
 /**
  * Nominal cross-section of each segment at form scale 1, in the same authored
  * units as the bone table, converted to metres by `SEGMENT_DIMENSIONS` below.
+ *
+ * The proportions are what makes the body read as a creature rather than as a
+ * pile of rounded solids, so they are set against the silhouette rather than
+ * against the bone table: the head pod is the widest thing above the chest, the
+ * neck is little more than half the head, the chest is the widest part of the
+ * trunk and the waist is the narrowest, and every limb shell is slim enough to
+ * clear the trunk it hangs beside. An upper arm hangs with its centre 0.13 out
+ * from the spine, so at 0.10 across it stands 0.045 clear of a 0.27 chest — the
+ * arm has an outline of its own from the front, which is the whole point.
  */
 const AUTHORED_SEGMENT_DIMENSIONS: Readonly<
   Record<SegmentBoneName, readonly [number, number]>
 > = {
-  pelvis: [0.26, 0.2],
-  torso_lower: [0.3, 0.22],
-  torso_upper: [0.32, 0.23],
-  neck: [0.1, 0.1],
-  head: [0.26, 0.24],
-  shoulder_L: [0.13, 0.13],
-  upperarm_L: [0.11, 0.11],
-  forearm_L: [0.095, 0.095],
-  hand_L: [0.11, 0.05],
-  shoulder_R: [0.13, 0.13],
-  upperarm_R: [0.11, 0.11],
-  forearm_R: [0.095, 0.095],
-  hand_R: [0.11, 0.05],
-  thigh_L: [0.15, 0.15],
-  shin_L: [0.12, 0.12],
-  foot_L: [0.12, 0.09],
-  thigh_R: [0.15, 0.15],
-  shin_R: [0.12, 0.12],
-  foot_R: [0.12, 0.09],
+  pelvis: [0.25, 0.2],
+  torso_lower: [0.23, 0.195],
+  torso_upper: [0.27, 0.215],
+  neck: [0.115, 0.115],
+  head: [0.2, 0.2],
+  shoulder_L: [0.145, 0.145],
+  upperarm_L: [0.1, 0.105],
+  forearm_L: [0.088, 0.092],
+  hand_L: [0.1, 0.045],
+  shoulder_R: [0.145, 0.145],
+  upperarm_R: [0.1, 0.105],
+  forearm_R: [0.088, 0.092],
+  hand_R: [0.1, 0.045],
+  thigh_L: [0.145, 0.15],
+  shin_L: [0.108, 0.112],
+  foot_L: [0.115, 0.085],
+  thigh_R: [0.145, 0.15],
+  shin_R: [0.108, 0.112],
+  foot_R: [0.115, 0.085],
 };
 
 const SEGMENT_DIMENSIONS = Object.fromEntries(
@@ -80,6 +90,30 @@ const SEGMENT_DIMENSIONS = Object.fromEntries(
   ]),
 ) as Readonly<Record<SegmentBoneName, readonly [number, number]>>;
 
+/**
+ * How far a shell is drawn past its bone's tip, as a share of its own length.
+ *
+ * Every shell closes to a point at both ends, so four trunk shells laid end to
+ * end pinch four times and read as a stack of beads rather than as one body.
+ * Overrunning a trunk shell into its successor buries both pinches. The values
+ * differ because the segments do: the pelvis is a short block and has to reach
+ * well into the waist above it, while the chest is long and needs only a little
+ * to close over the base of the neck.
+ *
+ * A share rather than a length, so a player who stretches the trunk keeps the
+ * joint covered instead of opening a gap at the seam.
+ *
+ * Limbs are left alone: the pinch at an elbow or a knee is the articulation, and
+ * seeing it is what tells a forearm from an upper arm. The head runs to its bone
+ * tip exactly, because it is the crown and player height is measured against it.
+ */
+const SHELL_OVERRUN_SHARE: Readonly<Partial<Record<SegmentBoneName, number>>> = {
+  pelvis: 0.75,
+  torso_lower: 0.38,
+  torso_upper: 0.09,
+  neck: 0.6,
+};
+
 const PANEL_THICKNESS_M = 0.018 * RIG_TO_WORLD;
 
 /** A panel swings from flush with its parent to square out of it. */
@@ -88,8 +122,32 @@ const PANEL_DEPLOY_ANGLE_RAD = Math.PI / 2;
 /** Below this the panel is stowed inside its parent segment and not drawn. */
 const PANEL_VISIBLE_DEPLOY = 0.02;
 
-/** Bellows diameter as a fraction of the thinner of the two shells it bridges. */
-const BELLOWS_FILL = 0.92;
+/**
+ * Widest point of the dark rubber at a joint, as a share of the thinner of the
+ * two shells it bridges, keyed on the child bone. Over one leaves the rubber
+ * standing proud: that ring is what tells an elbow from the middle of a forearm
+ * at a glance, and it is the only edge definition a matte white body gets. Under
+ * one tucks it away, which is what the trunk wants, since the four trunk shells
+ * are drawn to read as one continuous surface.
+ *
+ * The ankle stays inside the sole. Rubber proud of the foot there would hang
+ * below the surface the body is standing on.
+ */
+const BELLOWS_OUTER_BY_BONE: Readonly<Partial<Record<SegmentBoneName, number>>> = {
+  upperarm_L: 1.1,
+  upperarm_R: 1.1,
+  forearm_L: 1.2,
+  forearm_R: 1.2,
+  hand_L: 1.15,
+  hand_R: 1.15,
+  shin_L: 1.2,
+  shin_R: 1.2,
+  foot_L: 0.97,
+  foot_R: 0.97,
+};
+
+/** Trunk joints, shoulders and hips, which the shells cover for themselves. */
+const BELLOWS_OUTER_DEFAULT = 0.94;
 const BELLOWS_RIBS = 3;
 
 const DEG_TO_RAD = Math.PI / 180;
@@ -260,7 +318,11 @@ export class MimicVisual {
     }
     this.panelGeometries = panelGeometries;
 
-    const markerGeometry = this.bag.add(createPuckGeometry(0.026, 0.014));
+    // A socket stud is a feature of the body, so it converts with the body. Left
+    // at 0.026 m it was a 52 mm brass disc on a 350 mm creature.
+    const markerGeometry = this.bag.add(
+      createPuckGeometry(0.024 * RIG_TO_WORLD, 0.013 * RIG_TO_WORLD),
+    );
     const panels: PanelVisual[] = [];
     const panelMeshes: THREE.Mesh[] = [];
     const socketMarkers: THREE.Mesh[] = [];
@@ -366,7 +428,13 @@ export class MimicVisual {
           twistRad: form.twistDeg * DEG_TO_RAD,
         });
       }
-      segment.mesh.scale.set(segment.width, segment.length, segment.depth);
+      // `segment.length` stays the bone's own length: it is what panel push and
+      // the head pod are measured against. Only what is drawn overruns.
+      segment.mesh.scale.set(
+        segment.width,
+        segment.length * (1 + (SHELL_OVERRUN_SHARE[bone] ?? 0)),
+        segment.depth,
+      );
     }
 
     for (let i = 0; i < this.bellows.length; i++) {
@@ -375,16 +443,17 @@ export class MimicVisual {
       if (mesh === undefined || childBone === undefined) {
         continue;
       }
-      const child = this.segments[segmentSlotOfBone(childBone)];
+      const childSlot = segmentSlotOfBone(childBone);
+      const child = this.segments[childSlot];
       const parentSlot = segmentSlotOfBone(BONES[childBone]?.parentIndex ?? -1);
       const parent = this.segments[parentSlot];
-      if (child === undefined || parent === undefined) {
+      const childName = SEGMENT_BONES[childSlot];
+      if (child === undefined || parent === undefined || childName === undefined) {
         continue;
       }
-      const diameter =
-        BELLOWS_FILL *
-        Math.min(child.width, child.depth, parent.width, parent.depth);
-      mesh.scale.setScalar(diameter);
+      const outer = BELLOWS_OUTER_BY_BONE[childName] ?? BELLOWS_OUTER_DEFAULT;
+      const thinnest = Math.min(child.width, child.depth, parent.width, parent.depth);
+      mesh.scale.setScalar((outer * thinnest) / BELLOWS_OUTER_RATIO);
     }
 
     // A socket sits at an authored point inside its parent bone, but a panel

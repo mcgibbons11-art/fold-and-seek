@@ -223,9 +223,14 @@ const HANDLE_DEFS: readonly HandleDef[] = [
 interface Handle {
   readonly def: HandleDef;
   readonly boneIndex: number;
+  /** The small grip the player sees. */
   readonly solid: THREE.Mesh;
-  readonly ghost: THREE.Mesh;
+  /** The billboarded outline around it, drawn through the body (§24.5). */
+  readonly ring: THREE.Mesh;
+  /** Invisible, and the only thing the pointer is tested against. */
+  readonly pick: THREE.Mesh;
   readonly group: THREE.Object3D;
+  readonly materials: readonly THREE.Material[];
 }
 
 interface SegmentEdit {
@@ -243,8 +248,23 @@ interface SegmentEdit {
  */
 const CAMERA_MIN_RADIUS = 0.6 * RIG_TO_WORLD;
 const CAMERA_MAX_RADIUS = 7 * RIG_TO_WORLD;
+/**
+ * Where the orbit starts. At a 40 degree field of view this stands the body
+ * across about two thirds of the frame height, which is the shot the workspace
+ * wants: the Mimic is the subject and the shelf it is hiding among is context.
+ * The old 2.4 was a leftover world-metre literal, further out than the wheel's
+ * own maximum, so the opening view could not be zoomed back to once left.
+ */
+const CAMERA_START_RADIUS = 2.4 * RIG_TO_WORLD;
 const CAMERA_MIN_PITCH = -1.2;
 const CAMERA_MAX_PITCH = 1.45;
+
+/**
+ * Height of the point the camera orbits, as a share of body height above the
+ * Mimic's feet. Just over halfway up puts the chest in the middle of the frame
+ * and leaves the head clear of the top edge.
+ */
+const ORBIT_TARGET_BODY_SHARE = 0.55;
 const ORBIT_PER_PIXEL = 0.007;
 const PITCH_PER_PIXEL = 0.005;
 const ZOOM_PER_NOTCH = 0.0016;
@@ -254,10 +274,50 @@ const ZOOM_PER_NOTCH = 0.0016;
  * screen. This one is a ratio rather than a length: it multiplies the camera
  * distance, which already shrank with the body, so converting it too would
  * shrink the handles twice.
+ *
+ * Drawing and grabbing are two different sizes on purpose. Seven filled discs at
+ * the grab radius covered more of the Mimic than the Mimic showed, and the body
+ * is the thing being judged; the drawn grip is therefore less than half the size
+ * of the disc the pointer actually hits, which costs nothing because the pick
+ * proxy is invisible.
  */
-const HANDLE_SCREEN_RADIUS = 0.028;
-const HANDLE_MIN_RADIUS = 0.022 * RIG_TO_WORLD;
-const HANDLE_MAX_RADIUS = 0.075 * RIG_TO_WORLD;
+const HANDLE_PICK_SCREEN_RADIUS = 0.028;
+const HANDLE_SCREEN_RADIUS = 0.012;
+const HANDLE_MIN_RADIUS = 0.009 * RIG_TO_WORLD;
+const HANDLE_MAX_RADIUS = 0.032 * RIG_TO_WORLD;
+const HANDLE_PICK_RATIO = HANDLE_PICK_SCREEN_RADIUS / HANDLE_SCREEN_RADIUS;
+
+/**
+ * Panel tips are their own picking target and appear only while the panel tool
+ * is up, so they are drawn at the size they are grabbed at rather than getting a
+ * proxy. Larger than a pose grip, because a panel tip is dragged out into open
+ * space where there is nothing else to aim at.
+ */
+const PANEL_TIP_SCREEN_RADIUS = 0.018;
+
+/** Inner edge of the outline ring, as a share of the handle radius. */
+const HANDLE_RING_INNER = 0.74;
+/** The solid grip inside the ring. */
+const HANDLE_GRIP_SCALE = 0.5;
+
+/**
+ * A handle is a hint while the pointer is elsewhere and a control under it, so
+ * it is drawn faint until it is hovered or held. Idle opacity is low enough that
+ * seven of them do not compete with the body they are attached to.
+ */
+const HANDLE_OPACITY_IDLE = 0.34;
+const HANDLE_OPACITY_HOVER = 0.85;
+const HANDLE_OPACITY_DRAG = 1;
+
+/**
+ * Draws nothing and writes no depth, but is still an ordinary object as far as
+ * the raycaster is concerned. One instance serves every pick proxy: it holds no
+ * per-handle state, so there is nothing for a controller to own or dispose.
+ */
+const INVISIBLE_PICK_MATERIAL = new THREE.MeshBasicMaterial({
+  colorWrite: false,
+  depthWrite: false,
+});
 
 /**
  * The volume the Forge may push the Mimic around inside (§7.16). It reaches the
@@ -322,7 +382,16 @@ const ANCHOR_PROBE_DIRECTIONS: readonly THREE.Vector3[] = [
  */
 const INSPECTOR_EYE_HEIGHT_M = WORLD_SCALE.eyeHeight;
 const INSPECTOR_STAND_BACK_M = WORLD_SCALE.playerHeight * PREVIEW_STAND_BACK_PER_BODY_HEIGHT;
-const DOORWAY_POSITION = new THREE.Vector3(2.9, 1.62, 2.6);
+
+/**
+ * The doorway preview stands where somebody who has just walked in would be:
+ * further back than the Inspector preview and at the same eye height, looking
+ * down the room's long axis. It used to be the fixed point (2.9, 1.62, 2.6),
+ * which was the practice room's doorway and, after the scale retune, a camera
+ * nearly five player heights up — a view nobody in the match can have. It is
+ * derived from the active workspace instead, so it is right in any map.
+ */
+const DOORWAY_STAND_BACK_PER_BODY_HEIGHT = 22;
 
 /** The seal marker is a disc lathed about +Y; this is the axis it aligns. */
 const ANCHOR_MARKER_AXIS = new THREE.Vector3(0, 1, 0);
@@ -424,7 +493,7 @@ export class ForgeController {
   private orbitTarget = new THREE.Vector3();
   private yaw = 0.7;
   private pitch = 0.22;
-  private radius = 2.4;
+  private radius = CAMERA_START_RADIUS;
   private viewportWidth = 1;
   private viewportHeight = 1;
 
@@ -509,7 +578,7 @@ export class ForgeController {
 
     this.handleGroup.name = "forge_handles";
     this.handles = this.buildHandles();
-    this.handleMeshes = this.handles.map((handle) => handle.solid);
+    this.handleMeshes = this.handles.map((handle) => handle.pick);
     this.buildAnchorMarkerAssets();
     this.scene.add(this.mimic.root);
     this.scene.add(this.handleGroup);
@@ -534,7 +603,11 @@ export class ForgeController {
       ownsPointerEvent: (event) => this.ownsPointerEvent(event),
     });
 
-    this.orbitTarget.set(origin.x, origin.y + 0.55, origin.z);
+    this.orbitTarget.set(
+      origin.x,
+      origin.y + WORLD_SCALE.playerHeight * ORBIT_TARGET_BODY_SHARE,
+      origin.z,
+    );
     this.updateCamera();
     this.applyQuality(options.quality);
     this.captureTargets();
@@ -544,7 +617,11 @@ export class ForgeController {
 
   /** A brass seal for a met anchor, a warm red for one the pose cannot reach. */
   private buildAnchorMarkerAssets(): void {
-    this.anchorMarkerGeometry = this.bag.add(createPuckGeometry(0.034, 0.01));
+    // A seal marker sits on the body, so it is sized against the body. Left at
+    // 0.034 m it was a 68 mm disc on a 350 mm creature, which is most of a hand.
+    this.anchorMarkerGeometry = this.bag.add(
+      createPuckGeometry(0.03 * RIG_TO_WORLD, 0.009 * RIG_TO_WORLD),
+    );
     // A panel tip is dragged, not just displayed, so it gets a real handle
     // rather than the flat seal disc (§24.5: large, readable, grabbable).
     this.panelTipGeometry = this.bag.add(new THREE.SphereGeometry(1, 16, 12));
@@ -701,6 +778,10 @@ export class ForgeController {
       return;
     }
     const wasPainting = this.mode === "paint";
+    // A drag belongs to the tool it started under. Switching tools with the
+    // button still down would otherwise leave the camera holding a pointer the
+    // new tool needs — which is how the brush loses its first stroke.
+    this.cameraDrag = null;
     this.mode = mode;
     // Paint itself survives the switch. Only the pointer changes hands.
     if (mode === "paint") {
@@ -1054,13 +1135,19 @@ export class ForgeController {
     this.emit();
   }
 
-  /** Recentres the orbit on the Mimic, which an arrangement may have carried. */
+  /**
+   * Recentres the orbit on the Mimic, which an arrangement may have carried. The
+   * height comes from the root and the body-height share rather than from the
+   * pelvis bone, so a folded arrangement that tucks its hips does not drop the
+   * whole frame with them. The zoom is left where the player put it.
+   */
   private frameMimic(): void {
-    const pelvis = this.pose.worldPositions[boneIndex("pelvis")];
-    if (pelvis === undefined) {
-      return;
-    }
-    this.orbitTarget.set(pelvis.x, pelvis.y, pelvis.z);
+    const root = this.state.root.position;
+    this.orbitTarget.set(
+      root[0],
+      root[1] + WORLD_SCALE.playerHeight * ORBIT_TARGET_BODY_SHARE,
+      root[2],
+    );
     this.updateCamera();
   }
 
@@ -1756,7 +1843,11 @@ export class ForgeController {
       handle.position.copy(this.panelTip);
       const distance = this.camera.position.distanceTo(handle.position);
       handle.scale.setScalar(
-        clamp(distance * HANDLE_SCREEN_RADIUS, HANDLE_MIN_RADIUS, HANDLE_MAX_RADIUS),
+        clamp(
+          distance * PANEL_TIP_SCREEN_RADIUS,
+          HANDLE_MIN_RADIUS * HANDLE_PICK_RATIO,
+          HANDLE_MAX_RADIUS * HANDLE_PICK_RATIO,
+        ),
       );
     }
   }
@@ -1902,6 +1993,11 @@ export class ForgeController {
     // Laid on its side so the billboarded puck presents its round face.
     const puck = this.bag.add(new THREE.CylinderGeometry(1, 1, 0.55, 22, 1));
     puck.rotateX(Math.PI / 2);
+    // The outline is the part that has to survive being drawn over the body, so
+    // it is a flat annulus billboarded at the group and rendered without depth.
+    const ring = this.bag.add(new THREE.RingGeometry(HANDLE_RING_INNER, 1, 28));
+    const pickSphere = this.bag.add(new THREE.SphereGeometry(1, 8, 6));
+
     const handles: Handle[] = [];
     for (const def of HANDLE_DEFS) {
       const geometry = def.shape === "sphere" ? sphere : puck;
@@ -1913,48 +2009,89 @@ export class ForgeController {
           clearcoat: 0.6,
           emissive: new THREE.Color(def.color),
           emissiveIntensity: 0.12,
+          transparent: true,
+          opacity: HANDLE_OPACITY_IDLE,
         }),
       );
-      // The ghost is the "controlled pass" of §24.5: it ignores depth so an
-      // occluded handle still reads, without turning depth off for the solid.
-      const ghostMaterial = this.bag.add(
+      // §24.5's "controlled pass": the outline ignores depth so a handle behind
+      // an arm still reads, without turning depth off for the grip itself.
+      const ringMaterial = this.bag.add(
         new THREE.MeshBasicMaterial({
           color: def.color,
           transparent: true,
-          opacity: 0.22,
+          opacity: HANDLE_OPACITY_IDLE,
           depthTest: false,
           depthWrite: false,
+          side: THREE.DoubleSide,
         }),
       );
+
       const group = new THREE.Object3D();
       group.name = `forge_handle_${def.target}`;
       const solid = new THREE.Mesh(geometry, solidMaterial);
-      solid.userData["handleTarget"] = def.target;
-      const ghost = new THREE.Mesh(geometry, ghostMaterial);
-      ghost.renderOrder = 10;
-      ghost.scale.setScalar(1.02);
-      group.add(ghost);
+      solid.name = `forge_handle_grip_${def.target}`;
+      solid.scale.setScalar(HANDLE_GRIP_SCALE);
+      const outline = new THREE.Mesh(ring, ringMaterial);
+      outline.name = `forge_handle_ring_${def.target}`;
+      outline.renderOrder = 10;
+      // Invisible but still raycast: `Raycaster` skips `visible === false`, so
+      // the proxy stays visible and is made to draw nothing instead.
+      const pick = new THREE.Mesh(pickSphere, INVISIBLE_PICK_MATERIAL);
+      pick.name = `forge_handle_pick_${def.target}`;
+      pick.userData["handleTarget"] = def.target;
+      pick.renderOrder = -1;
+
+      group.add(outline);
       group.add(solid);
+      group.add(pick);
       this.handleGroup.add(group);
-      handles.push({ def, boneIndex: boneIndex(def.bone), solid, ghost, group });
+      handles.push({
+        def,
+        boneIndex: boneIndex(def.bone),
+        solid,
+        ring: outline,
+        pick,
+        group,
+        materials: [solidMaterial, ringMaterial],
+      });
     }
     return handles;
   }
 
-  /** Handles keep a constant apparent size so they stay grabbable at any zoom. */
+  /**
+   * Handles keep a constant apparent size so they stay grabbable at any zoom.
+   * The pick proxy is laid out against its own, larger screen radius, so
+   * shrinking what is drawn never makes a handle harder to hit.
+   */
   private layoutHandles(): void {
     for (const handle of this.handles) {
       const world = this.pose.worldPositions[handle.boneIndex];
       if (world === undefined) continue;
       handle.group.position.set(world.x, world.y, world.z);
       const distance = this.camera.position.distanceTo(handle.group.position);
-      const radius = Math.min(
-        Math.max(distance * HANDLE_SCREEN_RADIUS, HANDLE_MIN_RADIUS),
+      const radius = clamp(
+        distance * HANDLE_SCREEN_RADIUS,
+        HANDLE_MIN_RADIUS,
         HANDLE_MAX_RADIUS,
       );
-      const emphasis = handle === this.draggedHandle ? 1.25 : handle === this.hoveredHandle ? 1.15 : 1;
+      const emphasis = handle === this.draggedHandle ? 1.3 : handle === this.hoveredHandle ? 1.15 : 1;
       handle.group.scale.setScalar(radius * emphasis);
       handle.group.quaternion.copy(this.camera.quaternion);
+      // The group carries the drawn radius, so the proxy divides it back out.
+      const pickRadius = clamp(
+        distance * HANDLE_PICK_SCREEN_RADIUS,
+        HANDLE_MIN_RADIUS * HANDLE_PICK_RATIO,
+        HANDLE_MAX_RADIUS * HANDLE_PICK_RATIO,
+      );
+      handle.pick.scale.setScalar(pickRadius / (radius * emphasis));
+    }
+  }
+
+  private setHandleOpacity(handle: Handle, opacity: number): void {
+    for (const material of handle.materials) {
+      if ("opacity" in material) {
+        (material as THREE.Material & { opacity: number }).opacity = opacity;
+      }
     }
   }
 
@@ -1962,12 +2099,12 @@ export class ForgeController {
     if (this.hoveredHandle === handle) {
       return;
     }
-    if (this.hoveredHandle !== null) {
-      setGhostOpacity(this.hoveredHandle, 0.22);
+    if (this.hoveredHandle !== null && this.hoveredHandle !== this.draggedHandle) {
+      this.setHandleOpacity(this.hoveredHandle, HANDLE_OPACITY_IDLE);
     }
     this.hoveredHandle = handle;
     if (handle !== null) {
-      setGhostOpacity(handle, 0.55);
+      this.setHandleOpacity(handle, HANDLE_OPACITY_HOVER);
       this.audio.playThrottled("ui_hover", 220);
     }
     this.canvas.style.cursor = handle === null ? "default" : "grab";
@@ -1993,8 +2130,12 @@ export class ForgeController {
         this.cameraDrag = "orbit";
       } else if (event.button === 1 || (event.button === 0 && event.shiftKey)) {
         this.cameraDrag = "pan";
-      } else if (event.button === 0) {
-        this.beginLeftPress(event);
+      } else if (event.button === 0 && !this.beginLeftPress(event)) {
+        // Nothing under the pointer to edit, so the press belongs to the camera.
+        // Right-drag orbits too, but a left-drag on empty space is the gesture
+        // players reach for first, and without it the Forge reads as a fixed
+        // angle onto a body wedged behind whatever the map put next to it.
+        this.cameraDrag = "orbit";
       }
       if (this.cameraDrag !== null || this.draggedHandle !== null) {
         this.dragPointerId = event.pointerId;
@@ -2038,6 +2179,10 @@ export class ForgeController {
       if (this.draggedHandle !== null) {
         const released = this.draggedHandle;
         this.draggedHandle = null;
+        this.setHandleOpacity(
+          released,
+          released === this.hoveredHandle ? HANDLE_OPACITY_HOVER : HANDLE_OPACITY_IDLE,
+        );
         this.endPoseEdit(released);
         this.canvas.style.cursor = "default";
       } else if (this.draggedPanelSocket !== null) {
@@ -2196,16 +2341,21 @@ export class ForgeController {
     event.preventDefault();
   }
 
-  private beginLeftPress(event: PointerEvent): void {
+  /**
+   * Runs the active tool's left-click. Returns false when the press found
+   * nothing to act on, which is the caller's cue to hand it to the camera.
+   */
+  private beginLeftPress(event: PointerEvent): boolean {
     this.updatePointerNdc(event);
     if (this.locked) {
-      return;
+      return false;
     }
 
     if (this.mode === "pose") {
       const handle = this.pickHandle();
       if (handle !== null) {
         this.draggedHandle = handle;
+        this.setHandleOpacity(handle, HANDLE_OPACITY_DRAG);
         this.pinned.add(handle.def.target);
         this.poseEditBefore = capturePoseSnapshot(this.state);
         const world = this.pose.worldPositions[handle.boneIndex];
@@ -2223,20 +2373,22 @@ export class ForgeController {
         }
         this.canvas.style.cursor = "grabbing";
         this.audio.play("ui_click");
+        return true;
       }
-      return;
+      return false;
     }
 
     if (this.mode === "shape") {
       const slot = this.pickSegmentSlot();
-      if (slot >= 0) {
-        this.commitEdits();
-        this.selectSegment(slot);
-        this.status = `Editing ${SEGMENT_BONES[slot] ?? "segment"}. Sliders on the right.`;
-        this.audio.play("ui_click");
-        this.emit();
+      if (slot < 0) {
+        return false;
       }
-      return;
+      this.commitEdits();
+      this.selectSegment(slot);
+      this.status = `Editing ${SEGMENT_BONES[slot] ?? "segment"}. Sliders on the right.`;
+      this.audio.play("ui_click");
+      this.emit();
+      return true;
     }
 
     if (this.mode === "panels") {
@@ -2262,22 +2414,23 @@ export class ForgeController {
           this.canvas.style.cursor = "grabbing";
           this.audio.play("ui_click");
           this.emit();
-          return;
+          return true;
         }
       }
       const socket = this.pickSocket();
-      if (socket !== null) {
-        this.commitEdits();
-        this.selectPanelSocket(socket);
-        if (this.findPanel(socket) === null) {
-          this.addPanel(socket);
-        } else {
-          this.audio.play("ui_click");
-          this.status = `Panel on ${socket.replace("panel_socket_", "socket ")} selected.`;
-          this.emit();
-        }
+      if (socket === null) {
+        return false;
       }
-      return;
+      this.commitEdits();
+      this.selectPanelSocket(socket);
+      if (this.findPanel(socket) === null) {
+        this.addPanel(socket);
+      } else {
+        this.audio.play("ui_click");
+        this.status = `Panel on ${socket.replace("panel_socket_", "socket ")} selected.`;
+        this.emit();
+      }
+      return true;
     }
 
     const slot = this.pickSegmentSlot();
@@ -2286,13 +2439,16 @@ export class ForgeController {
       if (bone !== undefined) {
         this.selectSegment(slot);
         this.assignSwatch(bone);
+        return true;
       }
-      return;
+      return false;
     }
     const socket = this.pickSocket();
-    if (socket !== null) {
-      this.assignSwatch(socket);
+    if (socket === null) {
+      return false;
     }
+    this.assignSwatch(socket);
+    return true;
   }
 
   /**
@@ -2450,7 +2606,7 @@ export class ForgeController {
     if (first === undefined) {
       return null;
     }
-    return this.handles.find((handle) => handle.solid === first.object) ?? null;
+    return this.handles.find((handle) => handle.pick === first.object) ?? null;
   }
 
   private pickSegmentSlot(): number {
@@ -2502,21 +2658,48 @@ export class ForgeController {
   }
 
   /**
-   * Both previews look at the Mimic from standing height. The Inspector view
-   * uses the direction the player is already orbiting from, so it answers "how
-   * does this read from where I am looking" rather than from a fixed seat.
+   * Both previews look at the Mimic from a player's own eye height. The
+   * Inspector view uses the direction the player is already orbiting from, so it
+   * answers "how does this read from where I am looking" rather than from a
+   * fixed seat; the doorway view answers the other question, and takes the long
+   * axis of the room instead, standing off down whichever end is further away
+   * and staying inside the workspace.
    */
   private placePreviewCamera(): void {
+    const standBack =
+      this.preview === "doorway"
+        ? WORLD_SCALE.playerHeight * DOORWAY_STAND_BACK_PER_BODY_HEIGHT
+        : INSPECTOR_STAND_BACK_M;
+
     if (this.preview === "doorway") {
-      this.camera.position.copy(DOORWAY_POSITION);
+      const alongX =
+        this.workspace.maxX - this.workspace.minX >= this.workspace.maxZ - this.workspace.minZ;
+      const span = alongX
+        ? this.workspace.maxX - this.orbitTarget.x - (this.orbitTarget.x - this.workspace.minX)
+        : this.workspace.maxZ - this.orbitTarget.z - (this.orbitTarget.z - this.workspace.minZ);
+      const sign = span >= 0 ? 1 : -1;
+      this.scratchForward.set(alongX ? sign : 0, 0, alongX ? 0 : sign);
     } else {
       this.scratchForward.set(Math.sin(this.yaw), 0, Math.cos(this.yaw)).normalize();
-      this.camera.position.set(
-        this.orbitTarget.x + this.scratchForward.x * INSPECTOR_STAND_BACK_M,
-        INSPECTOR_EYE_HEIGHT_M,
-        this.orbitTarget.z + this.scratchForward.z * INSPECTOR_STAND_BACK_M,
-      );
     }
+
+    // The workspace reaches the room's own faces, so a preview standing further
+    // back than the room is deep has to stop short of the wall rather than
+    // inside it. One player radius is where a player would stop too.
+    const inset = WORLD_SCALE.playerRadius;
+    this.camera.position.set(
+      clamp(
+        this.orbitTarget.x + this.scratchForward.x * standBack,
+        this.workspace.minX + inset,
+        this.workspace.maxX - inset,
+      ),
+      INSPECTOR_EYE_HEIGHT_M,
+      clamp(
+        this.orbitTarget.z + this.scratchForward.z * standBack,
+        this.workspace.minZ + inset,
+        this.workspace.maxZ - inset,
+      ),
+    );
     this.camera.lookAt(this.orbitTarget);
   }
 }
@@ -2531,13 +2714,6 @@ const TOOL_HINTS: Readonly<Record<ForgeToolMode, string>> = {
 
 function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
-}
-
-function setGhostOpacity(handle: Handle, opacity: number): void {
-  const material = handle.ghost.material;
-  if (material instanceof THREE.MeshBasicMaterial) {
-    material.opacity = opacity;
-  }
 }
 
 function sameForm(a: SegmentFormState, b: SegmentFormState): boolean {

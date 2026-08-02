@@ -109,7 +109,59 @@ export const AMMO_NO_TARGET_PROMPT = "NO TARGET";
  * what gives a Mimic away, which is the whole tension of the phase.
  */
 export const HIDER_CREEP_HINT = "Move slowly. Movement is how they catch you.";
-export const TAUNT_LABEL = "TAUNT";
+export const TAUNT_LABEL = "Taunt";
+
+/**
+ * The hunt's own top-centre label, under the hourglass. §41.1 names the two
+ * short phases either side of the search but leaves the search itself unnamed,
+ * because the bible expected a hider to have nothing to read by then. A hider is
+ * live throughout now, so the row needs a word for every second it is up. These
+ * three are not §41 entries.
+ */
+export function huntStatusLabel(phase: MatchPhase): string {
+  switch (phase) {
+    case MatchPhase.InspectionIntro:
+      return "UNTIL THE SEARCH STARTS";
+    case MatchPhase.FinalCountdown:
+      return "TEN SECONDS";
+    default:
+      return "SEARCH TIME";
+  }
+}
+
+/**
+ * The mode card in the bottom-right corner: what this game is, in the two lines
+ * the original gives it, said differently for the side reading it. Also outside
+ * §41, which describes role cards shown once at the reveal rather than a
+ * standing reminder.
+ */
+export const MODE_TITLE = "FOLD & SEEK";
+
+export function modeSummary(role: PlayerRole): readonly string[] {
+  switch (role) {
+    case "inspector":
+      return ["Any object here could be a person.", "Spend your warrant rounds well."];
+    case "mimic":
+      return ["Be furniture. Move only unwatched.", "Outlast the inspection to win."];
+    case "spectator":
+      return ["You are out of this round.", "Watch the room give them away."];
+  }
+}
+
+/** Rail labels for the hunt's action chips. */
+export const TOOL_RAIL_LABELS: Readonly<Record<"pose" | "shape" | "panels" | "material" | "paint", string>> = {
+  pose: "Pose",
+  shape: "Shape",
+  panels: "Panels",
+  material: "Material",
+  paint: "Paint Mode",
+};
+
+export const MIRROR_RAIL_LABEL = "Mirror";
+
+export function tauntCooldownNote(seconds: number): string {
+  return seconds > 0 ? `${seconds}s` : "not now";
+}
 
 /**
  * Deception score feedback, for the hider who earned it and nobody else. Being
@@ -131,6 +183,8 @@ export function deceptionLabel(kind: DeceptionEventKind): string {
  * empty ranking they would read as "nobody has scored".
  */
 export const MISSED_FINDS_TITLE = "Missed-Spot Ranking";
+/** The same board, named on its rail chip. */
+export const BOARD_RAIL_LABEL = MISSED_FINDS_TITLE;
 export const MISSED_FINDS_TOGGLE_HINT = "6";
 export const MISSED_FINDS_AWAITING = "Awaiting the first report.";
 export const MISSED_FINDS_FINAL_NOTE = "final";

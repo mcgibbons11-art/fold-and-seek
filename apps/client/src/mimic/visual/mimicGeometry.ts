@@ -57,8 +57,12 @@ const PROFILE_SPECS: Readonly<Record<SegmentProfileId, ProfileSpec>> = {
   capsule: {
     exponentCrisp: 2.6,
     exponentSoft: 2,
-    capCrisp: 0.2,
-    capSoft: 0.45,
+    // A capsule's caps used to take nine tenths of a limb between them at the
+    // middle of the roundness slider, so an arm was a lemon with no straight
+    // section at all and read as a bead rather than as a limb. These leave a
+    // straight shaft either way and still round off to a dome at roundness 1.
+    capCrisp: 0.12,
+    capSoft: 0.32,
     tipRadius: 1,
     baseDepth: 1,
     tipDepth: 1,
@@ -279,6 +283,18 @@ export function createSegmentShellGeometry(options: ShellShapeOptions): THREE.Bu
   return geometry;
 }
 
+/** How far a rib swells past the bellows' nominal profile. */
+const BELLOWS_RIB_AMPLITUDE = 0.14;
+
+/**
+ * Widest point of a bellows relative to the scale it is built at. The middle rib
+ * lands on the widest part of the profile, so a bellows scaled to a diameter is
+ * this much fatter than that diameter at its equator. Whether the rubber stands
+ * proud of the shells it bridges is decided here, so callers sizing a joint work
+ * in outer diameter and divide it back out.
+ */
+export const BELLOWS_OUTER_RATIO = 1 + BELLOWS_RIB_AMPLITUDE;
+
 /**
  * Dark rubber bellows for a joint (§24.3). A ribbed ball centred on the joint
  * fills the gap between two shells at every legal bend because it is
@@ -293,7 +309,7 @@ export function createBellowsGeometry(ribs: number): THREE.BufferGeometry {
     const t = i / rings;
     const angle = t * Math.PI;
     const profile = Math.sin(angle);
-    const rib = 1 - 0.14 * Math.cos(t * ribs * Math.PI * 2);
+    const rib = 1 - BELLOWS_RIB_AMPLITUDE * Math.cos(t * ribs * Math.PI * 2);
     points.push(new THREE.Vector2(Math.max(profile * rib * 0.5, 0), -0.5 + t));
   }
   const geometry = new THREE.LatheGeometry(points, radial);

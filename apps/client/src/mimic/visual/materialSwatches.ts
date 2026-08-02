@@ -45,12 +45,17 @@ export const PORCELAIN_SWATCH_ID = "mimic_porcelain";
 export const MATERIAL_SWATCHES: readonly MaterialSwatch[] = [
   {
     id: PORCELAIN_SWATCH_ID,
+    // The default body finish. A near-neutral white that stays white under the
+    // shop's warm practicals, matte enough that the form is described by shading
+    // rather than by highlights, with just enough clearcoat to catch a rim. The
+    // glossier cream this replaced blew out to a flat bright shape against
+    // colourful clutter, which is exactly where the silhouette has to read.
     label: "Porcelain",
     family: "ceramic",
-    baseColor: [0.925, 0.886, 0.824],
-    roughness: 0.3,
+    baseColor: [0.93, 0.915, 0.893],
+    roughness: 0.62,
     metalness: 0,
-    clearcoat: 0.45,
+    clearcoat: 0.25,
     triplanarScale: 1,
     legalForMimic: true,
   },

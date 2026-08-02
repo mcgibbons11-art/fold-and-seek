@@ -1,5 +1,5 @@
 import { MatchPhase, type ResultVoteCategory } from "@foldseek/shared";
-import { useCallback, useEffect, useState, useSyncExternalStore, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 
 import type { RoundDirector } from "../gameplay/RoundDirector";
 import type { RoundSession } from "../gameplay/RoundSession";
@@ -8,25 +8,29 @@ import { ForgeHud } from "./ForgeHud";
 import {
   BaselineHud,
   ForgePhaseHud,
-  HiderHud,
-  InspectorHud,
+  HuntHud,
   LobbyHud,
   MissedFindsHud,
   PhaseTimer,
   ResultsHud,
   RevealHud,
   RoleRevealHud,
-  SpectatorHud,
   Toast,
   rejectionToast,
 } from "./rounds";
-import { BRASS, INK, labelStyle, overlayStyle, panelStyle } from "./rounds/theme";
+import { MISSED_FINDS_KEY, TAUNT_KEY } from "./rounds/huntControls";
+import { HudLayout } from "./rounds/layout";
+import { overlayStyle } from "./rounds/theme";
 
 /**
  * The round's whole DOM layer: one HUD per phase, chosen from the single
  * RoundViewState the director publishes and the engine state the session
  * publishes beside it. It renders and routes, and decides nothing: every
  * control asks RoundActions, which asks the authority.
+ *
+ * The hunt is handed over whole to `HuntHud`, which owns the screen regions for
+ * those phases. What stays here is the routing and the two keys the round binds
+ * on its own account, the board toggle and the taunt.
  */
 
 const INSPECTION_PHASES: ReadonlySet<MatchPhase> = new Set([
@@ -45,9 +49,6 @@ const MISSED_FINDS_PHASES: ReadonlySet<MatchPhase> = new Set([
   ...INSPECTION_PHASES,
   MatchPhase.Reveal,
 ]);
-
-/** Toggles the board, as in the original (docs/MECCHA_RESEARCH.md). */
-const MISSED_FINDS_KEY = "6";
 
 /** The loopback round is not a room anyone can be invited to. */
 const LOCAL_ROOM_CODE = "";
@@ -79,6 +80,16 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
   const onRematch = useCallback((yes: boolean) => session.actions.voteRematch(yes), [session]);
 
   const [boardOpen, setBoardOpen] = useState(false);
+  const onToggleBoard = useCallback(() => {
+    setBoardOpen((open) => !open);
+  }, []);
+
+  // The taunt key has to read the gate at the moment it is pressed, and the
+  // listener is bound once, so the current view goes through a ref rather than
+  // rebinding the handler on every published state.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       // A hider paints through the hunt, and the paint panel has a hex field
@@ -86,48 +97,78 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
         return;
       }
+      if (event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
+
       // The Forge owns 1 through 5 for its tool modes, which is exactly why the
-      // original put this board on 6 and why it is free here as well.
-      if (event.key !== MISSED_FINDS_KEY || event.ctrlKey || event.metaKey || event.altKey) return;
-      setBoardOpen((open) => !open);
+      // original put the board on 6 and why the taunt cannot have 1 here.
+      if (event.key === MISSED_FINDS_KEY) {
+        setBoardOpen((open) => !open);
+        return;
+      }
+      if (event.key.toLowerCase() === TAUNT_KEY) {
+        const current = stateRef.current;
+        if (!current.capabilities.taunt || !current.actions.taunt.allowed) return;
+        event.preventDefault();
+        session.actions.taunt();
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, []);
+  }, [session]);
 
-  const forgeTools =
-    engine.forge === null ? null : (
-      <ForgeHud controller={engine.forge} onExit={onLeave} exitLabel="Leave the round" />
+  if (INSPECTION_PHASES.has(state.phase)) {
+    return (
+      <HuntHud
+        state={state}
+        gun={engine.gun}
+        forge={engine.forge}
+        pointerLocked={engine.pointerLocked}
+        boardOpen={boardOpen}
+        onToggleBoard={onToggleBoard}
+        onTaunt={onTaunt}
+      />
     );
-
-  const isInspecting = INSPECTION_PHASES.has(state.phase) && state.self.role === "inspector";
+  }
 
   return (
     <>
       {phaseHud(state, {
-        forgeTools,
-        gun: engine.gun,
+        forgeTools:
+          engine.forge === null ? null : (
+            <ForgeHud
+              controller={engine.forge}
+              onExit={onLeave}
+              exitLabel="Leave the round"
+              showHeader={false}
+            />
+          ),
         onReady,
         onStart,
-        onTaunt,
         onVote,
         onRematch,
       })}
-      {boardOpen && MISSED_FINDS_PHASES.has(state.phase) ? <MissedFindsHud state={state} /> : null}
-      {isInspecting ? null : <Toast entries={rejectionToasts(state)} />}
-      {isInspecting && !engine.pointerLocked ? <PointerLockPrompt /> : null}
+      <HudLayout
+        regions={{
+          leftColumn:
+            boardOpen && MISSED_FINDS_PHASES.has(state.phase) ? (
+              <MissedFindsHud state={state} />
+            ) : undefined,
+          topRight:
+            state.rejections.length === 0 ? undefined : (
+              <Toast entries={rejectionToasts(state)} />
+            ),
+        }}
+      />
     </>
   );
 }
 
 interface PhaseHandlers {
   readonly forgeTools: ReactElement | null;
-  readonly gun: RoundSession["engineState"]["gun"];
   readonly onReady: (ready: boolean) => void;
   readonly onStart: () => void;
-  readonly onTaunt: () => void;
   readonly onVote: (category: ResultVoteCategory, targetPublicObjectId: string) => void;
   readonly onRematch: (yes: boolean) => void;
 }
@@ -162,27 +203,6 @@ function phaseHud(state: RoundViewState, handlers: PhaseHandlers): ReactElement 
     case MatchPhase.Locking:
       return <ForgePhaseHud state={state}>{handlers.forgeTools}</ForgePhaseHud>;
 
-    case MatchPhase.InspectionIntro:
-    case MatchPhase.Inspection:
-    case MatchPhase.FinalCountdown:
-      if (state.self.role === "inspector") {
-        return <InspectorHud state={state} gun={handlers.gun} />;
-      }
-      if (state.self.role === "mimic" && state.self.lifeState === "active") {
-        return (
-          <HiderHud state={state} onTaunt={handlers.onTaunt}>
-            {handlers.forgeTools}
-          </HiderHud>
-        );
-      }
-      return (
-        <SpectatorHud
-          state={state}
-          target={{ publicObjectId: null, displayName: null }}
-          delaySeconds={null}
-        />
-      );
-
     case MatchPhase.Reveal:
       return <RevealHud state={state} />;
 
@@ -198,32 +218,5 @@ function phaseHud(state: RoundViewState, handlers: PhaseHandlers): ReactElement 
 function rejectionToasts(state: RoundViewState): ReturnType<typeof rejectionToast>[] {
   return state.rejections.map((rejection) =>
     rejectionToast(rejection.id, rejection.commandType, rejection.reason),
-  );
-}
-
-/**
- * Pointer lock can only be taken from a gesture, so the Inspector is told to
- * click rather than having the browser refuse the request on their behalf.
- */
-function PointerLockPrompt(): ReactElement {
-  return (
-    <div style={overlayStyle}>
-      <div
-        style={{
-          ...panelStyle,
-          bottom: 96,
-          left: "50%",
-          transform: "translateX(-50%)",
-          pointerEvents: "none",
-          textAlign: "center",
-          background: INK,
-        }}
-      >
-        <div style={{ ...labelStyle, color: BRASS }}>Click to take the room</div>
-        <div style={{ marginTop: 4, opacity: 0.8 }}>
-          WASD to walk · right mouse to aim · left mouse to fire a warrant
-        </div>
-      </div>
-    </div>
   );
 }

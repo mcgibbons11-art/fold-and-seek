@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 import { DisposalBag } from "../../../engine/DisposalBag";
-import { SHOP_SWATCHES, shopSwatch, type MapSwatch } from "../swatches";
+import { FLOORBOARD_SWATCH_IDS, SHOP_SWATCHES, shopSwatch, type MapSwatch } from "../swatches";
 
 /**
  * One material per published swatch, plus the handful of surfaces the map
@@ -159,6 +159,172 @@ function createAlbedoTexture(options: NoiseOptions): DetailTexture {
 }
 
 /**
+ * Length of floorboard one wrap of the plank texture covers. `buildFloor`
+ * scales the board's UVs against this, so a feature in the map is this many
+ * metres long however wide or long the board it lands on is.
+ */
+export const PLANK_TILE_LENGTH_M = 2;
+
+/** Along the board, and across it. The board is the short axis. */
+const PLANK_TEXTURE_WIDTH = 512;
+const PLANK_TEXTURE_HEIGHT = 128;
+
+const PLANK_GRAIN_LINES = 15;
+/** How far the band count drifts along the board, which is what makes figure. */
+const PLANK_GRAIN_SPREAD = 1.8;
+const PLANK_GRAIN_WAVE = 0.62;
+const PLANK_EDGE_WIDTH = 0.085;
+const PLANK_EDGE_DEPTH = 0.72;
+const PLANK_KNOTS: readonly (readonly [number, number, number])[] = [
+  // u, v, radius. Placed off the board's centre line, as knots in sawn stock are.
+  [0.21, 0.33, 0.052],
+  [0.68, 0.64, 0.041],
+];
+const PLANK_WEAR_CELLS = 64;
+
+/**
+ * Darkest the colour map takes a board, and the least it scales its roughness.
+ * The colour range is wide because a floorboard's grain is the strongest
+ * pattern in the room; the roughness range sits high because the flat varnish
+ * the floor had before threw a single mirror streak back at a low camera.
+ */
+const PLANK_ALBEDO_FLOOR = 0.38;
+const PLANK_ROUGHNESS_FLOOR = 0.66;
+
+/** Stable 0..1 value per grain band, so a band keeps its character. */
+function hashBand(band: number, salt: number): number {
+  const raw = Math.sin(band * 12.9898 + salt * 78.233) * 43758.5453;
+  return raw - Math.floor(raw);
+}
+
+/**
+ * Bilinear sample of the traffic field, wrapping in both axes as the field
+ * itself does. Nearest sampling would print the field's own 64-cell grid onto
+ * the boards as centimetre-scale blocks, which at this scale is a chequerboard
+ * rather than wear.
+ */
+function sampleWear(wear: Float32Array, u: number, v: number): number {
+  const x = u * PLANK_WEAR_CELLS - 0.5;
+  const y = v * PLANK_WEAR_CELLS - 0.5;
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
+  const fx = x - x0;
+  const fy = y - y0;
+  const wrap = (i: number): number => ((i % PLANK_WEAR_CELLS) + PLANK_WEAR_CELLS) % PLANK_WEAR_CELLS;
+  const cx0 = wrap(x0);
+  const cx1 = wrap(x0 + 1);
+  const ry0 = wrap(y0) * PLANK_WEAR_CELLS;
+  const ry1 = wrap(y0 + 1) * PLANK_WEAR_CELLS;
+
+  const v00 = wear[ry0 + cx0] ?? 0.5;
+  const v10 = wear[ry0 + cx1] ?? 0.5;
+  const v01 = wear[ry1 + cx0] ?? 0.5;
+  const v11 = wear[ry1 + cx1] ?? 0.5;
+  const top = v00 + (v10 - v00) * fx;
+  const bottom = v01 + (v11 - v01) * fx;
+  return top + (bottom - top) * fy;
+}
+
+/**
+ * One value per texel describing the board at that point, where 1 is clean
+ * planed timber and 0 is the darkest a grain line, a knot or a board edge gets.
+ *
+ * A single field drives both the colour map and the roughness map. That is
+ * deliberate and matches the rest of the library: two uncorrelated noises read
+ * as dirt on the lens, whereas one field reads as a surface, because the places
+ * a floor darkens are the places it has been polished by feet.
+ *
+ * The field is periodic in u so a long board shows no seam, and clamped in v
+ * because v runs across a single board and its two edges are features.
+ */
+function plankField(wear: Float32Array): (u: number, v: number) => number {
+  return (u, v) => {
+    // Periodic in u, so the grain still lines up where the tile wraps.
+    const wander =
+      0.55 * Math.sin(2 * Math.PI * u + 0.9) +
+      0.28 * Math.sin(4 * Math.PI * u + 2.3) +
+      0.14 * Math.sin(6 * Math.PI * u + 5.1);
+    // The band count drifts along the board, so bands converge and merge the
+    // way figure does in sawn timber rather than running as parallel ribs.
+    const lines = PLANK_GRAIN_LINES + PLANK_GRAIN_SPREAD * Math.sin(2 * Math.PI * u + 1.7);
+    const t = v * lines + wander * PLANK_GRAIN_WAVE;
+
+    // Each band carries its own width and darkness. Uniform bands are what
+    // made the first pass read as corrugated sheet rather than as a board.
+    const band = Math.floor(t);
+    const width = 0.24 + 0.32 * hashBand(band, 1);
+    const depth = 0.34 + 0.46 * hashBand(band, 2);
+    const offset = Math.abs(t - band - 0.5) / width;
+    const stripe = offset < 1 ? (1 - offset * offset) ** 1.4 : 0;
+    let value = 1 - depth * stripe;
+
+    for (const [ku, kv, radius] of PLANK_KNOTS) {
+      const rawU = Math.abs(u - ku);
+      // Wrapped, so a knot near the tile edge is one knot rather than two halves.
+      const du = Math.min(rawU, 1 - rawU) / 0.42;
+      const dv = (v - kv) / 1;
+      const distance = Math.hypot(du, dv) / radius;
+      if (distance < 1) {
+        const falloff = (1 - distance) ** 2;
+        const rings = 0.82 + 0.18 * Math.sin(distance * 26);
+        value *= 1 - 0.72 * falloff * rings;
+      }
+    }
+
+    const toEdge = Math.min(v, 1 - v);
+    if (toEdge < PLANK_EDGE_WIDTH) {
+      const depth = 1 - toEdge / PLANK_EDGE_WIDTH;
+      value *= 1 - PLANK_EDGE_DEPTH * depth * depth;
+    }
+
+    // Traffic. Stretched across the board, because feet travel along it.
+    const traffic = sampleWear(wear, u, v * 0.3);
+    value *= 0.74 + 0.26 * traffic;
+
+    return Math.min(Math.max(value, 0), 1);
+  };
+}
+
+/**
+ * Renders a field into a canvas texture over the given output range, and
+ * reports the linear mean so a colour map can be compensated for.
+ */
+function renderField(
+  width: number,
+  height: number,
+  field: (u: number, v: number) => number,
+  low: number,
+  high: number,
+): { readonly canvas: HTMLCanvasElement; readonly linearMean: number } {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (context === null) {
+    throw new Error("Curiosity Shop: 2D canvas context unavailable, cannot build the floorboard maps");
+  }
+
+  const image = context.createImageData(width, height);
+  const span = high - low;
+  let sum = 0;
+  for (let y = 0; y < height; y += 1) {
+    const v = (y + 0.5) / height;
+    for (let x = 0; x < width; x += 1) {
+      const u = (x + 0.5) / width;
+      const level = Math.round((low + field(u, v) * span) * 255);
+      const offset = (y * width + x) * 4;
+      image.data[offset] = level;
+      image.data[offset + 1] = level;
+      image.data[offset + 2] = level;
+      image.data[offset + 3] = 255;
+      sum += srgbToLinear(level / 255);
+    }
+  }
+  context.putImageData(image, 0, 0);
+  return { canvas, linearMean: sum / (width * height) };
+}
+
+/**
  * Vertical gradient down a lampshade: hottest at the hem where the bulb is
  * closest, falling off towards the heading. A flat emissive shade reads as a
  * white cylinder, which is what made every lamp in the room a featureless blob.
@@ -216,6 +382,8 @@ export const SCREEN_MATERIAL = "screen_phosphor";
 
 const WARM_AMBER = 0xffb066;
 
+const FLOORBOARD_IDS = new Set<string>(FLOORBOARD_SWATCH_IDS);
+
 export class ShopMaterials {
   private readonly materials = new Map<string, THREE.Material>();
   private readonly textures: THREE.Texture[] = [];
@@ -226,6 +394,9 @@ export class ShopMaterials {
   private readonly grainAlbedo: DetailTexture;
   private readonly plasterAlbedo: DetailTexture;
   private readonly weaveAlbedo: DetailTexture;
+  /** Board-space grain, knots, joints and traffic wear, for the floor alone. */
+  private readonly plankDetail: THREE.Texture;
+  private readonly plankAlbedo: DetailTexture;
 
   constructor(private readonly bag: DisposalBag) {
     this.grain = this.registerTexture(
@@ -249,6 +420,19 @@ export class ShopMaterials {
     );
     this.weaveAlbedo = this.registerDetail(
       createAlbedoTexture({ cells: 16, octaves: 3, seed: 47, low: 0.8, high: 1, repeat: 6, stretch: 1 }),
+    );
+
+    // The floor is the one surface authored in its own space rather than tiled
+    // generically: it fills the bottom of every eye-level frame at giant scale,
+    // so a board carries its own grain, knots, joint shadows and traffic wear.
+    // The colour range is wider than the walls get and the roughness range sits
+    // high, which is what breaks the single specular streak a smooth varnished
+    // floor throws back at a low camera.
+    const traffic = tileableNoise(PLANK_WEAR_CELLS, 3, 3, 71);
+    const field = plankField(traffic);
+    this.plankAlbedo = this.registerDetail(this.buildPlankTexture(field, PLANK_ALBEDO_FLOOR, 1, THREE.SRGBColorSpace));
+    this.plankDetail = this.registerTexture(
+      this.buildPlankTexture(field, PLANK_ROUGHNESS_FLOOR, 1, THREE.NoColorSpace).texture,
     );
 
     for (const swatch of SHOP_SWATCHES) {
@@ -295,8 +479,31 @@ export class ShopMaterials {
     return detail;
   }
 
-  private detailFor(family: MapSwatch["family"]): THREE.Texture | null {
-    switch (family) {
+  /**
+   * Board-space map. It repeats along the board and clamps across it, because
+   * v runs from one joint to the other and those two edges are features rather
+   * than something to tile through.
+   */
+  private buildPlankTexture(
+    field: (u: number, v: number) => number,
+    low: number,
+    high: number,
+    colorSpace: THREE.ColorSpace,
+  ): DetailTexture {
+    const rendered = renderField(PLANK_TEXTURE_WIDTH, PLANK_TEXTURE_HEIGHT, field, low, high);
+    const texture = new THREE.CanvasTexture(rendered.canvas);
+    texture.colorSpace = colorSpace;
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.needsUpdate = true;
+    return { texture, linearMean: rendered.linearMean };
+  }
+
+  private detailFor(swatch: MapSwatch): THREE.Texture | null {
+    if (FLOORBOARD_IDS.has(swatch.id)) {
+      return this.plankDetail;
+    }
+    switch (swatch.family) {
       case "wood":
         return this.grain;
       case "paint":
@@ -310,8 +517,11 @@ export class ShopMaterials {
     }
   }
 
-  private albedoFor(family: MapSwatch["family"]): DetailTexture | null {
-    switch (family) {
+  private albedoFor(swatch: MapSwatch): DetailTexture | null {
+    if (FLOORBOARD_IDS.has(swatch.id)) {
+      return this.plankAlbedo;
+    }
+    switch (swatch.family) {
       case "wood":
         return this.grainAlbedo;
       case "paint":
@@ -328,7 +538,8 @@ export class ShopMaterials {
   private buildFromSwatch(swatch: MapSwatch): THREE.Material {
     const needsPhysical =
       swatch.clearcoat !== undefined || swatch.sheen !== undefined || swatch.transmission !== undefined;
-    const detail = this.detailFor(swatch.family);
+    const detail = this.detailFor(swatch);
+    const isFloorboard = FLOORBOARD_IDS.has(swatch.id);
 
     const material = needsPhysical
       ? new THREE.MeshPhysicalMaterial({ roughness: swatch.roughness, metalness: swatch.metalness })
@@ -344,10 +555,15 @@ export class ShopMaterials {
       material.roughnessMap = detail;
       material.bumpMap = detail;
       // The blockout's relief was too fine to survive a lamp four metres away.
-      material.bumpScale = swatch.family === "fabric" ? 0.03 : 0.055;
+      // A floorboard is read from a body length away and gets more.
+      if (isFloorboard) {
+        material.bumpScale = 0.11;
+      } else {
+        material.bumpScale = swatch.family === "fabric" ? 0.03 : 0.055;
+      }
     }
 
-    const albedo = this.albedoFor(swatch.family);
+    const albedo = this.albedoFor(swatch);
     if (albedo !== null) {
       material.map = albedo.texture;
       // A colour map only darkens, so the base colour is lifted by exactly what

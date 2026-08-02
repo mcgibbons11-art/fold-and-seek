@@ -268,10 +268,14 @@ export class GameHost {
   }
 
   private applyTier(tier: QualityTier, automatic: boolean): void {
-    if (this.settings.tier === tier) {
+    // The backend is only known once the renderer exists, and it changes the
+    // live light budget, so the boot tier's settings are stale even when the
+    // heuristic lands back on the tier the field was initialised with.
+    const next = qualitySettingsFor(tier, this.renderer.backend);
+    if (this.settings === next) {
       return;
     }
-    this.settings = qualitySettingsFor(tier);
+    this.settings = next;
     this.renderer.applyQuality(this.settings);
     this.world?.applyQuality(this.settings);
     this.shop?.applyQuality(this.settings);

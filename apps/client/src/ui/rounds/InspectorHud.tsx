@@ -9,9 +9,7 @@ import {
   AMMO_READY_PROMPT,
 } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
-import { PhaseTimer } from "./PhaseTimer";
-import { Toast, rejectionToast, type ToastEntry } from "./Toast";
-import { ALARM, BRASS, CREAM, EDGE, INK, labelStyle, overlayStyle, panelStyle } from "./theme";
+import { ALARM, BRASS, CREAM, EDGE, INK, labelStyle } from "./theme";
 
 /**
  * Inspector HUD (§5.9). The Inspector carries a warrant gun, so time,
@@ -21,6 +19,10 @@ import { ALARM, BRASS, CREAM, EDGE, INK, labelStyle, overlayStyle, panelStyle } 
  *
  * Nothing here outlines a prop for the player. §8.7 wants the room looked at
  * rather than scanned, so the reticle only reports what is already under it.
+ *
+ * The two halves are separate because they live in different screen regions:
+ * the magazine reads in the left column, and everything that answers "can I
+ * shoot this" stays at the centre where the player is already looking.
  */
 
 /** Mirrors the firing driver's phase in the inspector module. */
@@ -44,11 +46,6 @@ export interface InspectorGunView {
   readonly roundsChambered?: number;
 }
 
-export interface InspectorHudProps {
-  readonly state: RoundViewState;
-  readonly gun: InspectorGunView;
-}
-
 type ReticleState = "normal" | "on_target" | "out_of_range" | "cooldown";
 
 /** How long a shot's result holds the middle of the screen. */
@@ -67,6 +64,10 @@ function reticleStateOf(gun: InspectorGunView, outOfAmmo: boolean): ReticleState
   if (outOfAmmo || gun.state === "cooldown" || gun.cooldownRemainingMs > 0) return "cooldown";
   if (gun.targetObjectId === null) return "normal";
   return gun.targetInRange ? "on_target" : "out_of_range";
+}
+
+export function warrantsRemainingOf(state: RoundViewState): number {
+  return state.self.warrantsRemaining ?? state.warrantsRemaining ?? 0;
 }
 
 /**
@@ -93,6 +94,47 @@ function AmmoRounds({ total, remaining }: { total: number; remaining: number }):
           />
         );
       })}
+    </div>
+  );
+}
+
+export interface InspectorStatusCardProps {
+  readonly state: RoundViewState;
+}
+
+/** The magazine and the count of objects still unaccounted for. */
+export function InspectorStatusCard({ state }: InspectorStatusCardProps): ReactElement {
+  const warrantsRemaining = warrantsRemainingOf(state);
+  // The magazine keeps its length as rounds are spent, so spent casings stay
+  // visible next to the live ones.
+  const warrantTotal = Math.max(warrantsRemaining, state.warrantsTotal ?? warrantsRemaining);
+  const outOfAmmo = warrantsRemaining <= 0;
+  const accent = state.timer.finalTen ? ALARM : BRASS;
+
+  return (
+    <div
+      style={{
+        background: INK,
+        border: EDGE,
+        borderRadius: 10,
+        padding: "12px 14px",
+        backdropFilter: "blur(6px)",
+        width: "100%",
+        boxSizing: "border-box",
+        pointerEvents: "none",
+      }}
+    >
+      <div style={{ ...labelStyle, display: "flex", justifyContent: "space-between", gap: 12 }}>
+        <span>{AMMO_LABEL}</span>
+        <span style={{ color: outOfAmmo ? ALARM : BRASS }}>
+          {warrantsRemaining} / {warrantTotal}
+        </span>
+      </div>
+      <AmmoRounds total={warrantTotal} remaining={warrantsRemaining} />
+      <div style={{ ...labelStyle, marginTop: 12 }}>Unaccounted for</div>
+      <div style={{ font: "600 22px/1.2 system-ui, sans-serif", color: accent }}>
+        {state.mimicsRemaining}
+      </div>
     </div>
   );
 }
@@ -206,15 +248,19 @@ function useShotResult(
   return { flash, showCallout };
 }
 
-export function InspectorHud({ state, gun }: InspectorHudProps): ReactElement {
-  const warrantsRemaining = state.self.warrantsRemaining ?? state.warrantsRemaining ?? 0;
-  // The magazine keeps its length as rounds are spent, so spent casings stay
-  // visible next to the live ones.
-  const warrantTotal = Math.max(warrantsRemaining, state.warrantsTotal ?? warrantsRemaining);
-  const outOfAmmo = warrantsRemaining <= 0;
-  const reticle = reticleStateOf(gun, outOfAmmo);
-  const accent = state.timer.finalTen ? ALARM : BRASS;
+export interface InspectorSightProps {
+  readonly state: RoundViewState;
+  readonly gun: InspectorGunView;
+}
 
+/**
+ * Everything that answers "can I shoot this, and what happened when I did":
+ * reticle, range, the gun's own word, and the newest stamp above it. All of it
+ * sits inside the centre region and is measured from that region's middle.
+ */
+export function InspectorSight({ state, gun }: InspectorSightProps): ReactElement {
+  const outOfAmmo = warrantsRemainingOf(state) <= 0;
+  const reticle = reticleStateOf(gun, outOfAmmo);
   const latest = state.accusations[0] ?? null;
   const { flash, showCallout } = useShotResult(latest?.id ?? null, latest?.correct ?? false);
 
@@ -228,50 +274,18 @@ export function InspectorHud({ state, gun }: InspectorHudProps): ReactElement {
           ? AMMO_READY_PROMPT
           : AMMO_NO_TARGET_PROMPT;
 
-  // The newest shot owns the middle of the screen, so the stack behind it
-  // carries only the older ones and any refusal.
-  const toasts: ToastEntry[] = [
-    ...state.accusations.slice(1).map((entry) => ({
-      id: entry.id,
-      title: entry.stamp,
-      body: entry.correct ? (entry.revealedDisplayName ?? null) : null,
-      tone: entry.correct ? ("brass" as const) : ("cream" as const),
-    })),
-    ...state.rejections.map((entry) => rejectionToast(entry.id, entry.commandType, entry.reason)),
-  ];
-
   return (
-    <div style={overlayStyle}>
-      <PhaseTimer
-        timer={state.timer}
-        label={state.timer.finalTen ? state.phaseLabel : null}
-        note={state.timer.finalTen ? null : `${state.mimicsRemaining} unaccounted for`}
-      />
-
-      <div style={{ ...panelStyle, top: 16, left: 16, pointerEvents: "none", minWidth: 150 }}>
-        <div style={{ ...labelStyle, display: "flex", justifyContent: "space-between", gap: 12 }}>
-          <span>{AMMO_LABEL}</span>
-          <span style={{ color: outOfAmmo ? ALARM : BRASS }}>
-            {warrantsRemaining} / {warrantTotal}
-          </span>
-        </div>
-        <AmmoRounds total={warrantTotal} remaining={warrantsRemaining} />
-        <div style={{ ...labelStyle, marginTop: 12 }}>Mimics remaining</div>
-        <div style={{ font: "600 22px/1.2 system-ui, sans-serif", color: accent }}>
-          {state.mimicsRemaining}
-        </div>
-      </div>
-
+    <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
       <Reticle reticle={reticle} triggerProgress={gun.triggerProgress} flash={flash} />
 
       {gun.targetObjectId === null || gun.targetDistanceM === null ? null : (
         <div
           style={{
             position: "absolute",
-            top: "calc(50% + 52px)",
-            left: "50%",
-            transform: "translateX(-50%)",
-            pointerEvents: "none",
+            top: "calc(50% + 46px)",
+            left: 0,
+            right: 0,
+            textAlign: "center",
             ...labelStyle,
             color: gun.targetInRange ? CREAM : "rgba(232, 221, 205, 0.4)",
           }}
@@ -280,15 +294,30 @@ export function InspectorHud({ state, gun }: InspectorHudProps): ReactElement {
         </div>
       )}
 
+      <div
+        style={{
+          position: "absolute",
+          top: "calc(50% + 66px)",
+          left: 0,
+          right: 0,
+          textAlign: "center",
+          ...labelStyle,
+          color: outOfAmmo ? ALARM : CREAM,
+          opacity: reticle === "on_target" ? 0.9 : 0.5,
+        }}
+      >
+        {prompt}
+      </div>
+
       {showCallout && latest !== null ? (
         <div
           style={{
             position: "absolute",
-            top: "calc(50% - 96px)",
+            top: "calc(50% - 106px)",
             left: "50%",
             transform: "translateX(-50%)",
-            pointerEvents: "none",
             textAlign: "center",
+            whiteSpace: "nowrap",
             background: INK,
             border: EDGE,
             borderRadius: 8,
@@ -316,27 +345,6 @@ export function InspectorHud({ state, gun }: InspectorHudProps): ReactElement {
           </div>
         </div>
       ) : null}
-
-      <div
-        style={{
-          position: "absolute",
-          bottom: 24,
-          left: "50%",
-          transform: "translateX(-50%)",
-          background: INK,
-          border: EDGE,
-          borderRadius: 8,
-          padding: "7px 14px",
-          pointerEvents: "none",
-          ...labelStyle,
-          color: outOfAmmo ? ALARM : CREAM,
-          opacity: reticle === "on_target" ? 0.9 : 0.5,
-        }}
-      >
-        {prompt}
-      </div>
-
-      <Toast entries={toasts} />
     </div>
   );
 }

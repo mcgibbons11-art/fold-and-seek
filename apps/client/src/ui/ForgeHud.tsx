@@ -189,9 +189,20 @@ export interface ForgeHudProps {
   readonly onExit: () => void;
   /** What leaving means here. Practice leaves the Forge; a round leaves the round. */
   readonly exitLabel?: string;
+  /**
+   * The "FORGE · POSE" banner. Practice owns the whole screen and needs it; in a
+   * round the phase HUD already owns the top of the screen, and two panels
+   * anchored top-centre draw on top of one another.
+   */
+  readonly showHeader?: boolean;
 }
 
-export function ForgeHud({ controller, onExit, exitLabel }: ForgeHudProps): ReactElement {
+export function ForgeHud({
+  controller,
+  onExit,
+  exitLabel,
+  showHeader = true,
+}: ForgeHudProps): ReactElement {
   const [state, setState] = useState<ForgeHudState>(() => controller.snapshot());
 
   useEffect(() => controller.subscribe(setState), [controller]);
@@ -202,25 +213,27 @@ export function ForgeHud({ controller, onExit, exitLabel }: ForgeHudProps): Reac
 
   return (
     <div style={rootStyle}>
-      <div
-        {...hudProps}
-        style={{
-          ...panelStyle,
-          top: 16,
-          left: "50%",
-          transform: "translateX(-50%)",
-          textAlign: "center",
-          letterSpacing: "0.18em",
-          textTransform: "uppercase",
-          fontSize: 11,
-          padding: "8px 18px",
-        }}
-      >
-        <span style={{ color: state.locked ? BRASS : CREAM }}>
-          {state.locked ? "Disguise locked" : `Forge · ${state.mode}`}
-        </span>
-        {state.mirror ? <span style={{ color: BRASS, marginLeft: 12 }}>mirror</span> : null}
-      </div>
+      {showHeader ? (
+        <div
+          {...hudProps}
+          style={{
+            ...panelStyle,
+            top: 16,
+            left: "50%",
+            transform: "translateX(-50%)",
+            textAlign: "center",
+            letterSpacing: "0.18em",
+            textTransform: "uppercase",
+            fontSize: 11,
+            padding: "8px 18px",
+          }}
+        >
+          <span style={{ color: state.locked ? BRASS : CREAM }}>
+            {state.locked ? "Disguise locked" : `Forge · ${state.mode}`}
+          </span>
+          {state.mirror ? <span style={{ color: BRASS, marginLeft: 12 }}>mirror</span> : null}
+        </div>
+      ) : null}
 
       <div {...hudProps} style={{ ...panelStyle, top: 74, left: 16, width: 132 }}>
         {FORGE_TOOL_MODES.map((mode) => (
@@ -354,6 +367,76 @@ export function ForgeHud({ controller, onExit, exitLabel }: ForgeHudProps): Reac
           onClick={onExit}
         >
           {exitLabel ?? "Leave the Forge"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The Forge's authoring panels with no position of their own: the controls for
+ * whichever tool is selected, the paint panel when it is painting, and undo.
+ *
+ * A hider goes on shaping the disguise all through the hunt (CLAUDE.md override
+ * 2), but the hunt HUD owns the screen by then. This is the part of the Forge
+ * the hunt takes with it, dropped into whatever region the layout gives it. The
+ * tool buttons are deliberately absent, because the hunt's action rail carries
+ * them and the same key must not appear twice on screen.
+ */
+export function ForgeToolPanels({
+  controller,
+  width = 236,
+}: {
+  readonly controller: ForgeController;
+  readonly width?: number;
+}): ReactElement {
+  const [state, setState] = useState<ForgeHudState>(() => controller.snapshot());
+
+  useEffect(() => controller.subscribe(setState), [controller]);
+
+  const commit = (): void => {
+    controller.commitEdits();
+  };
+
+  const cardStyle: CSSProperties = {
+    background: INK,
+    border: EDGE,
+    borderRadius: 10,
+    padding: "12px 14px",
+    pointerEvents: "auto",
+    backdropFilter: "blur(6px)",
+    width,
+    boxSizing: "border-box",
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10, width }}>
+      <div {...hudProps} style={cardStyle}>
+        <ContextPanel controller={controller} state={state} onCommit={commit} />
+      </div>
+
+      <div {...hudProps} style={{ pointerEvents: "auto" }}>
+        <PaintPanel tool={controller.paint} />
+      </div>
+
+      <div {...hudProps} style={{ ...cardStyle, display: "flex", gap: 6 }}>
+        <button
+          type="button"
+          style={{ ...buttonStyle, marginBottom: 0, opacity: state.canUndo ? 1 : 0.4 }}
+          onClick={() => {
+            controller.undo();
+          }}
+        >
+          ⟲ Undo
+        </button>
+        <button
+          type="button"
+          style={{ ...buttonStyle, marginBottom: 0, opacity: state.canRedo ? 1 : 0.4 }}
+          onClick={() => {
+            controller.redo();
+          }}
+        >
+          ⟳ Redo
         </button>
       </div>
     </div>

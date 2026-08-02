@@ -74,6 +74,47 @@ export const SHOP_SWATCHES: readonly MapSwatch[] = [
     triplanarScale: 1.6,
     legalForMimic: true,
   },
+  /**
+   * The three floorboard tones.
+   *
+   * A shop floor is walked on, so it is lighter and greyer than the cabinet
+   * walnut standing on it: the boards were the same stock once and years of
+   * traffic took the stain off them. They are their own swatches rather than a
+   * reuse of `walnut_*` because the floor fills the bottom of every eye-level
+   * frame at giant scale, and a surface that large has to sit in a readable
+   * band whatever else the palette does. Sampling has to hand back the colour
+   * the player actually sees (§7.12), so a distinct look means a distinct id.
+   */
+  {
+    id: "floorboard_oak_02",
+    label: "Oak floorboard",
+    family: "wood",
+    baseColor: srgb(0x5c3f27),
+    roughness: 0.66,
+    metalness: 0,
+    triplanarScale: 1.4,
+    legalForMimic: true,
+  },
+  {
+    id: "floorboard_bleached_03",
+    label: "Bleached floorboard",
+    family: "wood",
+    baseColor: srgb(0x7a5738),
+    roughness: 0.72,
+    metalness: 0,
+    triplanarScale: 1.4,
+    legalForMimic: true,
+  },
+  {
+    id: "floorboard_stained_01",
+    label: "Stained floorboard",
+    family: "wood",
+    baseColor: srgb(0x3c2718),
+    roughness: 0.6,
+    metalness: 0,
+    triplanarScale: 1.4,
+    legalForMimic: true,
+  },
   {
     id: "paint_cream_01",
     label: "Cream plaster",
@@ -286,6 +327,19 @@ export const SHOP_SWATCHES: readonly MapSwatch[] = [
     legalForMimic: true,
   },
 ];
+
+/**
+ * The floorboard tones, in the order the floor draws from them. Kept here
+ * rather than in the floor builder because both the builder and the material
+ * library have to agree on which swatches wear the plank maps.
+ */
+export const FLOORBOARD_SWATCH_IDS = [
+  "floorboard_oak_02",
+  "floorboard_bleached_03",
+  "floorboard_stained_01",
+] as const;
+
+export type FloorboardSwatchId = (typeof FLOORBOARD_SWATCH_IDS)[number];
 
 const byId = new Map<string, MapSwatch>(SHOP_SWATCHES.map((swatch) => [swatch.id, swatch]));
 

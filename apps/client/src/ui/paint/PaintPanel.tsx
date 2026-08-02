@@ -18,10 +18,10 @@ import { ColorWheel, WHEEL_SIZE } from "./ColorWheel";
  * #root is pointer-events: none, so every control sets its own.
  */
 
+// Unpositioned on purpose: the Forge places it beside the tool column, and the
+// hunt stacks it inside the left region. A panel that placed itself would have
+// to be right about both.
 const panelStyle: CSSProperties = {
-  position: "absolute",
-  left: 16,
-  top: 16,
   width: WHEEL_SIZE + 28,
   background: INK,
   border: EDGE,

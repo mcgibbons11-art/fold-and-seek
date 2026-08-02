@@ -98,9 +98,11 @@ function zoneByLetter(letter: string): MapZone {
 }
 
 async function main(): Promise<void> {
-  const settings = qualitySettingsFor(tier);
-  const manager = new RendererManager(canvas, settings, forceWebGL);
+  const manager = new RendererManager(canvas, qualitySettingsFor(tier), forceWebGL);
   await manager.initialize();
+  // Re-resolved now the backend is known: it decides the live light budget, and
+  // the viewer is where that gets measured, so it has to match the game.
+  const settings = qualitySettingsFor(tier, manager.backend);
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x08070a);

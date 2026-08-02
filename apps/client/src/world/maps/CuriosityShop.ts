@@ -34,6 +34,8 @@ export interface CuriosityShopStats {
   readonly geometries: number;
   readonly practicals: number;
   readonly shadowedLights: number;
+  /** Lamps drawing a stand-in pool because the backend could not light them. */
+  readonly lightPools: number;
   readonly inspectableObjects: number;
 }
 
@@ -124,6 +126,7 @@ export class CuriosityShop {
         geometries: geometry.size,
         practicals: lighting.stats.practicals,
         shadowedLights: lighting.stats.shadowedLights,
+        lightPools: lighting.stats.lightPools,
         inspectableObjects: objects.filter((entry) => entry.accusationPolicy === "allowed").length,
       },
       applyQuality: (settings) => {

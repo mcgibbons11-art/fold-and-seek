@@ -1,10 +1,481 @@
 # STATUS
 
+## Bot Inspectors hunt, and bot hiders hide (2026-08-02)
+
+**The gap this closes.** A solo round had no stakes, because nobody was ever
+caught: `localRound.ts` contained no accuse path, bots locked a disguise and did
+nothing else, and every round ended with four identical scorelines and the clock
+running out. A stranger could play a whole 75-second hunt without discovering
+that the game has a gun in it.
+
+### The bot Inspector
+
+`gameplay/botInspector.ts` walks the shop and spends warrants. It moves at
+`settings.inspectorMoveSpeed` (read from the settings, never written out), plans
+its route over a floor grid built from `NAV_DATA`, and fires through the same
+`accuse` command a human fires, so `SpatialValidatorImpl` checks its range and
+line of sight exactly as it checks a player's. It has to be standing within
+`accusationDistance` of what it shoots, and a test measures the eye positions it
+publishes tick by tick and fails if any pair is further apart than the walking
+speed allows.
+
+**Movement is a grid path, not steering.** The first version steered at its goal
+and slid along whatever it hit, and it spent entire rounds pinned against the
+Security Office partition, never reaching the shop at all. It now floods a
+breadth-first search outward over cells a body fits in (`WORLD_SCALE.playerRadius
+* 2` to a cell, about 2,700 cells) and walks the result. Flooding from the bot
+rather than searching toward the goal means a goal inside furniture or up on a
+shelf still yields the closest approach the floor allows, which is how the bot
+learns something is out of its reach: there is no jump and it does not climb, so
+it gives that object up rather than grinding at it.
+
+**What it is allowed to know.** The brain is handed a flat list of object ids and
+one bounds lookup. `localRound.ts` is the only place that touches the room's
+disguise list, and it reads exactly one thing from it, the object ids, before
+merging them into the shop's props. Nothing downstream records which is which, so
+there is no role, owner, or "is this a Mimic" to read even by accident. That is
+the same view a human client has, since `DisguiseTheatre` publishes a disguise
+through the identical focus proxy a chair publishes (§8.5).
+
+**How it decides**, since it cannot see. Two explicit proxies for the eye:
+
+1. *That moved.* An object it watched and then found somewhere else. Only objects
+   it can currently see are recorded, so it never notices a shift that happened
+   while it was in another aisle.
+2. *That is the wrong size to be furniture.* Bounding diagonals between 0.6 and
+   2.4 player heights. Fifty of the shop's 104 accusable props survive this
+   filter and 26 of those can be reached from the floor, which is why the bot
+   still burns warrants on candlesticks and hat boxes.
+
+Whatever passes the size filter enters a seeded shortlist at a 0.28 rate, so a
+round contains a few honest mistakes and the same seed hunts the same way twice.
+
+### Bot hiders
+
+`botDisguises.ts` now carries six hiding places instead of bare spawn points,
+alternating cover with exposure. Three fold under real furniture the map already
+has, the bay beneath the workshop bench, the second board of the steel rack with
+the third over it, and the space under the ladderback chair in the window, and
+hold absolutely still. Three stand out on the open floor and creep: `BotCreep`
+drifts them out to the end of an authored 8 cm offset and back on a six-second
+cycle, republished every 400 ms, so each step is about a centimetre. Every one
+goes through `recordForgeSnapshot` and is validated for creep speed, revision and
+play volume like a human hider's.
+
+The bay under the office desk is the third anchor surface `giantScale.test.ts`
+measures and is deliberately unused: it is inside the Security Office, which a
+Mimic may never enter (§10.4).
+
+Hiding places are handed out **in the order bots actually hide**, not by seat.
+Seats are dealt roles by a shuffle, and a seat-ordered table left one deal in
+three with both remaining hiders standing in the open and nobody in cover.
+
+### Measured
+
+Seeds 1 to 24, of which 19 deal the gun to a bot, three bots and the local
+player. These are the figures `botRound.test.ts` asserts against, so re-running
+it reproduces them:
+
+| | |
+|---|---|
+| Rounds with no shot fired | 0 |
+| Restless hider caught | 17 of 19 |
+| Hider in cover, holding still, caught | 7 of 19 |
+| Catches / wrong accusations | 32 / 86 |
+
+So cover roughly doubles a hider's survival odds, and the bot spends most of its
+warrants on the shop's own furniture. That ratio is also the anonymity guard: if
+anybody ever wires the disguise list into the brain as an answer key, the wrong
+accusations collapse and `botRound.test.ts` says so.
+
+**These are statistical thresholds and they carry flake risk.** The tight one is
+`stillCaught * 2 < restlessCaught`, which is 14 against 17: it fails if the
+catch rate on a hider in cover rises from 37% to about 45%. That is the right
+failure, since the assertion exists to say cover is worth something, but anybody
+who widens the hunt, the shortlist rate or the gun's reach should expect to
+re-measure rather than nudge the threshold.
+
+The size filter, by contrast, is **not** tightly coupled to the body. The
+tightest starter arrangement measures 0.322 m across its diagonal against a band
+of 0.210 to 0.840 m, so it can shrink by 35% or grow by 161% before the bot
+stops recognising it as person-shaped. A silhouette retune of a few percent does
+not move it. Note the failure mode is loud either way: if disguises ever fell
+out of the band the bot would target none of them, the restless catch rate would
+collapse to nil, and both difficulty assertions would fail rather than pass
+quietly.
+
+The bot issues 0.44 to 0.69 commands a second during the hunt, so nothing here
+strains a transport. Bots exist only in the local loopback, so none of it reaches
+the wire under Portals in any case.
+
+**Known limits, not fixed here.** The bot walks but never climbs, so a disguise
+on a high shelf is safe from it forever; hiding place 3, the steel rack board, is
+shootable from nowhere on the floor, though a human Inspector has the climb links
+and can reach it. It also empties its warrant budget in most rounds, which is
+more trigger-happy than good play, and `INSPECTION_RATE` is the knob. With more
+than six hiding bots the plan table wraps and two disguises would share a spot;
+the menu seats three.
+
+### Verified
+
+`pnpm -r typecheck`, `pnpm -r test` and `pnpm -r build` all green: 494 client,
+161 sim, 46 shared, 23 server. New `apps/client/tests/gameplay/botRound.test.ts`
+drives the real `createLocalRound` wiring headlessly, the same adapter, brain,
+registry and validator the menu builds, standing in for `RoundSession` only by
+running a `DisguiseTheatre` over the published poses, which is the same bounds
+lookup the live round installs. It covers every hiding place being legal at both
+ends of its fidget, cover plans having real furniture overhead, a round ending
+with somebody caught, somebody away and warrants spent on furniture, creeps
+actually accepted by the authority, the same seed replaying identically, the
+difficulty shape above, and the no-teleport walk.
+
+Not checked: none of this was seen in a browser. The lead owns the browser.
+
+## Backend-aware light budget: 17 point lights down to 6 on WebGPU (2026-08-02)
+
+Follows the lead's finding that the shop's light rig is the dominant WebGPU
+cost (frozen production build, GPU-bound, no CPU stall): 5.4 fps at the high
+tier on WebGPU against roughly 21 on WebGL 2 with the same seventeen lamps, and
+22.9 fps at the light tier. Three shades every punctual light in a loop and its
+WebGPU node-material path is far weaker at it than the WebGL 2 renderer.
+
+**`QualitySettings.maxPracticalLights` is new, and `qualitySettingsFor(tier,
+backend)` caps it on WebGPU** (6 at ultra and high, down to 3 at light).
+WebGL 2 is untouched and still runs every authored lamp — a cap that cost both
+backends would trade art for a problem only one of them has. Capped settings
+are memoised per tier, because `GameHost` compares settings by identity to
+decide whether a tier change is worth re-applying down the whole world.
+
+`GameHost.applyTier` now resolves settings against `renderer.backend`. Its
+early-return guard had to change with it: the boot tier is `high` and the
+heuristic frequently lands back on `high`, so the old `settings.tier === tier`
+test would have skipped the first apply and left the WebGPU cap unused.
+
+**The lamps that lose their light do not lose their pool.** `ShopLighting` draws
+a stand-in: one additive `InstancedMesh` of soft discs, unlit geometry, one draw
+call for the room. Pools are built in reverse authored priority, so the ones
+that must appear are always the leading instances and the switch-over is a
+`count` assignment. Two kinds, because they differ in size as well as height —
+a floor pool for lamps and pendants (radius to 2.4 m, on the boards), a much
+smaller tabletop pool for table lamps and task lights (radius to 0.28 m, on the
+furniture the lamp stands on). Sizing this against the authored light radius
+would have hung a 1.8 m glowing disc a metre out past a 0.5 m table. Wall
+sconces get none at all: they wash the wall beside them and a disc lying flat
+under one would be a lie, so their lit shades carry them.
+
+Measured over the authored manifest (17 practicals: 6 pendants, 3 floor lamps,
+2 table lamps, 2 task lights, 4 sconces):
+
+| | live point lights | unlit fixtures | drawn pools |
+|---|---|---|---|
+| WebGPU, high | 6 | 11 | 7 |
+| WebGL 2, high | 17 | 0 | 0 |
+
+**This does not prove the hypothesis, and the change is built so it can be
+tested.** The 5.4-vs-22.9 comparison across tiers moves practical count,
+shadows, bloom, GTAO and render scale together, so it does not isolate lights;
+the same-content 5.4-vs-21 backend gap is the stronger evidence but points at
+the backend rather than at lights specifically. `WEBGPU_PRACTICAL_CEILING` in
+`rendering/quality.ts` is a single constant: setting it back to 17 and
+re-measuring is a clean A/B with everything else held fixed. `stats.practicals`
+and `stats.lightPools` on `CuriosityShopStats` report what actually ran.
+
+Worth knowing: the fill rig in the pass below **added** a directional light, so
+the room now runs 2 fill directionals rather than 1. Against 11 point lights
+removed that is plainly a win, but it is an addition to the loop under
+suspicion. The counter spot is also untouched and is still a shadowed local
+light on WebGPU. And on WebGPU the shop will read flatter than on WebGL 2:
+eleven real pools become seven drawn discs that light only the surface they lie
+on, never the walls or props around the lamp. That flattening is the price of
+the trade and is why the fill work had to come first.
+
+## Shop readability and the floor as a hero surface (2026-08-02)
+
+Answers the round-2 critic gap "the shop is too dark for a game built on visual
+comparison" and "the floor is nearly featureless". Touches `world/maps/lighting.ts`,
+`props/{architecture,materials,clutter}.ts` and `maps/swatches.ts` only.
+
+**The readability floor is now a measured contract, not a hope.** Every
+unshadowed light is declared as data in `SHOP_FILL_RIG`, and `fillIrradiance(normal)`
+restates three's own diffuse maths for those lights alone. `ShopLighting` builds
+its lights from that rig, so the numbers a test measures are the numbers the
+renderer gets. The rig is four-way on purpose — cool sky and warm floor bounce
+from the hemisphere, a cool wash from the back corner and a warm one from the
+window corner — because flat ambient reaches the same level and reads as fog.
+
+Measured through the renderer's real transform (three's ACES fit at exposure
+1.15, then sRGB), for a white body with no practical, no moon and no environment
+map reaching it:
+
+| | before | after |
+|---|---|---|
+| white body, worst normal | 11/255 | 48/255 |
+| white vs mid-tone gap, worst normal | 10 levels | 40 levels |
+| north- and west-facing surfaces | 14/255 | 107–113/255 |
+
+That is the gap the critic named: at 11/255 a white body and a white box were
+the same pixel. The lamps still carry the room — a practical out-lights the
+entire fill rig out to a 2.3 m radius, which `dressing.test.ts` pins between
+1.5 m and 4 m, so neither a brighter fill nor a dimmer one passes unnoticed.
+
+**The main risk in this pass: none of it has been seen rendered.**
+`fillIrradiance` deliberately ignores the environment map, so the model is a
+lower bound and a real frame is brighter than the table above — and the
+environment shell was lifted too (`0x0e0c0a` → `0x171310`, floor bounce
+`0x3a2a1c` → `0x46341f`). If the screenshots come back over-lit, the whole rig
+scales from the four intensities in `SHOP_FILL_RIG`; nothing else needs touching.
+
+**The floor is now authored as a surface rather than tiled as one.** It wears
+three new swatches (`floorboard_oak_02`, `floorboard_bleached_03`,
+`floorboard_stained_01`) instead of borrowing cabinet walnut, which raises mean
+floor reflectance about 2.3x — a shop floor is walked on and is lighter than the
+furniture standing on it. They are distinct swatch ids rather than walnut with
+different maps because sampling has to hand back the colour actually rendered
+(§7.12).
+
+A board-space map (512x128, u along the board in 2 m tiles, v from joint to
+joint) carries grain bands of varying width and darkness, two knots, joint
+shadows and traffic wear, from one field driving both colour and roughness.
+Effective roughness moves from 0.22–0.50 to 0.45–0.64, which is what breaks the
+single mirror streak a low camera was getting back. Each board is its own
+geometry with its own u offset, u scale and v flip, because the extruder gave
+every board of a given width identical UVs and therefore identical grain to the
+texel.
+
+The plank field was verified by rendering it to PNG and looking at it rather
+than by reading the code, which was worth doing twice: the first version came
+out as uniform corrugated sheet and was rebuilt with per-band width and depth
+plus a drifting band count. Separately, the wear field was being point-sampled
+and printed its own 64-cell grid onto the boards as 3 cm blocks; it is bilinear
+now.
+
+**Floor scatter** (`props/clutter.ts`): 180 pieces of paper scrap, dust, wood
+shavings, twine, coins and buttons, laid out as pure data with no graphics
+device so the placement rules can be checked. It is dressing and only dressing —
+it reaches neither `placements.ts`, the object registry nor the nav blockers,
+and `dressing.test.ts` holds that line by re-deriving the rules from the map
+rather than from the scatter's own code. Writing that test found a real bug:
+the authored focus boxes are routinely tighter than the props, so rejecting
+against them alone put a scrap inside a workbench leg. Rejection now also runs
+against the ground-level nav blockers, which are the authored record of what is
+solid.
+
+**Draw calls are down, not up.** The floor went from ~10 instanced meshes to 3
+merged ones (a board now appears once, which puts every bucket under the merge
+threshold), and the scatter costs 6 instanced draws however many pieces land,
+since per-copy variety rides the instance tint. Net change is roughly
+break-even against the 293 the scene was running, though that figure is reasoned
+from the batcher's rules rather than measured, because building the map needs a
+canvas. No shadowed light was added; the tier-gated `shadowedLocalLights` budget
+is untouched.
+
+Known and deliberate: the Security Office gets no scatter, because `FLOOR_PLAN`
+publishes no walkable box for it. Clutter sheds as a whole below
+`clutterDensity` 0.4 via the existing background-layer gate rather than thinning
+gradually, which would need quality passed into `PropContext` and therefore a
+change to `CuriosityShop.ts`.
+
+Verified: `pnpm -r typecheck`, `pnpm -r test` (494 client, 161 sim, 46 shared,
+23 server) and `pnpm -r build` all green.
+
+## The hunt HUD now owns screen regions (2026-08-02)
+
+The critic's finding was that the hunt HUD collided with itself and shared no
+grammar with the original: the hider's status card clipped the Forge tool rail so
+"1 Pose" and "2 Shape" were unreachable, the Forge's own "FORGE · POSE" header
+was drawn on top of the phase timer, and the taunt button sat over its own hint
+(`docs/screenshots/critic/06-hunt-hider.jpeg`). Each offset was defensible alone,
+which is why inspection could not fix them.
+
+**The screen is now cut into regions before anything fills them.**
+`ui/rounds/layout.tsx` holds one table of seven boxes (top-centre status, top-right
+stamps, left column, right rail, bottom-centre strip, bottom-right mode note, the
+centre). `regionRect` and the CSS come from the same arithmetic, every region
+clips or scrolls its own content, and a phase HUD hands `HudLayout` a **record**
+of region to node, so claiming one region twice is not expressible rather than
+merely wrong. Components render content and no longer position themselves:
+`HiderHud`, `InspectorHud`, `MissedFindsHud`, `PaintPanel` and `Toast` all lost
+their absolute offsets.
+
+**The original's four anchors are ported** (`ui/rounds/HuntHud.tsx`):
+
+- *Top centre* — `HuntStatus`: a rank of hider figures with the caught ones
+  struck through, an hourglass carrying the seconds, a rank of red seeker
+  figures, and the phase named underneath ("SEARCH TIME" / "UNTIL THE SEARCH
+  STARTS" / "TEN SECONDS"). It is a **count, not an attribution**: it draws one
+  figure per published disguise and strikes as many as the round has lost, so a
+  caught object cannot be picked out of the row.
+- *Right edge* — `ActionRail`: one chip per verb with the key that fires it. A
+  hider gets Taunt, the five Forge tools, Mirror and the board; an Inspector gets
+  the trigger, the aim and the board. **Every key on it is one some component
+  actually listens for.** The nameplate and x-ray toggles of the original are
+  absent because we do not have them.
+- *Bottom centre* — `ControlStrip`: keycaps for what this role steers with. A
+  hider's has no WASD, because per CLAUDE.md override 4 a hider creeps by being
+  dragged. For an Inspector without pointer lock the strip is replaced by the
+  click prompt, since until the room has the mouse none of those controls do
+  anything.
+- *Bottom right* — `ModeNote`: the mode and its two lines, per role.
+- The missed-spot board moved from the top right into the left column, which is
+  where the original keeps it.
+
+**The taunt is on T, not on 1.** The original puts Taunt on 1, but 1 is the
+Forge's pose tool here and a hider is still authoring during the hunt. `RoundHud`
+binds T and reads the gate at the moment of the press through a ref, so the
+listener does not rebind on every published state. The Forge's tool column is not
+rendered during the hunt at all: the rail carries those keys, and the same key on
+two chips is how a player learns to distrust the HUD.
+
+**Also fixed, same defect class, one phase earlier.** `ForgeHud` gained
+`showHeader`, and the round passes false, so "FORGE · POSE" no longer lands on the
+phase timer during the Forge either. `ForgePhaseHud`'s locked panel was a second
+bottom-centre panel over the Forge's status line; the lock is now reported in the
+timer's own note.
+
+**Verified** (`pnpm -r typecheck` clean over these files, `pnpm -r build` green,
+38 new tests in `apps/client/tests/ui`):
+
+- `hudLayout.test.ts` proves the seven boxes are pairwise disjoint and inside the
+  viewport at **1280x720 and 1920x1080**, that a centred region uses `calc`
+  rather than a transform (two centred axes cannot share one transform), and that
+  every region clips or scrolls.
+- `huntControls.test.ts` proves no key is bound twice on either rail, that every
+  action appears exactly once, that the taunt key differs from the pose key, that
+  a cooling taunt is shown disabled rather than hidden, that an unsupported taunt
+  is dropped, that the mouse verbs are not clickable chips, and that a hider is
+  offered no walk key.
+- `huntHud.test.tsx` renders both roles in jsdom, asserts each region is claimed
+  at most once, that **nothing renders outside a region**, that the claimed set is
+  disjoint at both resolutions, that "FORGE ·" appears nowhere, that each tool
+  label appears exactly once and never in a second column, and that the taunt is
+  not stacked on the control strip. The duplication assertion was falsified by
+  hand: reintroducing a "5 Paint Mode" line in the left column fails it.
+
+`jsdom` was added as a client devDependency for that last file; there was no DOM
+test environment before.
+
+Not covered, and worth knowing: jsdom does no layout, so no test measures a real
+painted rectangle. The geometry is proved arithmetically and the composition is
+proved by rendering, and the two meet only because `regionStyle` and `regionRect`
+read the same table. A browser screenshot is still the check on that.
+
+`SpectatorHud` is now unreferenced. The hunt gives a caught hider a small status
+card and the board instead, and no other phase used it. It was left in place
+rather than deleted, since removing another builder's component is not this
+change's call.
+
 ## Current phase
 
 Phase 3 — playable local round. The wiring described under "Phase 3 wiring" below is in
 place: "Play a round" on the main menu now runs a whole match in one tab against the
 Curiosity Shop, with no network.
+
+## The Mimic body and the Forge view (2026-08-02)
+
+A critic pass found the game's central object unreadable: "a vertical stack of
+rounded blobs; I could identify two glowing eyes and nothing else. Limbs are
+indistinguishable from torso. Seven large flat translucent IK-handle discs are
+painted over it and cover more of the body than the body shows." Three separate
+causes, all in presentation. Nothing in the rig, the solver, the wire format or
+the paint pipeline changed.
+
+**The trunk read as beads because every shell closes to a point.** A segment
+shell is a loft with a filleted cap at each end, so four trunk shells laid end to
+end pinch four times. `MimicVisual` now draws each trunk shell past its bone tip
+into the next one, as a share of its own length (`SHELL_OVERRUN_SHARE`), which
+buries both pinches and leaves the trunk one continuous surface. A share rather
+than a length, so stretching the torso in the Forge cannot open a gap at a seam.
+Limbs are deliberately left alone: the pinch at an elbow is the articulation. The
+head overruns nothing, because it is the crown and player height is measured
+against it — `giantScale.test.ts` still finds the standing body at exactly
+`PLAYER_HEIGHT_M`.
+
+**Limbs disappeared into the trunk because the trunk was wider than the arms
+hang.** An upper arm hangs with its centre 0.13 authored units out from the
+spine; against the old 0.32-wide chest it protruded 0.025 and had no outline of
+its own. The authored cross-sections are re-proportioned against the silhouette
+rather than against the bone table: chest 0.27 and waist 0.23 so the trunk tapers,
+neck 0.115 against a 0.20 head so there is a neck at all, shoulder stubs 0.145 so
+there is a shoulder line wider than the head, arms slimmed to 0.10 and 0.088.
+The arm now stands 0.045 clear of the chest, which is 90% of its own half width.
+Legs clear each other by 9 mm at the thigh, and a foot reaches twice as far
+forward as its shin.
+
+**Edge definition comes from the bellows, which were tucked away.** The dark
+rubber at each joint was sized at 0.92 of the thinner shell for every joint alike,
+and it is also 1.14x fatter at its equator than the diameter it is scaled to —
+a rib bulge nobody had accounted for, now published as `BELLOWS_OUTER_RATIO` so
+the joint table can be written in outer diameter and mean it. Elbows, knees,
+shoulders and wrists now stand proud (1.1–1.2 of the shell below them) and read as
+dark articulated seams on a matte white body; trunk joints and hips tuck in at
+0.94 so the trunk stays one form. The capsule profile's caps were also taking
+nine tenths of a limb between them at the middle of the roundness slider, leaving
+no straight shaft at all; they are 0.12/0.32 now instead of 0.20/0.45.
+
+**Finish.** The porcelain default was roughness 0.30 with 0.45 clearcoat, which
+blows out to a flat bright shape against colourful clutter. It is 0.62 / 0.25 on
+a near-neutral white now, so shading describes the form. `PaintMaterialBinder`
+bakes a part's swatch roughness and metalness into its unpainted texel, so
+painting still starts from exactly the material underneath it.
+
+**Two more unconverted world-metre literals**, both of the same family as the
+ones the giant-scale retune caught: the panel socket studs (a 52 mm brass disc on
+a 350 mm creature) and the anchor seal markers (68 mm). Both now convert with
+`RIG_TO_WORLD`.
+
+### The handles and the camera
+
+`HANDLE_SCREEN_RADIUS` was 0.028 and the handle was a filled sphere or disc with
+a translucent depth-ignoring copy over it. **Drawing and grabbing are now two
+different sizes.** The drawn handle is a thin billboarded outline ring at 0.012
+with a small solid grip inside it at half that, faint (0.34 opacity) until it is
+hovered and opaque while it is held; the pointer is tested against an invisible
+proxy at the original 0.028, which draws nothing and writes no depth. The outline
+spans under a twelfth of the body's height where the old filled disc spanned
+about a seventh, and picking is no harder than it was.
+
+**The Forge camera could always orbit — on a right drag.** Left-drag was the
+gesture nobody found, because a left press that hit nothing simply did nothing.
+`beginLeftPress` now reports whether the active tool consumed the press, and an
+unconsumed one goes to the camera. `forgeView.test.ts` pins both directions: a
+drag over empty space turns the camera and records no edit, and a drag aimed at
+the head handle poses the body and does not move the camera.
+
+Two framing numbers were world-metre leftovers. The opening radius of 2.4 was
+outside the wheel's own maximum of `7 * RIG_TO_WORLD` = 2.23, so the opening shot
+could not be zoomed back to once left; it is `2.4 * RIG_TO_WORLD` now. The orbit
+target sat 0.55 m above the root, which is above the crown of a 0.35 m body, so
+the frame was aimed over the Mimic's head; it is 0.55 *of body height* now, and
+`frameMimic` takes the same rule from the root rather than from the pelvis bone,
+so a folded arrangement that tucks its hips does not drag the whole frame down.
+
+**`DOORWAY_POSITION` is gone.** It was the fixed point (2.9, 1.62, 2.6) — the
+practice room's doorway, and after the retune a camera at nearly five player
+heights, which is the "what I did not verify" note from the retune section below.
+The doorway preview is derived from the active workspace instead: eye height,
+22 body heights back down the room's longer axis, toward whichever end has more
+room, clamped one player radius inside the walls. The Inspector preview is
+clamped the same way, which it was not before.
+
+Also fixed while in there: switching tool mode now cancels a live camera drag.
+Holding a drag and pressing 5 left the camera owning a pointer the brush needed.
+
+**Verified**: `pnpm -r typecheck`, `pnpm -r test` (491 client, plus sim, shared
+and server) and `vite build` all green. `mimicSilhouette.test.ts` measures a real
+`MimicVisual` in world metres and asserts the relations that make it a body —
+head wider than neck and narrower than the shoulder span, each arm clear of the
+chest by a share of its own width, a waist narrower than hips and chest, daylight
+between the thighs, feet ahead of shins, a flat hand rather than more forearm,
+trunk shells overlapping while limb joints abut exactly, bellows proud at elbow
+and knee and tucked at the neck, and the crown still at player height.
+`forgeView.test.ts` covers the camera and handle claims above.
+
+**Not verified: none of this was seen rendering.** The measurements are geometric
+and headless. Whether the matte porcelain, the proud bellows seams and the
+outline rings actually look right under the shop's lighting is a judgement only a
+screenshot can make, and the next critic pass should make it rather than trust
+this section. The paint pipeline was not changed and its existing tests pass, but
+a painted body was likewise not looked at.
 
 ## Live-hunt presentation (2026-08-02)
 
@@ -326,6 +797,12 @@ are arguably room dimensions rather than body dimensions — a picture really do
 1.15 m in a real shop — but the doorway preview camera in particular now sits at nearly
 five player heights, which is not a view anybody in the match can have.
 
+**Closed** (see "The Mimic body and the Forge view" above). `DOORWAY_POSITION` is deleted:
+the doorway preview is derived from the workspace at `WORLD_SCALE.eyeHeight`.
+`WALL_MOUNT_HEIGHT_M` is kept at 1.15 m deliberately. It is a room dimension, not a body
+one — a Mimic disguising itself as something hung on a wall belongs at the height the
+shop's own pictures hang, whatever size the Mimic is.
+
 ### Stubbed, unverified or broken
 
 - **WebGPU renders the round at under one frame per second** while WebGL 2 renders it at
@@ -343,10 +820,11 @@ five player heights, which is not a view anybody in the match can have.
 - A hider's creep is capped by the authority but not by the client: dragging the pelvis
   faster than `hiderCreepSpeed` is refused as `moved_too_fast` and the local body and the
   room's copy disagree until the next accepted pose.
-- The Forge tool HUD and `HiderHud` overlap during the hunt, and the Forge's own header
-  still reads "FORGE · POSE" there. Presentation only.
-- Bots ready up and lock a disguise and do nothing else. A bot Inspector never accuses, so
-  a round where the bots inspect always runs the clock out.
+- ~~The Forge tool HUD and `HiderHud` overlap during the hunt, and the Forge's own header
+  still reads "FORGE · POSE" there.~~ Fixed by the region layout above.
+- ~~Bots ready up and lock a disguise and do nothing else.~~ CLOSED 2026-08-02: see
+  "Bot Inspectors hunt, and bot hiders hide" at the top of this file. A bot Inspector
+  now patrols and accuses, and bot hiders take real hiding places.
 - The lobby has no room code, no settings controls and no way to change the bot count.
 
 ## Done
