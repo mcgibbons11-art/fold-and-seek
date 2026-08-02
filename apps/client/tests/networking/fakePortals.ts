@@ -40,22 +40,36 @@ export interface FakePeerOptions {
    * out to model a guest, whose identity is only their connection.
    */
   readonly playerId?: string;
+  /**
+   * How many of this peer's first join() calls time out after half-registering
+   * the session, which is what the Portals editor was measured doing on a cold
+   * start (2026-08-02). A half-registered session refuses every further join
+   * until leave() clears it, so this models the failure the adapter's retry has
+   * to survive rather than a join that simply says no.
+   */
+  readonly failJoins?: number;
 }
 
 export class FakePortalsRelay {
   readonly violations: string[] = [];
   readonly sendCount = new Map<string, number>();
+  /** join() calls per connection, failed ones included, for the retry tests. */
+  readonly joinAttempts = new Map<string, number>();
 
   private readonly peers = new Map<string, FakePortalsNet>();
   private readonly sharedState = new Map<string, unknown>();
 
   createPeer(options: FakePeerOptions): PortalsSdk {
-    const net = new FakePortalsNet(this, {
-      id: options.id,
-      playerId: options.playerId ?? null,
-      displayName: options.displayName ?? null,
-      avatarUrl: null,
-    });
+    const net = new FakePortalsNet(
+      this,
+      {
+        id: options.id,
+        playerId: options.playerId ?? null,
+        displayName: options.displayName ?? null,
+        avatarUrl: null,
+      },
+      options.failJoins ?? 0,
+    );
     // Only ready() and net are exercised; the rest of the SDK surface is not
     // part of the transport contract this fake stands in for.
     return { ready: async () => ({ player: net.selfPlayer, context: "room" }), net } as PortalsSdk;
@@ -89,12 +103,25 @@ export class FakePortalsRelay {
     for (const key of keys) this.sharedState.delete(key);
   }
 
+  /**
+   * Hands the player list out in reverse. The SDK promises no ordering at all,
+   * so a client that reads arrival order out of the list is guessing; turning
+   * this on is how a test reaches the seating rule that does not depend on it.
+   */
+  reversePlayerList = false;
+
   playerList(): PortalsNetPlayer[] {
-    return [...this.peers.values()].map((peer) => peer.selfPlayer);
+    const players = [...this.peers.values()].map((peer) => peer.selfPlayer);
+    return this.reversePlayerList ? players.reverse() : players;
   }
 
   stateSnapshot(): Record<string, unknown> {
     return Object.fromEntries(this.sharedState);
+  }
+
+  /** @internal */
+  countJoinAttempt(id: string): void {
+    this.joinAttempts.set(id, (this.joinAttempts.get(id) ?? 0) + 1);
   }
 
   /** @internal */
@@ -166,19 +193,33 @@ class FakePortalsNet implements PortalsNet {
   private readonly relay: FakePortalsRelay;
   private readonly listeners = new Map<keyof PortalsNetEvents, Set<Listener>>();
   private joined = false;
+  private pendingJoinFailures: number;
+  /** A session the SDK registered for a join it then reported as failed. */
+  private halfJoined = false;
 
-  constructor(relay: FakePortalsRelay, self: PortalsNetPlayer) {
+  constructor(relay: FakePortalsRelay, self: PortalsNetPlayer, failJoins: number) {
     this.relay = relay;
     this.selfPlayer = self;
+    this.pendingJoinFailures = failJoins;
   }
 
   async join(_options?: PortalsNetJoinOptions): Promise<PortalsNetSession> {
+    this.relay.countJoinAttempt(this.selfPlayer.id);
+    if (this.pendingJoinFailures > 0) {
+      this.pendingJoinFailures -= 1;
+      this.halfJoined = true;
+      throw new Error("join timed out");
+    }
+    if (this.halfJoined) {
+      throw new Error("a multiplayer session is already active — leave() first");
+    }
     this.joined = true;
     const players = this.relay.register(this);
     return { self: this.selfPlayer, players, state: this.relay.stateSnapshot() };
   }
 
   async leave(): Promise<void> {
+    this.halfJoined = false;
     this.relay.unregister(this);
   }
 

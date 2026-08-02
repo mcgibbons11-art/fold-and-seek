@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandRejection, ConnectionState } from "../../src/networking/NetworkAdapter";
 import {
   coalesceDisguiseUpdates,
+  derivedSeatId,
   FLUSH_INTERVAL_MS,
   PortalsNetAdapter,
 } from "../../src/networking/PortalsNetAdapter";
@@ -78,6 +79,8 @@ interface Peer {
 interface PeerOptions {
   /** Game-scoped id of a signed-in player. Omit to model a guest. */
   readonly playerId?: string;
+  /** Joins that time out after half-registering, before the one that works. */
+  readonly failJoins?: number;
 }
 
 class Session {
@@ -95,15 +98,19 @@ class Session {
   }
 
   async addPeer(id: string, displayName: string, options: PeerOptions = {}): Promise<Peer> {
-    const sdk = this.relay.createPeer(
-      options.playerId === undefined
-        ? { id, displayName }
-        : { id, displayName, playerId: options.playerId },
-    );
+    const sdk = this.relay.createPeer({
+      id,
+      displayName,
+      ...(options.playerId === undefined ? {} : { playerId: options.playerId }),
+      ...(options.failJoins === undefined ? {} : { failJoins: options.failJoins }),
+    });
     const adapter = new PortalsNetAdapter(sdk, {
       settings: this.settings,
       seed: 5,
       now: () => this.clock,
+      // The retry runs immediately and without a timer, so a fake-timer test
+      // never has to advance one to finish joining.
+      joinRetryDelayMs: 0,
     });
     const events: SimEvent[] = [];
     const privateEvents: PrivateSimEvent[] = [];
@@ -126,6 +133,7 @@ class Session {
       settings: this.settings,
       seed: 5,
       now: () => this.clock,
+      joinRetryDelayMs: 0,
     });
     await adapter.connect();
     try {
@@ -719,24 +727,191 @@ describe("PortalsNetAdapter rejoin identity", () => {
     session.dispose();
   });
 
-  it("refuses a second tab of an already seated account without disturbing the first", async () => {
+  it("seats a second live connection of one account as a second player", async () => {
     vi.useFakeTimers();
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const session = new Session(RECONNECT_SETTINGS);
     await session.addPeer("a", "Ada", { playerId: "account-a" });
     const first = await session.addPeer("b", "Bex", { playerId: "account-b" });
     session.advance(2);
 
-    const secondTab = await session.addPeer("b-tab2", "Bex", { playerId: "account-b" });
+    // Both panes of the Portals editor's two-player preview carry one account.
+    const secondPane = await session.addPeer("b-pane2", "Bex", { playerId: "account-b" });
     session.advance(4);
 
-    expect(secondTab.adapter.getConnection().status).toBe("error");
-    expect(secondTab.adapter.getConnection().detail).toBe("duplicate_session");
-    // The tab already playing is untouched, and the room still holds two seats.
+    expect(secondPane.adapter.getConnection().status).toBe("connected");
     expect(first.adapter.getConnection().status).toBe("connected");
-    expect(session.peer("a").adapter.getSync().publicState?.players).toHaveLength(2);
 
-    warn.mockRestore();
+    // Two seats, and the first connection kept the account's own id, which is
+    // what a reconnect goes looking for.
+    expect(first.adapter.getSelfId()).toBe("account-b");
+    const derived = secondPane.adapter.getSelfId();
+    expect(derived).toBe(derivedSeatId("account-b", "b-pane2"));
+    expect(derived).not.toBe("account-b");
+
+    // Three players in the room, and every client's roster shows all three.
+    expect(session.peer("a").adapter.getSync().publicState?.players).toHaveLength(3);
+    for (const peer of session.peers) {
+      const roster = peer.adapter.getRoster();
+      expect(roster.map((entry) => entry.id).sort()).toEqual(
+        ["account-a", "account-b", derived].sort(),
+      );
+      // Exactly one seat is this client's own, and it is a real seat.
+      expect(roster.filter((entry) => entry.isSelf)).toHaveLength(1);
+    }
+
+    // The duplicate is told apart by name rather than by two rows reading "Bex".
+    const names = session.peer("a").adapter.getRoster().map((entry) => entry.displayName);
+    expect(names).toContain("Bex");
+    expect(names).toContain("Bex (2)");
+
+    // A distinct player to the simulation: its own private slice under its own
+    // seat, which is what makes it deal-able a role of its own.
+    expect(secondPane.adapter.getSync().privateState?.playerId).toBe(derived);
+    expect(first.adapter.getSync().privateState?.playerId).toBe("account-b");
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("routes a second connection's own commands and refusals to it alone", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("a", "Ada", { playerId: "account-a" });
+    const first = await session.addPeer("b", "Bex", { playerId: "account-b" });
+    const secondPane = await session.addPeer("b-pane2", "Bex", { playerId: "account-b" });
+    session.advance(4);
+
+    // A derived seat has to be addressable in both directions, which is the
+    // thing that silently breaks if two clients disagree about what it is.
+    secondPane.adapter.sendCommand({ type: "player_ready", ready: true });
+    session.advance(3);
+
+    const readied = session
+      .peer("a")
+      .adapter.getSync()
+      .publicState?.players.filter((player) => player.ready);
+    expect(readied).toHaveLength(1);
+    expect(readied?.[0]?.seatId).toBe(secondPane.adapter.getSelfId());
+
+    // Only the host may start a match, so this refusal is addressed back to the
+    // derived seat and must reach that connection and no other.
+    secondPane.adapter.sendCommand({ type: "start_match" });
+    session.advance(3);
+    expect(secondPane.rejections).toEqual([{ type: "start_match", reason: "not_host" }]);
+    expect(first.rejections).toEqual([]);
+    expect(session.peer("a").rejections).toEqual([]);
+    session.dispose();
+  });
+
+  it("gives a late joiner the same seats the room already agreed on", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("a", "Ada", { playerId: "account-a" });
+    const first = await session.addPeer("b", "Bex", { playerId: "account-b" });
+    const secondPane = await session.addPeer("b-pane2", "Bex", { playerId: "account-b" });
+    // Long enough for the host to publish a roster naming both seats.
+    session.advance(8);
+
+    // Arrival order is taken away, so the only thing left that can say which of
+    // the two connections holds the account id is the published roster. Without
+    // it the late joiner reads the pair the other way round and addresses both
+    // of them wrongly for the rest of the round.
+    session.relay.reversePlayerList = true;
+    const latecomer = await session.addPeer("d", "Dov", { playerId: "account-d" });
+    session.advance(4);
+
+    const derived = derivedSeatId("account-b", "b-pane2");
+    expect(latecomer.adapter.getRoster().map((entry) => entry.id).sort()).toEqual(
+      ["account-a", "account-b", "account-d", derived].sort(),
+    );
+    // The pair themselves are unmoved, because a seat is decided once.
+    expect(first.adapter.getSelfId()).toBe("account-b");
+    expect(secondPane.adapter.getSelfId()).toBe(derived);
+
+    // The numeral has to agree too, or the same player is two different people
+    // depending on whose screen the lobby is read from.
+    for (const peer of [session.peer("a"), latecomer]) {
+      const names = peer.adapter.getRoster().map((entry) => entry.displayName);
+      expect(names).toContain("Bex");
+      expect(names).toContain("Bex (2)");
+    }
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("keeps a duplicate's seat when the account's first connection drops and returns", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("a", "Ada", { playerId: "account-a" });
+    const first = await session.addPeer("b", "Bex", { playerId: "account-b" });
+    const secondPane = await session.addPeer("b-pane2", "Bex", { playerId: "account-b" });
+    session.advance(4);
+
+    const derived = derivedSeatId("account-b", "b-pane2");
+    expect(secondPane.adapter.getSelfId()).toBe(derived);
+    expect(first.adapter.getSelfId()).toBe("account-b");
+
+    // The connection holding the account id leaves, freeing that id. The
+    // duplicate must not be promoted into it: the simulation knows that player
+    // by the derived seat, and moving them would hand them the other one's slot.
+    session.relay.dropPeer("b");
+    session.advance(3);
+    expect(secondPane.adapter.getSelfId()).toBe(derived);
+    expect(session.peer("a").adapter.getRoster().map((entry) => entry.id)).toContain(derived);
+
+    // The returning connection reclaims the account id, inside the grace, and
+    // the room is back to three seats rather than four.
+    const returning = await session.addPeer("b-again", "Bex", { playerId: "account-b" });
+    session.advance(4);
+
+    expect(returning.adapter.getSelfId()).toBe("account-b");
+    expect(returning.adapter.getSync().privateState?.playerId).toBe("account-b");
+    expect(secondPane.adapter.getSelfId()).toBe(derived);
+    expect(session.peer("a").adapter.getSync().publicState?.players).toHaveLength(3);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("carries a derived seat's round through a change of host", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    // "c" joins first and so holds authority; dropping it re-elects from the
+    // survivors, one of which is a second connection of another account.
+    await session.addPeer("c", "Cora", { playerId: "account-c" });
+    await session.addPeer("a", "Ada", { playerId: "account-a" });
+    const secondPane = await session.addPeer("a-pane2", "Ada", { playerId: "account-a" });
+    session.advance(2);
+    session.startMatch("c", MatchPhase.Forge);
+    session.lockDisguises();
+    session.runTo(MatchPhase.Inspection, "c", 150);
+    session.advance(6);
+
+    const derived = derivedSeatId("account-a", "a-pane2");
+    const roleBefore = secondPane.adapter.getSync().privateState?.role;
+    const disguiseBefore = secondPane.adapter.getSync().privateState?.ownDisguise?.publicObjectId;
+    const playersBefore = session.peer("a").adapter.getSync().publicState?.players.length;
+    expect(playersBefore).toBe(3);
+    expect(roleBefore).toBeDefined();
+
+    session.relay.dropPeer("c");
+    session.advance(8);
+
+    const newHost = session.peer("a");
+    expect(newHost.adapter.isAuthority()).toBe(true);
+    expect(newHost.adapter.getConnection().detail).toBe("authority_resumed");
+
+    // The derived seat is a player like any other to the restored simulation:
+    // it survives the reconciliation that drops seats no longer in the room,
+    // and keeps the role and the disguise it was holding.
+    const after = newHost.adapter.getSync().publicState;
+    expect(after?.players.map((player) => player.seatId).sort()).toEqual(
+      ["account-a", derived].sort(),
+    );
+    expect(secondPane.adapter.getSelfId()).toBe(derived);
+    expect(secondPane.adapter.getSync().privateState?.role).toBe(roleBefore);
+    expect(secondPane.adapter.getSync().privateState?.ownDisguise?.publicObjectId).toBe(
+      disguiseBefore,
+    );
+    expect(session.relay.violations).toEqual([]);
     session.dispose();
   });
 
@@ -750,6 +925,58 @@ describe("PortalsNetAdapter rejoin identity", () => {
     expect(session.peer("guest-1").adapter.getSelfId()).toBe("guest-1");
     expect(session.peer("guest-1").adapter.getSync().publicState?.players).toHaveLength(2);
     expect(session.peer("guest-2").adapter.getConnection().status).toBe("connected");
+    session.dispose();
+  });
+});
+
+describe("PortalsNetAdapter join retry", () => {
+  it("absorbs a first join that times out after half-registering", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("a", "Ada", { playerId: "account-a" });
+
+    // Measured in the editor: the first join reports a timeout while leaving a
+    // session registered behind it, so a second join without a leave() in
+    // between is refused outright. The player should see none of that.
+    const slow = await session.addPeer("b", "Bex", { playerId: "account-b", failJoins: 1 });
+    session.advance(4);
+
+    expect(session.relay.joinAttempts.get("b")).toBe(2);
+    expect(slow.adapter.getConnection().status).toBe("connected");
+    expect(slow.adapter.getSelfId()).toBe("account-b");
+    // One seamless join: the player was never shown a failure to act on.
+    expect(slow.statuses.map((state) => state.status)).not.toContain("error");
+    expect(session.peer("a").adapter.getSync().publicState?.players).toHaveLength(2);
+    expect(session.relay.violations).toEqual([]);
+
+    warn.mockRestore();
+    session.dispose();
+  });
+
+  it("reports a join that fails twice rather than knocking again", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const session = new Session(RECONNECT_SETTINGS);
+    const adapter = new PortalsNetAdapter(
+      session.relay.createPeer({ id: "b", displayName: "Bex", failJoins: 2 }),
+      { seed: 5, now: () => session.now(), joinRetryDelayMs: 0 },
+    );
+    const statuses: ConnectionState[] = [];
+    adapter.onStatus((state) => statuses.push(state));
+    await adapter.connect();
+
+    await expect(adapter.join(CHANNEL, "Bex")).rejects.toThrow();
+    // Exactly one retry: a relay refusing twice is refusing for a reason
+    // retrying cannot fix, and the player is told instead.
+    expect(session.relay.joinAttempts.get("b")).toBe(2);
+    expect(adapter.getConnection().status).toBe("error");
+    expect(adapter.getConnection().detail).toBe("join_failed");
+    expect(adapter.getConnection().canRejoin).toBe(true);
+    expect(statuses.at(-1)?.status).toBe("error");
+
+    adapter.dispose();
+    warn.mockRestore();
     session.dispose();
   });
 });

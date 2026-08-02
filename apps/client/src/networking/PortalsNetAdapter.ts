@@ -10,7 +10,7 @@ import {
   type SimOutput,
   type SpatialValidator,
 } from "@foldseek/game-sim";
-import { MatchPhase, MatchSnapshotSchema, type MatchSettings } from "@foldseek/shared";
+import { LIMITS, MatchPhase, MatchSnapshotSchema, type MatchSettings } from "@foldseek/shared";
 import {
   EMPTY_SYNC,
   idleConnection,
@@ -82,16 +82,36 @@ import type {
  * simulation is keyed on the stable one, called the seat id here, so a player
  * who drops and returns inside the reconnect grace lands back in their own slot
  * with their role and disguise intact (§27.9). A guest has no stable id, so
- * their connection id is their seat and they behave as before. One consequence
- * is deliberate: two tabs signed into the same account are one seat, and the
- * second is refused rather than seated twice (§31.3, no duplicate session
- * control).
+ * their connection id is their seat and they behave as before.
+ *
+ * A second LIVE connection of one account is a second player rather than a
+ * refusal. Both panes of the Portals editor's two-player preview carry the same
+ * account, so refusing the duplicate made the only tool that can test
+ * multiplayer show a one-seat lobby in each pane; on a real account it means a
+ * phone and a laptop can both play, which is the right answer for a party game.
+ * The newcomer takes a seat derived from its connection id and is a distinct
+ * player to the simulation, with its own role, disguise and anonymity. What is
+ * unchanged is the reconnect: when the account's existing connection is gone,
+ * the returning one reclaims the account's own seat exactly as before, which is
+ * what `indexSeats` decides.
  */
 
 export const PORTALS_TICK_HZ = 10;
 /** Outbound coalescing window, matching the 100-150 ms sampling guidance. */
 export const FLUSH_INTERVAL_MS = 100;
 const SNAPSHOT_INTERVAL_MS = Math.round(1_000 / SNAPSHOT_WRITES_PER_SECOND);
+/**
+ * Pause before the one automatic retry of a failed relay join. Long enough for
+ * the leave() that precedes it to have taken effect, short enough that a player
+ * reads the whole sequence as a join that took a moment.
+ */
+export const JOIN_RETRY_DELAY_MS = 400;
+/**
+ * Separates an account id from the connection that made a second seat of it.
+ * Never produced by Portals in either half, so a derived seat cannot be
+ * mistaken for an account id some other client is using whole.
+ */
+export const DERIVED_SEAT_SEPARATOR = "~";
 
 export interface PortalsAdapterOptions {
   readonly settings?: MatchSettingsPatch;
@@ -124,6 +144,11 @@ export interface PortalsAdapterOptions {
    * timeline in a published snapshot still means something to the next host.
    */
   readonly now?: () => number;
+  /**
+   * How long to wait before the single automatic retry of a failed relay join.
+   * Zero retries immediately and without a timer, which is what the tests use.
+   */
+  readonly joinRetryDelayMs?: number;
 }
 
 /** An Inspector's eye in world metres, as it travels over the relay. */
@@ -150,6 +175,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private readonly options: PortalsAdapterOptions;
   private readonly tickHz: number;
   private readonly clock: () => number;
+  private readonly joinRetryDelayMs: number;
 
   private readonly eventSignal = new Signal<SimEvent>();
   private readonly privateSignal = new Signal<PrivateSimEvent>();
@@ -166,8 +192,10 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private authoritySeatId: string | null = null;
   private sim: MatchSimulation | null = null;
 
-  /** Live connection id to seat id, rebuilt from the relay's player list. */
+  /** Live connection id to seat id, decided once per connection by indexSeats. */
   private readonly connectionSeats = new Map<string, string>();
+  /** The name each live connection plays under, numbered when it is a second seat. */
+  private readonly connectionNames = new Map<string, string>();
   /** Host only: which connection currently holds each seated player's slot. */
   private readonly seatOwners = new Map<string, string>();
 
@@ -232,6 +260,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.options = options;
     this.tickHz = options.tickHz ?? PORTALS_TICK_HZ;
     this.clock = options.now ?? (() => Date.now());
+    this.joinRetryDelayMs = options.joinRetryDelayMs ?? JOIN_RETRY_DELAY_MS;
   }
 
   async connect(): Promise<void> {
@@ -245,25 +274,13 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
     let session: PortalsNetSession;
     try {
-      session = await this.net.join(room.length > 0 ? { channel: room } : undefined);
+      session = await this.joinRelay(room);
     } catch (error) {
-      // Measured in the Portals editor (2026-08-02): the SDK's own join can
-      // time out while still registering the session internally, after which
-      // every retry is refused with "a multiplayer session is already active —
-      // leave() first". A failed join therefore always leaves before it
-      // reports, so the player's retry meets a clean slate; the leave itself
-      // is best-effort because there may genuinely be no session to leave.
-      try {
-        await this.net.leave();
-      } catch {
-        // Nothing was joined; there is nothing to clean up.
-      }
       this.setStatus("error", "join_failed");
       throw error;
     }
 
     this.selfConnectionId = session.self.id;
-    this.selfSeatId = seatIdOf(session.self);
     this.players = mergeSelf(session.players, session.self);
     if (session.self.displayName === null) {
       // Portals owns display names; the requested one is only a fallback.
@@ -283,7 +300,6 @@ export class PortalsNetAdapter implements NetworkAdapter {
       // The host would refuse the seat anyway; failing here means the player
       // gets a reason instead of sitting in a room that never seats them.
       this.selfConnectionId = null;
-      this.selfSeatId = null;
       this.players = [];
       this.setStatus("error", "room_full");
       await this.net.leave();
@@ -291,8 +307,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
 
     this.attachListeners();
-    this.indexSeats();
+    // Held before the seats are worked out: the published roster is what tells
+    // this client which of two same-account connections already holds the
+    // account's own seat.
     this.lastSnapshot = snapshot;
+    this.indexSeats();
+    this.selfSeatId = this.connectionSeats.get(session.self.id) ?? baseSeatIdOf(session.self);
     if (this.lastSnapshot) {
       this.adoptSnapshotSeq(this.lastSnapshot);
       this.setSync(this.withBodies(this.lastSnapshot), null);
@@ -306,12 +326,54 @@ export class PortalsNetAdapter implements NetworkAdapter {
     return this.connection;
   }
 
+  /**
+   * The SDK's own join, with one automatic retry.
+   *
+   * Measured in the Portals editor (2026-08-02): the first join of a session
+   * can time out while still registering internally, after which every further
+   * attempt is refused with "a multiplayer session is already active — leave()
+   * first". Leaving before reporting the failure clears that, and the editor's
+   * slow first arming is then answered by trying once more rather than by the
+   * player seeing a join that failed for no reason they can act on.
+   *
+   * One retry, not a loop: a relay that refuses twice is refusing for a reason
+   * retrying cannot fix, and a game that keeps knocking would hide it.
+   */
+  private async joinRelay(room: string): Promise<PortalsNetSession> {
+    const options = room.length > 0 ? { channel: room } : undefined;
+    try {
+      return await this.net.join(options);
+    } catch (first) {
+      console.warn("[portals] relay join failed, clearing the session and retrying once", first);
+      await this.leaveQuietly();
+      if (this.joinRetryDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.joinRetryDelayMs));
+      }
+      try {
+        return await this.net.join(options);
+      } catch (second) {
+        await this.leaveQuietly();
+        throw second;
+      }
+    }
+  }
+
+  /** Best effort: after a failed join there may genuinely be nothing to leave. */
+  private async leaveQuietly(): Promise<void> {
+    try {
+      await this.net.leave();
+    } catch {
+      // Nothing was joined, so nothing needs clearing.
+    }
+  }
+
   async disconnect(): Promise<void> {
     this.stopTimers();
     this.detachListeners();
     this.releaseAuthority();
     this.players = [];
     this.connectionSeats.clear();
+    this.connectionNames.clear();
     this.selfConnectionId = null;
     this.selfSeatId = null;
     this.authoritySeatId = null;
@@ -410,15 +472,16 @@ export class PortalsNetAdapter implements NetworkAdapter {
   }
 
   getRoster(): readonly RosterEntry[] {
-    // Two tabs of one signed-in player share a seat, so the roster is keyed by
-    // seat and shows them once.
+    // Keyed by seat rather than by connection, which is the identity every
+    // other part of the game speaks in. Two connections of one account hold two
+    // seats and appear twice, under names a numeral tells apart.
     const bySeat = new Map<string, RosterEntry>();
     for (const player of this.players) {
-      const seat = seatIdOf(player);
-      if (bySeat.has(seat)) continue;
+      const seat = this.connectionSeats.get(player.id);
+      if (seat === undefined || bySeat.has(seat)) continue;
       bySeat.set(seat, {
         id: seat,
-        displayName: nameOf(player),
+        displayName: this.connectionNames.get(player.id) ?? nameOf(player),
         isSelf: seat === this.selfSeatId,
         isAuthority: seat === this.authoritySeatId,
       });
@@ -626,17 +689,27 @@ export class PortalsNetAdapter implements NetworkAdapter {
   };
 
   /**
-   * Decides what an arriving connection is: a returning player inside their
-   * reconnect grace, a second tab of someone already playing, or a new seat.
+   * Seats an arriving connection: a returning player inside their reconnect
+   * grace resumes their slot, and anyone else takes a new one.
+   *
+   * Which of the two it is was already settled by `indexSeats`, which gives a
+   * returning connection its account's own seat and a second live connection of
+   * that account a seat of its own. All this has to do is ask the simulation
+   * whether the seat it was handed is still holding a player.
    */
   private seatArrival(player: PortalsNetPlayer): void {
     const sim = this.sim;
     if (!sim) return;
-    const seat = seatIdOf(player);
+    const seat = this.connectionSeats.get(player.id);
+    if (seat === undefined) return;
 
     const holder = this.seatOwners.get(seat);
     if (holder !== undefined && holder !== player.id && this.connectionSeats.has(holder)) {
-      // Someone is already playing this seat from another live connection.
+      // Two live connections on one seat, which seat assignment is supposed to
+      // make impossible: a duplicate account takes a derived seat and no two
+      // connections share an id. Reaching this means the relay contradicted
+      // itself, so the newcomer is turned away rather than being let into
+      // somebody else's role and disguise.
       this.refuseConnection(player.id, "duplicate_session", true);
       return;
     }
@@ -653,7 +726,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
 
     const seated = this.applySim("addPlayer", (live) =>
-      live.addPlayer(seat, { displayName: nameOf(player) }),
+      live.addPlayer(seat, { displayName: this.connectionNames.get(player.id) ?? nameOf(player) }),
     );
     if (seated && !seated.accepted) {
       this.seatOwners.delete(seat);
@@ -667,7 +740,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     player: PortalsNetPlayer,
     players: PortalsNetPlayer[],
   ): void => {
-    const seat = this.connectionSeats.get(player.id) ?? seatIdOf(player);
+    const seat = this.connectionSeats.get(player.id) ?? baseSeatIdOf(player);
     this.players = players;
     this.indexSeats();
     this.refusedConnections.delete(player.id);
@@ -703,12 +776,76 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.emitRoster();
   }
 
-  /** Rebuilds the connection to seat index from the relay's current roster. */
+  /**
+   * Gives every live connection a seat, keeping the seats already handed out.
+   *
+   * A seat is decided once per connection and then never moves, because the
+   * simulation keys a player's role, disguise and private queue on it.
+   * Recomputing the whole map from the current roster would hand a second
+   * connection its neighbour's slot the moment that neighbour left, which is a
+   * player silently inheriting someone else's round.
+   *
+   * A signed-in player's first live connection takes their account id, and that
+   * is what makes a reconnect land back in their own slot: once the old
+   * connection is gone the account id is free again, so the returning one
+   * claims it. A second connection made while the first is still live finds the
+   * account id taken and gets `derivedSeatId` instead, so the room seats two
+   * players rather than refusing one.
+   *
+   * Two rules settle which of a pair holds the account id on a client that was
+   * not present when they arrived, and the first is exact. A derived seat names
+   * the connection that owns it, so finding it among the seat ids in the
+   * published roster identifies its holder outright and leaves the account id
+   * for the other one. Failing that — no publication yet, or a duplicate that
+   * arrived since the last one — the relay's player list is taken in order,
+   * which is arrival order. The window where only the weaker rule applies is
+   * one snapshot interval wide and closes as soon as the host publishes.
+   */
   private indexSeats(): void {
-    this.connectionSeats.clear();
-    for (const player of this.players) {
-      this.connectionSeats.set(player.id, seatIdOf(player));
+    const live = new Set(this.players.map((player) => player.id));
+    for (const connectionId of [...this.connectionSeats.keys()]) {
+      if (live.has(connectionId)) continue;
+      this.connectionSeats.delete(connectionId);
+      this.connectionNames.delete(connectionId);
     }
+
+    const publishedSeats = new Set(
+      (this.lastSnapshot?.publicState.players ?? []).map((entry) => entry.seatId),
+    );
+    const undecided: PortalsNetPlayer[] = [];
+    for (const player of this.players) {
+      if (this.connectionSeats.has(player.id)) continue;
+      if (publishedSeats.has(derivedSeatId(baseSeatIdOf(player), player.id))) {
+        this.assignSeat(player, true);
+      } else {
+        undecided.push(player);
+      }
+    }
+    for (const player of undecided) this.assignSeat(player, false);
+  }
+
+  /**
+   * Records one connection's seat and the name it plays under. A second seat of
+   * an account is numbered, because two rows reading "Bex" in the lobby is the
+   * kind of ambiguity a player cannot resolve from the screen.
+   */
+  private assignSeat(player: PortalsNetPlayer, derived: boolean): void {
+    const base = baseSeatIdOf(player);
+    const takeDerived = derived || [...this.connectionSeats.values()].includes(base);
+    if (!takeDerived) {
+      this.connectionSeats.set(player.id, base);
+      this.connectionNames.set(player.id, nameOf(player));
+      return;
+    }
+    // Counted over the account's connection ids rather than over the seats
+    // handed out so far, so the numeral does not depend on the order this
+    // client happened to work them out in. The floor of two is the point of a
+    // numeral at all: whoever holds the account id is the first, unnumbered.
+    const earlier = this.players.filter(
+      (other) => baseSeatIdOf(other) === base && other.id < player.id,
+    ).length;
+    this.connectionSeats.set(player.id, derivedSeatId(base, player.id));
+    this.connectionNames.set(player.id, numberedName(nameOf(player), Math.max(2, earlier + 1)));
   }
 
   private readonly handleState = (key: string): void => {
@@ -772,7 +909,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
   // ------------------------------------------------------------------ authority
 
   private resolveAuthority(): void {
-    const seats = [...new Set(this.players.map(seatIdOf))];
+    const seats = [...new Set(this.connectionSeats.values())];
     const held = this.authoritySeatId !== null && seats.includes(this.authoritySeatId);
     const published = this.lastSnapshot?.authorityId;
     const next = held
@@ -827,17 +964,18 @@ export class PortalsNetAdapter implements NetworkAdapter {
       this.options.objectRegistry,
     );
     this.seatOwners.clear();
-    // One entry per seat, in a fixed order, so every client that could have
-    // taken over would have built the same roster.
-    const arrivals = new Map<string, PortalsNetPlayer>();
-    for (const player of [...this.players].sort((a, b) => a.id.localeCompare(b.id))) {
-      const seat = seatIdOf(player);
-      if (!arrivals.has(seat)) arrivals.set(seat, player);
-    }
-    for (const [seat, player] of [...arrivals].sort(([left], [right]) => left.localeCompare(right))) {
+    // Seated in a fixed order, so every client that could have taken over would
+    // have built the same roster. Ordering by seat rather than by connection is
+    // what makes that true of a room holding two connections of one account:
+    // the seats are what the simulation records, and their order decides join
+    // indexes and therefore role ranking.
+    const arrivals = this.seatedConnections().sort((left, right) =>
+      left.seat.localeCompare(right.seat),
+    );
+    for (const { seat, player } of arrivals) {
       const seated = this.applySim("addPlayer", (sim) =>
         sim.addPlayer(seat, {
-          displayName: nameOf(player),
+          displayName: this.connectionNames.get(player.id) ?? nameOf(player),
           isHost: seat === this.selfSeatId,
         }),
       );
@@ -871,7 +1009,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       return false;
     }
 
-    const seats = [...new Set(this.players.map(seatIdOf))];
+    const seats = [...new Set(this.connectionSeats.values())];
     let restored: MatchSimulation;
     try {
       restored = MatchSimulation.restore(parsed.data, {
@@ -892,8 +1030,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
     this.sim = restored;
     this.seatOwners.clear();
-    for (const player of this.players) {
-      const seat = seatIdOf(player);
+    for (const { seat, player } of this.seatedConnections()) {
       if (!this.seatOwners.has(seat)) this.seatOwners.set(seat, player.id);
       this.pendingSync.add(seat);
     }
@@ -921,6 +1058,16 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
     this.setStatus(this.connection.status, "authority_resumed");
     return true;
+  }
+
+  /** Every live connection paired with the seat it was given, in roster order. */
+  private seatedConnections(): { seat: string; player: PortalsNetPlayer }[] {
+    const seated: { seat: string; player: PortalsNetPlayer }[] = [];
+    for (const player of this.players) {
+      const seat = this.connectionSeats.get(player.id);
+      if (seat !== undefined) seated.push({ seat, player });
+    }
+    return seated;
   }
 
   private releaseAuthority(): void {
@@ -1515,12 +1662,6 @@ export class PortalsNetAdapter implements NetworkAdapter {
   }
 }
 
-/**
- * The identity the simulation keys on. Signed-in players get an id that is
- * stable across reconnections; a guest has none, so their connection stands in
- * and they behave exactly as they did before, including two guest tabs being
- * two players.
- */
 /** Envelopes only the elected host may send, and which a stale view would drop. */
 const AUTHORITY_ONLY: ReadonlySet<NetEnvelope["t"]> = new Set(["ev", "pev", "reforge"]);
 
@@ -1594,8 +1735,42 @@ function eyesAgree(left: EyePosition | null, right: EyePosition | null): boolean
   );
 }
 
-function seatIdOf(player: PortalsNetPlayer): string {
+/**
+ * The seat a connection takes when nobody else is holding its account's.
+ * Signed-in players get an id that is stable across reconnections, which is
+ * what a rejoin lands on; a guest has none, so their connection stands in and
+ * two guest tabs have always been two players.
+ */
+export function baseSeatIdOf(player: PortalsNetPlayer): string {
   return player.playerId ?? player.id;
+}
+
+/**
+ * The seat a second live connection of one account takes.
+ *
+ * The connection id is kept whole and the account id is trimmed to fit, because
+ * the connection id is what makes the seat unique: two accounts whose ids share
+ * a prefix would collide if the trimming went the other way, while no two live
+ * connections ever share an id. The result must fit `LIMITS.idLength`, which is
+ * the bound every schema carrying a seat applies, and the protocol already
+ * holds connection ids to the same length.
+ */
+export function derivedSeatId(baseSeatId: string, connectionId: string): string {
+  const suffix = `${DERIVED_SEAT_SEPARATOR}${connectionId}`;
+  const room = Math.max(0, LIMITS.idLength - suffix.length);
+  return `${baseSeatId.slice(0, room)}${suffix}`.slice(0, LIMITS.idLength);
+}
+
+/**
+ * Marks the second and later seats of one account, within the name length the
+ * public state allows.
+ */
+function numberedName(name: string, ordinal: number): string {
+  const mark = ` (${ordinal})`;
+  return `${name.slice(0, Math.max(1, LIMITS.displayNameLength - mark.length))}${mark}`.slice(
+    0,
+    LIMITS.displayNameLength,
+  );
 }
 
 function refusalDetail(reason: string): ConnectionDetail {

@@ -1,5 +1,104 @@
 # STATUS
 
+## Two connections of one account are two players (2026-08-02)
+
+**The gap this closes**, found by running the real Portals editor's two-player
+preview. Both panes joined the same relay session and the whole stack worked
+live — join, relay, host election, refusal feedback — and then the host turned
+the second pane away with `refused connection f8Jsa_Ble: duplicate_session`.
+Both panes carry the same Portals account, `PortalsNetAdapter` seated by the
+stable `playerId`, and a second connection of a seated account was refused by
+design (§31.3). The result was a 1-seat lobby in each pane: **the only tool that
+can test this game's multiplayer could not produce a second player.** The same
+rule also refused a real player's phone while their laptop was in the room.
+
+**A second live connection now takes a seat of its own.** The account id is
+still a seat, and it is still the first connection's; a second connection made
+while the first is alive gets `derivedSeatId`, which is the account id with its
+own connection id appended. To the simulation that is simply another player,
+with its own role, disguise, private queue and anonymity, which is what makes a
+one-account preview a real two-player round. The reconnect is untouched: a seat
+is only *taken* by a live connection, so once the old one is gone the account id
+is free and the returning connection claims it, lands back in its role and
+disguise inside the grace, and is seated fresh after it (§27.9).
+
+**The seat is decided once per connection and then never moves.** This is the
+load-bearing part rather than a tidiness preference. `indexSeats` used to rebuild
+the whole map from the current roster every time it ran, which under the new
+policy would hand the duplicate its neighbour's seat the instant that neighbour
+left — a player silently inheriting someone else's round, role and disguise
+included. It now prunes departed connections and assigns only new ones. A test
+drops the connection holding the account id and asserts the duplicate keeps its
+own seat while the returning connection reclaims the account id; **with the old
+rebuild in place that test fails on exactly that promotion**, which is how it was
+checked rather than assumed.
+
+**Every client has to reach the same answer, or the room splits in silence.**
+Seats are how this protocol addresses: a client sends commands `to` the host's
+seat and the host answers `to` the sender's, and each end drops anything
+addressed to a seat it does not think is its own. Two clients disagreeing about
+which of a pair holds the account id means both are addressed wrongly and simply
+receive nothing, with no error anywhere. A client that was present when the pair
+arrived is right by construction. One that joins later is settled by the
+published roster, and **no wire change was needed to do it**: a derived seat
+names the connection that owns it, so seeing it among the `seatId`s the host
+already publishes in `publicState.players` identifies its holder outright and
+leaves the account id for the other. Where there is no publication yet, the
+relay's player list is taken in order. The test for this reverses the list the
+fake relay hands out, because the SDK promises no ordering and a rule that reads
+arrival order out of it is guessing; with the published-roster rule removed the
+late joiner reads the pair backwards and the test fails.
+
+**The residual window is one snapshot interval**, between a duplicate arriving
+and the next publication naming it, during which a third client joining relies
+on list order alone. It is stated rather than closed.
+
+**A derived seat is bounded and cannot collide.** `LIMITS.idLength` is 64 and
+every schema carrying a seat applies it, so the connection id is kept whole and
+the account id is trimmed to fit: the connection id is what makes the seat
+unique, and no two live connections share one, whereas trimming the other way
+would collide two accounts whose ids share a prefix. A second seat's display
+name gains a numeral, counted over the account's connection ids rather than over
+the seats handed out so far, so every client prints the same one.
+
+**The refusal is kept as a guard, not a policy.** `seatArrival` still refuses
+`duplicate_session` if two live connections ever land on one seat, which seat
+assignment is supposed to make impossible. Reaching it means the relay
+contradicted itself, and turning the newcomer away is better than letting it
+into somebody else's role.
+
+**One automatic retry on a failed join.** The first join of a session in the
+editor can time out while still registering internally, after which every
+further attempt is refused with "a multiplayer session is already active".
+Leaving before reporting the failure was already committed; the join now tries
+once more after that cleanup, so the editor's slow first arming never reaches
+the player. One retry and not a loop, because a relay refusing twice is refusing
+for a reason retrying cannot fix. The fake relay models the half-registered
+session rather than a plain rejection, so the test proves the cleanup is what
+makes the second attempt succeed.
+
+**Verified.** `pnpm -r typecheck` clean across five projects, `pnpm -r test`
+green (643 client over 61 files, 161 game-sim, 47 shared, 23 server), and
+`vite build` green at 242 modules, 1.70 MB / 481 KB gzip, to a scratch
+`--outDir`. Six new cases in `tests/networking/portalsNet.test.ts`: a second
+connection seated with a distinct seat and both in every client's roster, its
+commands and refusals routed to it alone, a late joiner agreeing with the room
+under a reversed player list, the drop-and-return seat bookkeeping above, a
+derived seat carrying its role and disguise through a change of host, and the
+two join-retry paths. **Three of them were confirmed to fail with the mechanism
+they cover removed** — the published-roster rule, seat stickiness, and the retry
+— so none of them passes by accident.
+
+Worth knowing for whoever runs the suite next: mid-way through this work the
+`shared` typecheck, two `paintWire` tests and the `client` typecheck were all
+failing inside the paint emissive-channel work another agent was landing at the
+same time. Those cleared on their own once that agent finished, and the figures
+above are from runs after it. Nothing here touches a paint or shared file.
+
+**Not verified: none of this was run inside Portals.** Whether the editor's two
+panes now produce a two-player lobby is exactly the question the next live test
+should ask, and it is the reason this change exists.
+
 ## Movement has weight: acceleration, a jump arc, and a body that carries itself (2026-08-02)
 
 **The gap this closes.** Every mechanic was already in place — run, creep, climb,
