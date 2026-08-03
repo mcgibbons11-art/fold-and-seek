@@ -725,6 +725,18 @@ export class CharacterController {
     this.cancelClimb();
   }
 
+  /**
+   * Explicit bail-out used by a Hider pressing S. This never reverses the
+   * route or climbs downward: it releases any ladder/mantle at the current
+   * point and lets ordinary gravity take over on the next frame.
+   */
+  disengageClimb(): boolean {
+    if (this.climb === null) return false;
+    this.solidClimbRequiresJumpRelease = true;
+    this.cancelClimb();
+    return true;
+  }
+
   /** A flat blocker top at the body's current standing height, if one exists. */
   private supportingBlockerTopAt(x: number, z: number): number | null {
     let top: number | null = null;

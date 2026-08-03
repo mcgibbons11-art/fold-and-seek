@@ -161,6 +161,10 @@ export class HiderLocomotion {
   press(key: string): boolean {
     if (!isHiderMoveKey(key)) return false;
     this.held.add(key);
+    // Hiders do not need a reverse-climb mode. S is the reliable emergency
+    // exit: drop the traversal immediately, then resume normal backward WASD
+    // once no climb is active.
+    if (key === "s") this.controller.disengageClimb();
     return true;
   }
 

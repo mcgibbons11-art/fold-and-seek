@@ -169,6 +169,32 @@ describe("running the Mimic during the Forge", () => {
     expect(isHiderMoveKey(" ")).toBe(true);
   });
 
+  it("uses S to let go of a climb instead of climbing downward", () => {
+    const locomotion = new HiderLocomotion(testNavData());
+    const start = MANTLE_TO_TABLE.position;
+    const root = at(start.x + 0.5, 0, start.z);
+
+    locomotion.press("w");
+    holdUntil(
+      locomotion,
+      [],
+      root,
+      Math.PI / 2,
+      () => locomotion.motion.climbState !== null && root.y > 0.05,
+    );
+    const releasedAt = root.y;
+
+    locomotion.release("w");
+    locomotion.press("s");
+    expect(locomotion.motion.climbState).toBeNull();
+
+    for (let frame = 0; frame < 30; frame += 1) {
+      locomotion.update(FRAME_SECONDS, Math.PI / 2, root);
+      expect(locomotion.motion.climbState).toBeNull();
+    }
+    expect(root.y).toBeLessThan(releasedAt);
+  });
+
   it("falls off the surface it runs off, and stops when it lands", () => {
     // Standing on the workbench top, running north off the front edge.
     const locomotion = new HiderLocomotion(NAV_DATA);
