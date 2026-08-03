@@ -424,6 +424,8 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private readonly botSeats: BotSeats;
 
   private flushTimer: ReturnType<typeof setInterval> | null = null;
+  /** One SDK handshake at a time; duplicate callers share its result. */
+  private sessionJoinPromise: Promise<ConnectionState> | null = null;
   private listenersAttached = false;
   private disposed = false;
 
@@ -538,8 +540,21 @@ export class PortalsNetAdapter implements NetworkAdapter {
    * every envelope on the channel belongs to somebody else's match and is
    * dropped. This is the state a room browser is shown in.
    */
-  async joinSession(room: string, displayName: string): Promise<ConnectionState> {
+  joinSession(room: string, displayName: string): Promise<ConnectionState> {
     if (this.disposed) throw new Error("PortalsNetAdapter was disposed");
+    if (this.connection.status === "connected") return Promise.resolve(this.connection);
+    if (this.sessionJoinPromise !== null) return this.sessionJoinPromise;
+
+    const work = this.joinSessionOnce(room, displayName);
+    this.sessionJoinPromise = work;
+    const clear = (): void => {
+      if (this.sessionJoinPromise === work) this.sessionJoinPromise = null;
+    };
+    void work.then(clear, clear);
+    return work;
+  }
+
+  private async joinSessionOnce(room: string, displayName: string): Promise<ConnectionState> {
     this.setStatus("connecting", null);
 
     let session: PortalsNetSession;
@@ -923,10 +938,21 @@ export class PortalsNetAdapter implements NetworkAdapter {
           if (rescued !== null) return rescued;
           continue;
         }
-        console.warn("[portals] relay join failed, clearing the session and retrying", error);
-        await this.leaveQuietly();
+        const transportFailure = isRelayTransportFailure(error);
+        if (attempt === 1) {
+          console.warn(
+            transportFailure
+              ? "[portals] relay temporarily unavailable; retrying the connection"
+              : "[portals] relay join failed; clearing the attempt and retrying",
+          );
+        }
+        // A ProgressEvent means the HTTP/WebSocket request itself never
+        // reached a usable relay. There is no remote seat to clear, and calling
+        // leave() only creates another failing SDK request. Logical refusals
+        // still take the established cleanup path.
+        if (!transportFailure) await this.leaveQuietly();
         if (this.joinRetryDelayMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, this.joinRetryDelayMs));
+          await new Promise((resolve) => setTimeout(resolve, this.joinRetryDelayMs * attempt));
         }
       }
     }
@@ -3128,6 +3154,11 @@ function invalidCheckpointBody(payload: string): string | null {
   if (!payload.startsWith("pc1.")) return null;
   const separator = payload.indexOf(".", 4);
   return separator < 0 ? null : payload.slice(separator + 1);
+}
+
+function isRelayTransportFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /ProgressEvent|network|failed to fetch|websocket/i.test(message);
 }
 
 function nameOf(player: PortalsNetPlayer): string {

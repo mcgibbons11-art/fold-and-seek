@@ -1068,6 +1068,25 @@ describe("PortalsNetAdapter join retry", () => {
     warn.mockRestore();
     session.dispose();
   });
+
+  it("shares one SDK handshake across concurrent session callers", async () => {
+    const relay = new FakePortalsRelay();
+    const adapter = new PortalsNetAdapter(
+      relay.createPeer({ id: "a", displayName: "Ada" }),
+      { seed: 5, joinRetryDelayMs: 0 },
+    );
+    await adapter.connect();
+
+    const first = adapter.joinSession(CHANNEL, "Ada");
+    const second = adapter.joinSession(CHANNEL, "Ada");
+    expect(first).toBe(second);
+    await Promise.all([first, second]);
+
+    expect(relay.joinAttempts.get("a")).toBe(1);
+    await adapter.joinSession(CHANNEL, "Ada");
+    expect(relay.joinAttempts.get("a")).toBe(1);
+    adapter.dispose();
+  });
 });
 
 describe("PortalsNetAdapter broadcast privacy", () => {

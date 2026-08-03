@@ -493,8 +493,8 @@ export function App(): ReactElement {
         PORTALS_ROUND_CHANNEL,
         session.player.displayName ?? DEFAULT_PLAYER_NAME,
       );
-    } catch (error) {
-      console.warn("[rooms] no relay session here; playing solo", error);
+    } catch {
+      console.warn("[rooms] relay unavailable; solo play remains available");
       lobbyRef.current = null;
       opened.dispose();
       setLobbyBusy(false);
@@ -570,22 +570,17 @@ export function App(): ReactElement {
     loadingRef.current = true;
     setLoading({ label: "the shop", fraction: 0 });
 
-    // Inside a Portals room the round is the people who are in it; anywhere
-    // else it is this tab and its bots. Everything after this point is the
-    // same, because the director, the session and the engine all read the
-    // NetworkAdapter interface and nothing narrower.
-    const opening: { round: GameRound; channel: string; displayName: string } =
-      portals === null
-        ? {
-            round: createLocalRound({ seed: seedFromLocation(window.location.search) }),
-            channel: LOCAL_ROUND_NAME,
-            displayName: DEFAULT_PLAYER_NAME,
-          }
-        : {
-            round: createPortalsRound({ sdk: portals.sdk }),
-            channel: PORTALS_ROUND_CHANNEL,
-            displayName: portals.player.displayName ?? DEFAULT_PLAYER_NAME,
-          };
+    // This callback is exposed only when no room-browser relay is held, and its
+    // button explicitly says "Begin solo round". The SDK can still be injected
+    // in that state when Portals.net is temporarily unavailable. Treating SDK
+    // presence as multiplayer here made that solo click issue another relay
+    // join during loading and turn a ProgressEvent into a fatal shop error.
+    // Matchmade rounds enter through onEnterRoom and reuse the held adapter.
+    const opening: { round: GameRound; channel: string; displayName: string } = {
+      round: createLocalRound({ seed: seedFromLocation(window.location.search) }),
+      channel: LOCAL_ROUND_NAME,
+      displayName: DEFAULT_PLAYER_NAME,
+    };
     const { round: opened } = opening;
     let cancelled = false;
 
@@ -655,7 +650,7 @@ export function App(): ReactElement {
       setRound(active);
       setLoading(null);
     })().catch(abandon);
-  }, [portals]);
+  }, []);
 
   /**
    * Takes the room the player picked and opens the shop in it.
