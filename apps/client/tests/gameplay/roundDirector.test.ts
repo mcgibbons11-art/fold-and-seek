@@ -302,6 +302,18 @@ describe("RoundDirector", () => {
     fixture.dispose();
   });
 
+  it("does not show a ready acknowledgement that arrives after host start", async () => {
+    vi.useFakeTimers();
+    const fixture = await startedFixture();
+    fixture.runTo(MatchPhase.Forge);
+
+    fixture.adapter.sendCommand({ type: "player_ready", ready: true });
+    fixture.advance(1);
+
+    expect(fixture.state().rejections).toHaveLength(0);
+    fixture.dispose();
+  });
+
   it("corrects the countdown for a server clock that leads this machine's", async () => {
     vi.useFakeTimers();
     const lead = 5_000;

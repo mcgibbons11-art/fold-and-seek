@@ -374,7 +374,11 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
           : null;
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}>
+    <div
+      style={{ position: "relative", width: "100%", height: "100%", pointerEvents: "none" }}
+      data-target-object-id={gun.targetObjectId ?? undefined}
+      data-target-in-range={gun.targetObjectId === null ? undefined : String(gun.targetInRange)}
+    >
       <Reticle
         reticle={reticle}
         triggerProgress={gun.triggerProgress}

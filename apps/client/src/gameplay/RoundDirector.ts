@@ -23,6 +23,19 @@ import {
 import { isBotSeat } from "../networking/botSeats";
 import { Signal } from "../networking/signal";
 import { computeAvailability } from "./actionAvailability";
+
+/** A ready acknowledgement that lost the race with host start is not a player error. */
+export function isStaleReadyRejection(
+  rejection: CommandRejection,
+  phase: MatchPhase | null,
+): boolean {
+  return (
+    rejection.type === "player_ready" &&
+    rejection.reason === "wrong_phase" &&
+    phase !== null &&
+    phase !== MatchPhase.Lobby
+  );
+}
 import { correctAccusationStamp, phaseLabel, wrongAccusationStamp } from "./copy";
 import type {
   AccusationFeedEntry,
@@ -456,6 +469,7 @@ export class RoundDirector {
   }
 
   private applyRejection(rejection: CommandRejection): void {
+    if (isStaleReadyRejection(rejection, this.sync.publicState?.phase ?? null)) return;
     if (rejection.type === "taunt" && !KNOWN_TAUNT_REFUSALS.has(rejection.reason)) {
       this.tauntSupported = false;
     }

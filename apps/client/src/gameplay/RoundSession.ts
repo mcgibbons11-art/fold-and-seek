@@ -44,7 +44,7 @@ import {
   WRONG_ACCUSATION_SOUND,
 } from "./huntCues";
 import { RoundActions } from "./RoundActions";
-import type { RoundDirector } from "./RoundDirector";
+import { isStaleReadyRejection, type RoundDirector } from "./RoundDirector";
 import { RemoteInspectorPresentation } from "./RemoteInspectorPresentation";
 import type { RoundSpatialBridge } from "./roundSpatial";
 import type { RoundViewState } from "./roundView";
@@ -287,7 +287,10 @@ export class RoundSession {
         // probing an older authority for a verb it may not know, not the player
         // asking for anything, and answering a capability check with a refusal
         // noise would deny something nobody tried to do.
-        if (rejection.reason !== "unsupported") {
+        if (
+          rejection.reason !== "unsupported" &&
+          !isStaleReadyRejection(rejection, this.state().phase)
+        ) {
           this.audio.play(rejection.reason === "no_warrants" ? "gun_dry_click" : "ui_deny");
         }
       }),
