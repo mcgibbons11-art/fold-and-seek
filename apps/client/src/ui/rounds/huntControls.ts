@@ -228,17 +228,16 @@ export function roleCardHints(role: "mimic" | "inspector" | "spectator"): readon
 
 /**
  * A hider's controls during the hunt (CLAUDE.md overrides 5 and 6). A Mimic
- * runs about the shop on WASD while it folds and goes on creeping on the same
- * keys once the disguise has manifested, capped at `hiderCreepSpeed`; space
+ * runs about the shop on WASD while it folds and keeps that run once the
+ * disguise has manifested; space
  * hops; and the left button does two things depending on what is under it,
- * which is why it appears twice. Shift is absent from the walk because a creep
- * has one speed.
+ * which is why it appears twice. Shift is absent because the run has one speed.
  *
  * The Inspector-eyeline preview is on E rather than the §7.5 space, because
  * space became the jump.
  */
 export const HIDER_CONTROL_HINTS: readonly ControlHint[] = [
-  { id: "walk", keys: ["W", "A", "S", "D"], label: "Creep" },
+  { id: "walk", keys: ["W", "A", "S", "D"], label: "Run" },
   { id: "jump", keys: ["Space"], label: "Hop · hold forward at a solid to climb" },
   { id: "camera", keys: ["LMB"], label: "Look around" },
   { id: "drag", keys: ["LMB"], label: "On a handle: pose" },

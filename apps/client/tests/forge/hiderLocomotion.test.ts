@@ -214,8 +214,8 @@ describe("creeping during the hunt", () => {
 
     expect(travelled).toBeLessThanOrEqual(CREEP_SPEED * 2 + ROUNDING_M);
     expect(travelled).toBeGreaterThan(CREEP_SPEED * 1.9);
-    // A creep is a fraction of a run: it has to read as furniture that moved.
-    expect(travelled * 5).toBeLessThan(HIDER_FORGE_RUN_SPEED * 2);
+    // Starting the hunt no longer cuts WASD to the historical one-fifth crawl.
+    expect(CREEP_SPEED).toBe(HIDER_FORGE_RUN_SPEED);
   });
 
   it("never spends more than the cap in a single frame, in any direction", () => {

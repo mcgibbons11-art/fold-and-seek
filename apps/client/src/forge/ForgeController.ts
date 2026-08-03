@@ -1109,7 +1109,12 @@ export class ForgeController {
     const locomotion = this.locomotion;
     if (locomotion === null || dtSeconds <= 0 || locomotion.sample.speedFraction <= 0) return;
 
-    this.scratchForward.set(0, 0, -1).applyQuaternion(this.pose.rootRotation);
+    // The Mimic rig's authored face is +Z (`mimic/rig.ts`). The character
+    // controller uses Three's camera heading convention where yaw 0 travels
+    // toward -Z, so an identity-authored Mimic is facing *backward* in that
+    // convention. Reading -Z here made those two conventions look identical
+    // and left the creature moonwalking exactly 180 degrees away from travel.
+    this.scratchForward.set(0, 0, 1).applyQuaternion(this.pose.rootRotation);
     this.scratchForward.y = 0;
     if (this.scratchForward.lengthSq() < 1e-8) return;
     this.scratchForward.normalize();

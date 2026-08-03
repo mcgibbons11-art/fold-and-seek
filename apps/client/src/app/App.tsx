@@ -15,7 +15,12 @@ import type { RoundSession } from "../gameplay/RoundSession";
 import { detectPortalsSession, type PortalsBoot } from "../networking/portalsBoot";
 import type { QualityTier } from "../rendering/quality";
 import type { ConnectionDetail } from "../networking/NetworkAdapter";
-import type { RoomEntryFailure, RoomEntryResult } from "../networking/PortalsNetAdapter";
+import type {
+  OutgoingRoomJoinRequest,
+  PendingRoomJoinRequest,
+  RoomEntryFailure,
+  RoomEntryResult,
+} from "../networking/PortalsNetAdapter";
 import { MAX_CONCURRENT_ROOMS, type RoomListing } from "../networking/roomRegistry";
 import {
   GraphicsRecoveryPolicy,
@@ -153,6 +158,7 @@ const ROOM_FAILURE_COPY: Readonly<Record<RoomEntryFailure, string>> = {
   no_such_room: "That room has closed. Pick another, or open one of your own.",
   room_full: "That room already has as many players as a round allows.",
   session_full: `This session holds ${MAX_CONCURRENT_ROOMS} rooms at once. Join one of them, or wait for a room to empty.`,
+  request_pending: "You already have a join request waiting for this host.",
   already_in_room: "You are already in a room.",
 };
 
@@ -215,6 +221,8 @@ export function App(): ReactElement {
    */
   const [lobby, setLobby] = useState<PortalsRound | null>(null);
   const [rooms, setRooms] = useState<readonly RoomListing[]>([]);
+  const [roomRequests, setRoomRequests] = useState<readonly PendingRoomJoinRequest[]>([]);
+  const [outgoingRoomRequest, setOutgoingRoomRequest] = useState<OutgoingRoomJoinRequest | null>(null);
   /** True while the session is being joined or rejoined, so nothing is pressed twice. */
   const [lobbyBusy, setLobbyBusy] = useState(false);
   /** The boot hands off to one deliberate start input before opening navigation. */
@@ -699,6 +707,40 @@ export function App(): ReactElement {
     cancelOpeningRef.current?.();
   }, []);
 
+  useEffect(() => {
+    if (lobby === null) {
+      setRoomRequests([]);
+      setOutgoingRoomRequest(null);
+      return undefined;
+    }
+    const refresh = (): void => {
+      setRoomRequests(lobby.adapter.pendingJoinRequests());
+      setOutgoingRoomRequest(lobby.adapter.outgoingJoinRequest());
+    };
+    refresh();
+    const stopRequests = lobby.adapter.onRoomRequests(refresh);
+    const stopDecision = lobby.adapter.onRoomDecision((decision) => {
+      refresh();
+      if (decision.accepted) {
+        onEnterRoom((opened) => opened.adapter.enterRoom(decision.roomCode));
+        return;
+      }
+      const copy = {
+        declined: "The host declined that join request.",
+        expired: "The host did not answer within five minutes. Pick another room or try again.",
+        room_full: "That room filled before the host could accept you.",
+        room_started: "That room has already started its match.",
+        host_left: "That room closed while you were waiting.",
+        accepted: "The room accepted you.",
+      }[decision.reason];
+      setRoundError(copy);
+    });
+    return () => {
+      stopRequests();
+      stopDecision();
+    };
+  }, [lobby, onEnterRoom]);
+
   /**
    * A device loss invalidates the renderer and every scene resource it owns.
    * Re-running the boot effect disposes that whole tree, then builds a fresh
@@ -876,7 +918,6 @@ export function App(): ReactElement {
   if (!menuEntered) {
     return (
       <StartScreen
-        multiplayerReady={lobby !== null}
         onEnter={() => {
           setMenuEntered(true);
         }}
@@ -892,16 +933,46 @@ export function App(): ReactElement {
       : {
           rooms,
           currentCode: lobby.adapter.getRoomCode(),
+          pendingRequests: roomRequests,
+          outgoingRequest: outgoingRoomRequest,
           busy: lobbyBusy,
           notice: roundError,
           onJoin: (code) => {
-            onEnterRoom((opened) => opened.adapter.enterRoom(code));
+            const result = lobby.adapter.requestRoom(code);
+            if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
+            else setRoundError(null);
           },
           onCreate: (name) => {
-            onEnterRoom((opened) => opened.adapter.createRoom(name));
+            const result = lobby.adapter.createRoom(name);
+            if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
+            else setRoundError(null);
           },
           onQuickJoin: () => {
-            onEnterRoom((opened) => opened.adapter.quickJoin());
+            const result = lobby.adapter.requestQuickRoom();
+            if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
+            else setRoundError(null);
+          },
+          onForgePractice: onEnterForge,
+          onAcceptRequest: (connectionId) => {
+            const result = lobby.adapter.acceptRoomRequest(connectionId);
+            if (!result.ok) {
+              setRoundError(ROOM_FAILURE_COPY[result.reason]);
+              return;
+            }
+            onEnterRoom(() => result);
+          },
+          onDeclineRequest: (connectionId) => {
+            lobby.adapter.declineRoomRequest(connectionId);
+          },
+          onCancelRequest: () => {
+            lobby.adapter.cancelRoomRequest();
+          },
+          onBack: () => {
+            lobby.adapter.cancelRoomRequest();
+            lobby.adapter.leaveRoom();
+            setRoomRequests([]);
+            setOutgoingRoomRequest(null);
+            setRoundError(null);
           },
         };
 
@@ -909,11 +980,9 @@ export function App(): ReactElement {
     <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
       <MainMenu
         onPlayRound={onPlayRound}
-        onForgePractice={onEnterForge}
         qualityTier={tier}
         onQualityTierChange={onTierSelect}
         starting={lobbyBusy}
-        multiplayer={portals !== null}
         notice={roundError}
         browser={browser}
       />

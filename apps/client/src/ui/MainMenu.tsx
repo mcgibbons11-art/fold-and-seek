@@ -175,12 +175,10 @@ const qualityChipStyle: CSSProperties = {
 function Settings({
   tier,
   onTierChange,
-  onForgePractice,
   onBack,
 }: {
   readonly tier: QualityTier;
   readonly onTierChange: (tier: QualityTier) => void;
-  readonly onForgePractice: () => void;
   readonly onBack: () => void;
 }): ReactElement {
   const [volume, setVolume] = useState(() => getMasterVolume());
@@ -244,19 +242,6 @@ function Settings({
         </span>
       </div>
 
-      <h3 style={rulesHeadingStyle}>Practice</h3>
-      <p style={rulesBodyStyle}>
-        Open the Forge without a timer to learn folding, painting, mirroring, and copying.
-      </p>
-      <button
-        type="button"
-        className={PRESS_CLASS}
-        style={{ ...buttonStyle, ...buttonBlock }}
-        onClick={onForgePractice}
-      >
-        Forge practice
-      </button>
-
       <button
         type="button"
         className={PRESS_CLASS}
@@ -271,16 +256,10 @@ function Settings({
 
 export interface MainMenuProps {
   readonly onPlayRound: () => void;
-  readonly onForgePractice: () => void;
   readonly qualityTier: QualityTier;
   readonly onQualityTierChange: (tier: QualityTier) => void;
   /** Set while the shop is being unpacked, so the round is not started twice. */
   readonly starting?: boolean;
-  /**
-   * True inside a Portals room, where the round is played with whoever else is
-   * there rather than against this tab's bots.
-   */
-  readonly multiplayer?: boolean;
   /** Why the last attempt did not open a round. Null hides the line. */
   readonly notice?: string | null;
   /**
@@ -293,18 +272,19 @@ export interface MainMenuProps {
 
 export function MainMenu({
   onPlayRound,
-  onForgePractice,
   qualityTier,
   onQualityTierChange,
   starting = false,
-  multiplayer = false,
   notice = null,
   browser = null,
 }: MainMenuProps): ReactElement {
   const [page, setPage] = useState<"main" | "rules" | "settings" | "matchmaking">("main");
 
   if (page === "matchmaking" && browser !== null) {
-    return <RoomBrowser {...browser} onBack={() => setPage("main")} />;
+    return <RoomBrowser {...browser} onBack={() => {
+      browser.onBack?.();
+      setPage("main");
+    }} />;
   }
 
   if (page === "rules") {
@@ -321,7 +301,6 @@ export function MainMenu({
         <Settings
           tier={qualityTier}
           onTierChange={onQualityTierChange}
-          onForgePractice={onForgePractice}
           onBack={() => setPage("main")}
         />
       </div>
@@ -330,7 +309,6 @@ export function MainMenu({
 
   return (
     <CommandMenu
-      multiplayer={multiplayer}
       starting={starting}
       notice={notice}
       browser={browser}

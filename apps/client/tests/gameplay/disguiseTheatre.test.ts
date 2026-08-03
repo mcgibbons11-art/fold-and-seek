@@ -234,6 +234,40 @@ describe("DisguiseTheatre", () => {
     theatre.dispose();
     expect(scene.children).toHaveLength(0);
   });
+
+  it("plays a hit reaction and leaves a caught body collapsed and unshootable", () => {
+    const scene = new THREE.Scene();
+    const theatre = new DisguiseTheatre(scene, QUALITY);
+    theatre.sync([publicDisguise("obj_a", createBotDisguisePayload(0))], null);
+    const body = scene.getObjectByName("disguise-obj_a") as THREE.Object3D;
+
+    expect(theatre.playCatch("obj_a")).toBe(true);
+    theatre.update(80);
+    expect(Math.abs(body.rotation.x) + Math.abs(body.rotation.z)).toBeGreaterThan(0);
+
+    theatre.update(2_000);
+    expect(Math.abs(body.rotation.z)).toBeGreaterThan(1);
+    expect(theatre.proxies()).toHaveLength(0);
+
+    theatre.dispose();
+  });
+
+  it("queues the death animation until an omitted local body joins the theatre", () => {
+    const scene = new THREE.Scene();
+    const theatre = new DisguiseTheatre(scene, QUALITY);
+    const disguise = publicDisguise("obj_mine", createBotDisguisePayload(0));
+    theatre.sync([disguise], "obj_mine");
+
+    expect(theatre.playCatch("obj_mine")).toBe(false);
+    theatre.sync([disguise], null);
+    theatre.update(2_000);
+
+    const body = scene.getObjectByName("disguise-obj_mine") as THREE.Object3D;
+    expect(Math.abs(body.rotation.z)).toBeGreaterThan(1);
+    expect(theatre.proxies()).toHaveLength(0);
+
+    theatre.dispose();
+  });
 });
 
 /**

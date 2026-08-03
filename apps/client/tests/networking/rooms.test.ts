@@ -373,6 +373,38 @@ class RoomSession {
 }
 
 describe("rooms over one channel", () => {
+  it("keeps a requester outside until the host explicitly accepts", async () => {
+    vi.useFakeTimers();
+    const session = new RoomSession();
+    const ada = await session.browse("a", "Ada");
+    const bex = await session.browse("b", "Bex");
+    const opened = ada.adapter.createRoom("The Attic");
+    if (!opened.ok) throw new Error(opened.reason);
+    session.advance(2);
+
+    let acceptedCode: string | null = null;
+    bex.adapter.onRoomDecision((decision) => {
+      if (decision.accepted) acceptedCode = decision.roomCode;
+    });
+    expect(bex.adapter.requestRoom(opened.code).ok).toBe(true);
+
+    expect(bex.adapter.getRoomCode()).toBeNull();
+    expect(ada.adapter.getRoster().map((entry) => entry.displayName)).toEqual(["Ada"]);
+    const request = ada.adapter.pendingJoinRequests()[0];
+    expect(request?.displayName).toBe("Bex");
+
+    if (request === undefined) throw new Error("host never received the request");
+    expect(ada.adapter.acceptRoomRequest(request.id).ok).toBe(true);
+    expect(acceptedCode).toBe(opened.code);
+    expect(bex.adapter.enterRoom(acceptedCode as string).ok).toBe(true);
+    session.advance(4);
+
+    expect(bex.adapter.getRoomCode()).toBe(opened.code);
+    expect(ada.adapter.getRoster().map((entry) => entry.displayName).sort()).toEqual(["Ada", "Bex"]);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
   it("lists a new room for creator and peers when state callbacks are missing", async () => {
     vi.useFakeTimers();
     const session = new RoomSession();

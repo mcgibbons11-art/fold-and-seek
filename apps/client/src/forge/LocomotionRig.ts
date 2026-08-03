@@ -4,8 +4,9 @@ import { STRIDE_FACTOR } from "../gameplay/footsteps";
 import { HOP_LANDING_SPEED } from "../inspector/CharacterController";
 import { WORLD_SCALE } from "../inspector/navData";
 import { updateWorldTransforms, type PoseState } from "../mimic/ikSolver";
-import { BONES, boneIndex, clampBoneRotation, DEG_TO_RAD } from "../mimic/rig";
+import { BONES, DEG_TO_RAD } from "../mimic/rig";
 import type { LocomotionSample } from "./BodyLanguage";
+import { MixamoMotion, type MimicAction } from "./MixamoMotion";
 
 /**
  * The gait: what the creature's limbs do while it travels.
@@ -150,25 +151,6 @@ const BLEND_EPSILON = 1e-4;
 /** Below this an angle moves nothing the eye can resolve: a twentieth of a degree. */
 const ANGLE_EPSILON_RAD = 0.05 * DEG_TO_RAD;
 
-const BONE_PELVIS = boneIndex("pelvis");
-const BONE_TORSO_LOWER = boneIndex("torso_lower");
-const BONE_TORSO_UPPER = boneIndex("torso_upper");
-const BONE_NECK = boneIndex("neck");
-const BONE_THIGH_L = boneIndex("thigh_L");
-const BONE_THIGH_R = boneIndex("thigh_R");
-const BONE_SHIN_L = boneIndex("shin_L");
-const BONE_SHIN_R = boneIndex("shin_R");
-const BONE_FOOT_L = boneIndex("foot_L");
-const BONE_FOOT_R = boneIndex("foot_R");
-const BONE_UPPERARM_L = boneIndex("upperarm_L");
-const BONE_UPPERARM_R = boneIndex("upperarm_R");
-const BONE_FOREARM_L = boneIndex("forearm_L");
-const BONE_FOREARM_R = boneIndex("forearm_R");
-
-const AXIS_X = new Vector3(1, 0, 0);
-const AXIS_Y = new Vector3(0, 1, 0);
-const AXIS_Z = new Vector3(0, 0, 1);
-
 /**
  * The rig's output for one frame: an angle per driven joint plus the drop at
  * the root. Signs follow the rig's own conventions (`mimic/rig.ts`): a bone's
@@ -265,6 +247,7 @@ class Blend {
 
 export class LocomotionRig {
   private readonly live = createAngles();
+  private readonly mixamo = new MixamoMotion();
 
   /**
    * How much of the rig is showing at all. Eased rather than switched, because
@@ -291,8 +274,6 @@ export class LocomotionRig {
   /** The overlay pose and the authored pose it was built to shadow. */
   private overlay: PoseState | null = null;
   private overlaySource: PoseState | null = null;
-
-  private readonly delta = new Quaternion();
 
   /** The angles as of the last frame. The object is reused, never reallocated. */
   get angles(): GaitAngles {
@@ -337,7 +318,13 @@ export class LocomotionRig {
     this.breathPhase = 0;
     this.wasAirborne = false;
     this.launchLeft = 0;
+    this.mixamo.reset();
     Object.assign(this.live, createAngles());
+  }
+
+  /** Plays an authenticated Mixamo performance over the current authored form. */
+  playAction(action: MimicAction): void {
+    this.mixamo.play(action);
   }
 
   /**
@@ -376,7 +363,8 @@ export class LocomotionRig {
     // The frame the feet leave the ground opens the launch window; touching
     // down closes it, so a body that fell off a shelf and one that jumped do
     // not both push off on the way down.
-    if (sample.airborne && !this.wasAirborne) this.launchLeft = LAUNCH_SECONDS;
+    const justTookOff = sample.airborne && !this.wasAirborne;
+    if (justTookOff) this.launchLeft = LAUNCH_SECONDS;
     if (!sample.airborne) this.launchLeft = 0;
     this.wasAirborne = sample.airborne;
     this.launchLeft = Math.max(0, this.launchLeft - dtSeconds);
@@ -488,6 +476,15 @@ export class LocomotionRig {
     a.headTwist = -a.torsoTwist * HEAD_COUNTER_SHARE;
     a.headPitch = -a.torsoPitch * HEAD_COUNTER_SHARE;
 
+    this.mixamo.update(dtSeconds, {
+      active,
+      run: gaitScale,
+      airborne,
+      climbing,
+      stridePhase: this.stridePhase,
+      justTookOff,
+    });
+
     if (active !== 1) scaleAngles(a, active);
     return a;
   }
@@ -512,42 +509,10 @@ export class LocomotionRig {
     overlay.rootPosition.copy(authored.rootPosition);
     overlay.rootPosition.y -= this.live.sinkM;
 
-    const a = this.live;
-    this.turn(overlay, BONE_THIGH_L, AXIS_X, a.hipL);
-    this.turn(overlay, BONE_THIGH_R, AXIS_X, a.hipR);
-    this.turn(overlay, BONE_SHIN_L, AXIS_X, a.kneeL);
-    this.turn(overlay, BONE_SHIN_R, AXIS_X, a.kneeR);
-    this.turn(overlay, BONE_FOOT_L, AXIS_X, a.ankleL);
-    this.turn(overlay, BONE_FOOT_R, AXIS_X, a.ankleR);
-    this.turn(overlay, BONE_UPPERARM_L, AXIS_X, a.armL);
-    this.turn(overlay, BONE_UPPERARM_R, AXIS_X, a.armR);
-    this.turn(overlay, BONE_FOREARM_L, AXIS_X, a.elbowL);
-    this.turn(overlay, BONE_FOREARM_R, AXIS_X, a.elbowR);
-    this.turn(overlay, BONE_PELVIS, AXIS_Z, a.pelvisRoll);
-    this.turn(overlay, BONE_TORSO_LOWER, AXIS_Y, a.torsoTwist);
-    this.turn(overlay, BONE_TORSO_UPPER, AXIS_X, a.torsoPitch);
-    this.turn(overlay, BONE_NECK, AXIS_Y, a.headTwist);
-    this.turn(overlay, BONE_NECK, AXIS_X, a.headPitch);
+    this.mixamo.apply(overlay);
 
     updateWorldTransforms(overlay);
     return overlay;
-  }
-
-  /**
-   * Turns one bone about an axis of the frame its parent gives it, and holds the
-   * result inside the joint's own range.
-   *
-   * Pre-multiplied rather than post-multiplied, so the swing is about the body's
-   * axis rather than about whatever the authored rotation left pointing that
-   * way: a thigh already folded ninety degrees would otherwise swing sideways.
-   * The clamp is what makes the gait give way to the pose rather than fight it.
-   */
-  private turn(pose: PoseState, index: number, axis: Vector3, radians: number): void {
-    if (radians === 0) return;
-    const rotation = pose.localRotations[index];
-    if (rotation === undefined) return;
-    rotation.premultiply(this.delta.setFromAxisAngle(axis, radians));
-    clampBoneRotation(index, rotation);
   }
 
   /**

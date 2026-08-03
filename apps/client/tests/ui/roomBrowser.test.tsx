@@ -12,8 +12,8 @@ import { FakePortalsRelay } from "../networking/fakePortals";
  * The room browser, driven through real adapters over the fake relay rather
  * than a hand-written list. What is worth proving is the whole chain: one
  * client opens a room, the advertisement crosses the session, the panel draws
- * a row for it, and pressing the row's button actually seats the reader in
- * that room.
+ * a row for it, and pressing the row's button asks the host before the reader
+ * is seated in that room.
  */
 
 declare global {
@@ -72,6 +72,8 @@ function render(adapter: PortalsNetAdapter, onJoin: (code: string) => void): voi
       <RoomBrowser
         rooms={adapter.listRooms()}
         currentCode={adapter.getRoomCode()}
+        pendingRequests={adapter.pendingJoinRequests()}
+        outgoingRequest={adapter.outgoingJoinRequest()}
         onJoin={onJoin}
         onCreate={() => undefined}
         onQuickJoin={() => undefined}
@@ -157,7 +159,7 @@ describe("the room browser", () => {
     expect(creates).toBe(2);
   });
 
-  it("draws another client's room and joins it when the row is pressed", async () => {
+  it("draws another client's room and requests host approval from its row", async () => {
     const host = await browsingClient("a", "Ada");
     const reader = await browsingClient("b", "Bex");
     const opened = host.createRoom("The Attic");
@@ -165,7 +167,7 @@ describe("the room browser", () => {
     advance();
 
     render(reader, (code) => {
-      reader.enterRoom(code);
+      reader.requestRoom(code);
     });
 
     const row = rows()[0];
@@ -179,16 +181,15 @@ describe("the room browser", () => {
     click(buttonIn(row));
     advance();
 
-    expect(reader.getRoomCode()).toBe(opened.code);
-    expect(host.getRoster().map((entry) => entry.displayName).sort()).toEqual(["Ada", "Bex"]);
+    expect(reader.getRoomCode()).toBeNull();
+    expect(reader.outgoingJoinRequest()?.roomCode).toBe(opened.code);
+    expect(host.pendingJoinRequests().map((request) => request.displayName)).toEqual(["Bex"]);
 
-    // Re-read: the reader's own room now offers a way back into it rather than
-    // a second join, and the count has caught up.
     render(reader, () => undefined);
-    const mine = rows()[0];
-    if (mine === undefined) throw new Error("the room should still have a row");
-    expect(buttonIn(mine).textContent).toBe("Return");
-    expect(mine.textContent).toContain("2/12");
+    const pending = rows()[0];
+    if (pending === undefined) throw new Error("the room should still have a row");
+    expect(buttonIn(pending).textContent).toBe("Pending");
+    expect(buttonIn(pending).disabled).toBe(true);
   });
 
   it("refuses a full room and says the session is out of slots", async () => {

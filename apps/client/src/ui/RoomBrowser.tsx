@@ -2,6 +2,10 @@ import { MatchPhase } from "@foldseek/shared";
 import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 
 import { MAX_CONCURRENT_ROOMS, type RoomListing } from "../networking/roomRegistry";
+import type {
+  OutgoingRoomJoinRequest,
+  PendingRoomJoinRequest,
+} from "../networking/PortalsNetAdapter";
 import {
   BRASS_LIT,
   CREAM,
@@ -135,11 +139,17 @@ const inputStyle: CSSProperties = {
 export interface RoomBrowserProps {
   readonly rooms: readonly RoomListing[];
   readonly currentCode?: string | null;
+  readonly pendingRequests?: readonly PendingRoomJoinRequest[];
+  readonly outgoingRequest?: OutgoingRoomJoinRequest | null;
   readonly onJoin: (code: string) => void;
   readonly onCreate: (name: string) => void;
   readonly onQuickJoin: () => void;
+  readonly onForgePractice?: () => void;
   readonly busy?: boolean;
   readonly notice?: string | null;
+  readonly onAcceptRequest?: (connectionId: string) => void;
+  readonly onDeclineRequest?: (connectionId: string) => void;
+  readonly onCancelRequest?: () => void;
   /** Returns to the title without dropping the shared directory session. */
   readonly onBack?: () => void;
 }
@@ -147,15 +157,28 @@ export interface RoomBrowserProps {
 export function RoomBrowser({
   rooms,
   currentCode = null,
+  pendingRequests = [],
+  outgoingRequest = null,
   onJoin,
   onCreate,
   onQuickJoin,
+  onForgePractice,
   busy = false,
   notice = null,
+  onAcceptRequest,
+  onDeclineRequest,
+  onCancelRequest,
   onBack,
 }: RoomBrowserProps): ReactElement {
   const [name, setName] = useState("");
   const [selectedCode, setSelectedCode] = useState<string | null>(rooms[0]?.code ?? null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (pendingRequests.length === 0 && outgoingRequest === null) return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [outgoingRequest, pendingRequests.length]);
 
   useEffect(() => {
     if (rooms.length === 0) {
@@ -168,8 +191,12 @@ export function RoomBrowser({
   const full = rooms.length >= MAX_CONCURRENT_ROOMS;
   const anyJoinable = rooms.some((room) => room.joinable);
   const selected = rooms.find((room) => room.code === selectedCode) ?? rooms[0] ?? null;
+  const secondsLeft = (expiresAt: number): string => {
+    const seconds = Math.max(0, Math.ceil((expiresAt - nowMs) / 1_000));
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+  };
   const submitRoom = (): void => {
-    if (busy || full) return;
+    if (busy || full || currentCode !== null || outgoingRequest !== null) return;
     onCreate(name);
     setName("");
   };
@@ -246,17 +273,23 @@ export function RoomBrowser({
                       type="button"
                       className={PRESS_CLASS}
                       style={
-                        busy || (!room.joinable && !mine)
+                        busy || mine || outgoingRequest !== null || !room.joinable
                           ? disabledButtonStyle(smallButtonStyle)
                           : smallButtonStyle
                       }
-                      disabled={busy || (!room.joinable && !mine)}
+                      disabled={busy || mine || outgoingRequest !== null || !room.joinable}
                       onClick={(event) => {
                         event.stopPropagation();
-                        onJoin(room.code);
+                        if (!mine) onJoin(room.code);
                       }}
                     >
-                      {mine ? "Return" : room.joinable ? "Join" : "Full"}
+                      {mine
+                        ? "Hosting"
+                        : outgoingRequest?.roomCode === room.code
+                          ? "Pending"
+                          : room.joinable
+                            ? "Request"
+                            : "Full"}
                     </button>
                   </li>
                 );
@@ -322,7 +355,65 @@ export function RoomBrowser({
                 <div style={{ ...metaStyle, marginTop: 8 }}>
                   {selected.players} of {selected.maxPlayers} seats occupied
                 </div>
+                {selected.code === currentCode ? (
+                  <div style={{ marginTop: 24 }}>
+                    <div style={{ ...labelStyle, marginBottom: 8 }}>
+                      Join requests · {pendingRequests.length}
+                    </div>
+                    {pendingRequests.length === 0 ? (
+                      <p style={{ margin: 0, opacity: 0.68 }}>
+                        Your room is live. Waiting for another player to request entry.
+                      </p>
+                    ) : (
+                      pendingRequests.map((request) => (
+                        <div
+                          key={request.id}
+                          style={{ ...plate(true), borderRadius: 8, padding: 12, marginTop: 8 }}
+                        >
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                            <strong>{request.displayName}</strong>
+                            <span style={countStyle}>{secondsLeft(request.expiresAt)}</span>
+                          </div>
+                          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+                            <button
+                              type="button"
+                              className={PRESS_CLASS}
+                              style={{ ...primaryButtonStyle, flex: 1, padding: "8px 12px" }}
+                              onClick={() => onAcceptRequest?.(request.id)}
+                            >
+                              Accept player
+                            </button>
+                            <button
+                              type="button"
+                              className={PRESS_CLASS}
+                              style={{ ...smallButtonStyle, flex: 1 }}
+                              onClick={() => onDeclineRequest?.(request.id)}
+                            >
+                              Not now
+                            </button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : outgoingRequest?.roomCode === selected.code ? (
+                  <div style={{ ...plate(true), borderRadius: 8, padding: 14, marginTop: 24 }}>
+                    <div style={{ ...labelStyle, color: BRASS_LIT }}>Request sent</div>
+                    <p style={{ margin: "7px 0 12px", opacity: 0.75 }}>
+                      Waiting for the host · {secondsLeft(outgoingRequest.expiresAt)}
+                    </p>
+                    <button
+                      type="button"
+                      className={PRESS_CLASS}
+                      style={{ ...buttonStyle, width: "100%" }}
+                      onClick={onCancelRequest}
+                    >
+                      Cancel request
+                    </button>
+                  </div>
+                ) : null}
               </div>
+              {selected.code === currentCode || outgoingRequest !== null ? null : (
               <button
                 type="button"
                 className={PRESS_CLASS}
@@ -336,8 +427,9 @@ export function RoomBrowser({
                   onJoin(selected.code);
                 }}
               >
-                {busy ? "Opening…" : selected.joinable ? "Join selected room" : "Room full"}
+                {busy ? "Opening…" : selected.joinable ? "Request to join" : "Room full"}
               </button>
+              )}
             </>
           )}
         </section>
@@ -349,11 +441,11 @@ export function RoomBrowser({
             type="button"
             className={PRESS_CLASS}
             style={
-              busy || !anyJoinable
+              busy || outgoingRequest !== null || currentCode !== null || !anyJoinable
                 ? disabledButtonStyle({ ...primaryButtonStyle, width: "100%" })
                 : { ...primaryButtonStyle, width: "100%" }
             }
-            disabled={busy || !anyJoinable}
+            disabled={busy || outgoingRequest !== null || currentCode !== null || !anyJoinable}
             onClick={onQuickJoin}
           >
             Quick join
@@ -382,16 +474,38 @@ export function RoomBrowser({
               type="button"
               className={PRESS_CLASS}
               style={
-                busy || full
+                busy || full || currentCode !== null || outgoingRequest !== null
                   ? disabledButtonStyle({ ...buttonStyle, width: "100%", marginTop: 9 })
                   : { ...buttonStyle, width: "100%", marginTop: 9 }
               }
-              disabled={busy || full}
+              disabled={busy || full || currentCode !== null || outgoingRequest !== null}
               onClick={submitRoom}
             >
-              New room
+              {currentCode === null ? "New room" : "Room open"}
             </button>
           </div>
+
+          {onForgePractice === undefined ? null : (
+            <div style={{ marginTop: 22, paddingTop: 16, borderTop: RULE }}>
+              <div style={{ ...labelStyle, marginBottom: 8 }}>Training</div>
+              <p style={{ margin: "0 0 10px", fontSize: 12, lineHeight: 1.55, opacity: 0.68 }}>
+                Learn folding, painting, mirroring, and copying without a round timer.
+              </p>
+              <button
+                type="button"
+                className={PRESS_CLASS}
+                style={
+                  currentCode !== null || outgoingRequest !== null
+                    ? disabledButtonStyle({ ...buttonStyle, width: "100%" })
+                    : { ...buttonStyle, width: "100%" }
+                }
+                disabled={currentCode !== null || outgoingRequest !== null}
+                onClick={onForgePractice}
+              >
+                Forge practice
+              </button>
+            </div>
+          )}
 
           {notice === null ? null : (
             <p

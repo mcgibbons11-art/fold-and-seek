@@ -1,7 +1,6 @@
 import type { CSSProperties, ReactElement } from "react";
 
 import {
-  BRASS,
   BRASS_LIT,
   CREAM,
   FONT_DISPLAY,
@@ -18,7 +17,7 @@ const screenStyle: CSSProperties = {
   position: "fixed",
   inset: 0,
   display: "grid",
-  gridTemplateRows: "74px minmax(0, 1fr) 54px",
+  gridTemplateRows: "minmax(0, 1fr)",
   color: CREAM,
   font: `13px/1.5 ${FONT_UI}`,
   background: [
@@ -29,33 +28,14 @@ const screenStyle: CSSProperties = {
   overflow: "hidden",
 };
 
-const edgeStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "space-between",
-  padding: "0 clamp(24px, 4vw, 70px)",
-  borderBottom: "1px solid rgba(176, 138, 74, 0.2)",
-  background: "rgba(9, 7, 5, 0.42)",
-};
-
 export interface StartScreenProps {
   readonly onEnter: () => void;
-  readonly multiplayerReady: boolean;
 }
 
 /** The deliberate first input after the renderer has finished loading. */
-export function StartScreen({ onEnter, multiplayerReady }: StartScreenProps): ReactElement {
+export function StartScreen({ onEnter }: StartScreenProps): ReactElement {
   return (
     <div style={screenStyle} className="fs-start-screen" aria-label="Fold and Seek start screen">
-      <header style={edgeStyle}>
-        <span style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.82 }}>
-          The Curiosity Shop
-        </span>
-        <span style={{ ...labelStyle, opacity: 0.46 }}>
-          {multiplayerReady ? "Portals network available" : "Solo session"}
-        </span>
-      </header>
-
       <main className="fs-start-content">
         <FoldedObjectMark />
         <div className="fs-rise" style={{ maxWidth: 760 }}>
@@ -99,16 +79,6 @@ export function StartScreen({ onEnter, multiplayerReady }: StartScreenProps): Re
         </div>
       </main>
 
-      <footer
-        style={{
-          ...edgeStyle,
-          borderBottom: 0,
-          borderTop: "1px solid rgba(176, 138, 74, 0.18)",
-        }}
-      >
-        <span style={{ ...labelStyle, opacity: 0.38 }}>Hide in plain sight</span>
-        <span style={{ color: BRASS, opacity: 0.6 }}>◆</span>
-      </footer>
     </div>
   );
 }

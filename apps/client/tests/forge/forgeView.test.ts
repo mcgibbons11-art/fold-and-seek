@@ -337,6 +337,24 @@ describe("running the Mimic about the room", () => {
     expect(during.revision).toBeGreaterThan(before.revision);
   });
 
+  it("turns the Mimic's face into its travel instead of running backward", () => {
+    const start = walker.controller.disguise.root.position;
+
+    walker.key("keydown", "w");
+    walk(90);
+    const moving = walker.controller.disguise;
+
+    const travel = new THREE.Vector3(
+      moving.root.position[0] - start[0],
+      0,
+      moving.root.position[2] - start[2],
+    ).normalize();
+    const rotation = new THREE.Quaternion(...moving.root.rotation);
+    const authoredFace = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation).setY(0).normalize();
+
+    expect(authoredFace.dot(travel)).toBeGreaterThan(0.9);
+  });
+
   it("stops where the keys were let go and stays there", () => {
     walker.key("keydown", "w");
     walk(30);

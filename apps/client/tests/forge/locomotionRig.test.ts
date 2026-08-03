@@ -268,6 +268,19 @@ describe("the gait is drawn, never published", () => {
     expect(highest - lowest).toBeGreaterThan(WORLD_SCALE.playerHeight * 0.15);
   });
 
+  it("retargets full-body Mixamo motion instead of a single-axis procedural swing", () => {
+    const pose = createPoseState();
+    const rig = running();
+    const drawn = rig.pose(pose);
+    const animated = drawn.localRotations.filter(
+      (rotation) => Math.abs(rotation.x) + Math.abs(rotation.y) + Math.abs(rotation.z) > 0.01,
+    );
+
+    expect(animated.length).toBeGreaterThan(10);
+    expect(animated.some((rotation) => Math.abs(rotation.y) > 0.02)).toBe(true);
+    expect(animated.some((rotation) => Math.abs(rotation.z) > 0.02)).toBe(true);
+  });
+
   it("hands back the authored pose itself once it has been suppressed", () => {
     const { pose, before } = authored();
     const rig = running();

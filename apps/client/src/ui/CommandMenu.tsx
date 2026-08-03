@@ -68,7 +68,6 @@ const featureStyle: CSSProperties = {
 };
 
 export interface CommandMenuProps {
-  readonly multiplayer: boolean;
   readonly starting: boolean;
   readonly notice: string | null;
   readonly browser: RoomBrowserProps | null;
@@ -80,7 +79,6 @@ export interface CommandMenuProps {
 
 /** Full-screen command layer between the title and a selected game mode. */
 export function CommandMenu({
-  multiplayer,
   starting,
   notice,
   browser,
@@ -106,17 +104,10 @@ export function CommandMenu({
           <span style={{ opacity: 0.55 }}> &amp; </span>
           <span style={{ fontWeight: 400 }}>Seek</span>
         </h1>
-        <div style={{ textAlign: "right" }}>
-          <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.84 }}>Curator console</div>
-          <div style={{ ...labelStyle, marginTop: 4, opacity: 0.42 }}>
-            {multiplayer ? "Portals network online" : "Solo session"}
-          </div>
-        </div>
       </header>
 
       <main className="fs-command-grid">
         <nav className="fs-command-nav" aria-label="Main navigation">
-          <div style={{ ...labelStyle, color: BRASS_LIT, margin: "0 0 16px 17px" }}>Play</div>
           <button
             type="button"
             className="fs-menu-nav-button"
@@ -218,8 +209,14 @@ export function CommandMenu({
         </aside>
       </main>
 
-      <footer style={{ ...headerStyle, borderBottom: 0, borderTop: "1px solid rgba(176,138,74,.18)" }}>
-        <span style={{ ...labelStyle, opacity: 0.36 }}>The Curiosity Shop</span>
+      <footer
+        style={{
+          ...headerStyle,
+          justifyContent: "flex-end",
+          borderBottom: 0,
+          borderTop: "1px solid rgba(176,138,74,.18)",
+        }}
+      >
         <span style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.62 }}>Fold &amp; Seek</span>
       </footer>
     </div>

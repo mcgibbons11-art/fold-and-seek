@@ -143,6 +143,30 @@ const SNAPSHOT_INTERVAL_MS = Math.round(1_000 / SNAPSHOT_WRITES_PER_SECOND);
  * reads the whole sequence as a join that took a moment.
  */
 export const JOIN_RETRY_DELAY_MS = 400;
+/** A host has five minutes to answer a player's request. */
+export const ROOM_JOIN_REQUEST_TTL_MS = 5 * 60_000;
+
+export interface PendingRoomJoinRequest {
+  /** Relay connection id: the request and decision exist before a room seat. */
+  readonly id: string;
+  readonly seatId: string;
+  readonly displayName: string;
+  readonly roomCode: string;
+  readonly expiresAt: number;
+}
+
+export interface OutgoingRoomJoinRequest {
+  readonly roomCode: string;
+  readonly roomName: string;
+  readonly hostSeatId: string;
+  readonly expiresAt: number;
+}
+
+export interface RoomJoinDecision {
+  readonly roomCode: string;
+  readonly accepted: boolean;
+  readonly reason: "accepted" | "declined" | "expired" | "room_full" | "room_started" | "host_left";
+}
 /**
  * Separates an account id from the connection that made a second seat of it.
  * Never produced by Portals in either half, so a derived seat cannot be
@@ -200,6 +224,7 @@ export type RoomEntryFailure =
   | "room_full"
   /** Both of the session's room slots are taken (roomRegistry.ts). */
   | "session_full"
+  | "request_pending"
   | "already_in_room";
 
 export type RoomEntryResult =
@@ -277,6 +302,10 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private displayName = "";
   private readonly directory = new RoomDirectory();
   private readonly directorySignal = new Signal<readonly RoomListing[]>();
+  private readonly roomRequestsSignal = new Signal<readonly PendingRoomJoinRequest[]>();
+  private readonly roomDecisionSignal = new Signal<RoomJoinDecision>();
+  private readonly pendingRoomRequests = new Map<string, PendingRoomJoinRequest>();
+  private outgoingRoomRequest: OutgoingRoomJoinRequest | null = null;
   /** Host only: the advertisement's heartbeat, and when it last went out. */
   private adBeat = 0;
   private lastAdAt = 0;
@@ -514,6 +543,102 @@ export class PortalsNetAdapter implements NetworkAdapter {
     return this.directorySignal.subscribe(listener);
   }
 
+  pendingJoinRequests(): readonly PendingRoomJoinRequest[] {
+    return [...this.pendingRoomRequests.values()].sort((left, right) => left.expiresAt - right.expiresAt);
+  }
+
+  outgoingJoinRequest(): OutgoingRoomJoinRequest | null {
+    return this.outgoingRoomRequest;
+  }
+
+  onRoomRequests(listener: (requests: readonly PendingRoomJoinRequest[]) => void): Unsubscribe {
+    return this.roomRequestsSignal.subscribe(listener);
+  }
+
+  onRoomDecision(listener: (decision: RoomJoinDecision) => void): Unsubscribe {
+    return this.roomDecisionSignal.subscribe(listener);
+  }
+
+  /** Asks a room host to admit this browser; no seat is taken yet. */
+  requestRoom(code: string): RoomEntryResult {
+    if (this.connection.status !== "connected" || this.selfConnectionId === null) {
+      return { ok: false, reason: "not_in_session" };
+    }
+    if (this.roomCode !== null) return { ok: false, reason: "already_in_room" };
+    if (this.outgoingRoomRequest !== null) return { ok: false, reason: "request_pending" };
+
+    const listing = this.directory.find(code, this.clock());
+    if (listing === null) return { ok: false, reason: "no_such_room" };
+    if (!listing.joinable) return { ok: false, reason: "room_full" };
+
+    this.outgoingRoomRequest = {
+      roomCode: listing.code,
+      roomName: listing.name,
+      hostSeatId: listing.host,
+      expiresAt: this.clock() + ROOM_JOIN_REQUEST_TTL_MS,
+    };
+    if (!this.sendForRoom(listing.code, {
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "join_request",
+      to: listing.host,
+      displayName: this.displayName.slice(0, LIMITS.displayNameLength) || "Visitor",
+    })) {
+      this.outgoingRoomRequest = null;
+      return { ok: false, reason: "not_in_session" };
+    }
+    this.emitRoomRequests();
+    return { ok: true, code: listing.code };
+  }
+
+  cancelRoomRequest(): void {
+    const request = this.outgoingRoomRequest;
+    if (request === null) return;
+    this.sendForRoom(request.roomCode, {
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "join_cancel",
+      to: request.hostSeatId,
+    });
+    this.outgoingRoomRequest = null;
+    this.emitRoomRequests();
+  }
+
+  /** Quick matchmaking requests the best live room, or opens one to host. */
+  requestQuickRoom(): RoomEntryResult {
+    const target = this.directory.quickJoinTarget(this.clock());
+    return target === null
+      ? this.createRoom(defaultRoomName(this.displayName))
+      : this.requestRoom(target.code);
+  }
+
+  acceptRoomRequest(connectionId: string): RoomEntryResult {
+    const request = this.pendingRoomRequests.get(connectionId);
+    if (!this.isAuthority() || this.roomCode === null || request === undefined) {
+      return { ok: false, reason: "no_such_room" };
+    }
+    if (request.expiresAt <= this.clock()) {
+      this.expireRoomRequests();
+      return { ok: false, reason: "no_such_room" };
+    }
+    const phase = this.sim?.getPhase();
+    if (phase !== MatchPhase.Lobby) {
+      this.answerRoomRequest(request, false, "room_started");
+      return { ok: false, reason: "no_such_room" };
+    }
+
+    this.answerRoomRequest(request, true, "accepted");
+    // One accepted challenger completes this matchmaking lobby. Explicitly
+    // decline the rest so nobody waits out a dead five-minute timer.
+    for (const pending of [...this.pendingRoomRequests.values()]) {
+      this.answerRoomRequest(pending, false, "declined");
+    }
+    return { ok: true, code: request.roomCode };
+  }
+
+  declineRoomRequest(connectionId: string): void {
+    const request = this.pendingRoomRequests.get(connectionId);
+    if (request !== undefined) this.answerRoomRequest(request, false, "declined");
+  }
+
   /**
    * Opens a room and takes its host seat.
    *
@@ -628,6 +753,9 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (code === null) return;
 
     if (this.isAuthority()) {
+      for (const request of [...this.pendingRoomRequests.values()]) {
+        this.answerRoomRequest(request, false, "host_left");
+      }
       const remaining = this.roomSeats().filter((seat) => seat !== this.selfSeatId);
       if (remaining.length === 0) this.retireAd();
     }
@@ -640,6 +768,43 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.setStatus(this.connection.status, null);
     this.emitRoster();
     this.emitDirectory();
+  }
+
+  private answerRoomRequest(
+    request: PendingRoomJoinRequest,
+    accepted: boolean,
+    reason: RoomJoinDecision["reason"],
+  ): void {
+    this.sendForRoom(request.roomCode, {
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "join_decision",
+      to: request.id,
+      accepted,
+      reason,
+    });
+    this.pendingRoomRequests.delete(request.id);
+    this.emitRoomRequests();
+  }
+
+  private expireRoomRequests(): void {
+    const nowMs = this.clock();
+    for (const request of [...this.pendingRoomRequests.values()]) {
+      if (request.expiresAt <= nowMs) this.answerRoomRequest(request, false, "expired");
+    }
+    const outgoing = this.outgoingRoomRequest;
+    if (outgoing !== null && outgoing.expiresAt <= nowMs) {
+      this.outgoingRoomRequest = null;
+      this.emitRoomRequests();
+      this.roomDecisionSignal.emit({
+        roomCode: outgoing.roomCode,
+        accepted: false,
+        reason: "expired",
+      });
+    }
+  }
+
+  private emitRoomRequests(): void {
+    this.roomRequestsSignal.emit(this.pendingJoinRequests());
   }
 
   /** Everything one room's worth of published state, cleared between rooms. */
@@ -750,6 +915,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
   async disconnect(): Promise<void> {
     // Leaving the session leaves the room first, so a host that is the last one
     // out frees its slot for whoever opens the next room.
+    this.cancelRoomRequest();
     this.leaveRoom();
     this.stopTimers();
     this.detachListeners();
@@ -777,6 +943,8 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.privateSignal.clear();
     this.rejectionSignal.clear();
     this.directorySignal.clear();
+    this.roomRequestsSignal.clear();
+    this.roomDecisionSignal.clear();
     this.rosterSignal.clear();
     this.statusSignal.clear();
     this.syncSignal.clear();
@@ -1026,6 +1194,74 @@ export class PortalsNetAdapter implements NetworkAdapter {
       this.directory.observe(slot.adKey, parsed.data, this.clock());
       this.checkAdOwnership();
       this.emitDirectory();
+      return;
+    }
+
+    // Join approval lives at directory level. The requester has deliberately
+    // not entered a logical room yet, so these three messages must be handled
+    // before the room partition that drops all match traffic for browsers.
+    const directoryFromSeat = this.connectionSeats.get(fromId);
+    if (envelope.t === "join_request") {
+      if (
+        this.roomCode !== envelope.r ||
+        !this.isAuthority() ||
+        envelope.to !== this.selfSeatId ||
+        directoryFromSeat === undefined
+      ) return;
+      const phase = this.sim?.getPhase();
+      if (phase !== MatchPhase.Lobby) {
+        this.sendForRoom(envelope.r, {
+          v: PORTALS_PROTOCOL_VERSION,
+          t: "join_decision",
+          to: fromId,
+          accepted: false,
+          reason: "room_started",
+        });
+        return;
+      }
+      const listing = this.directory.find(envelope.r, this.clock());
+      if (listing === null || !listing.joinable) {
+        this.sendForRoom(envelope.r, {
+          v: PORTALS_PROTOCOL_VERSION,
+          t: "join_decision",
+          to: fromId,
+          accepted: false,
+          reason: "room_full",
+        });
+        return;
+      }
+      this.pendingRoomRequests.set(fromId, {
+        id: fromId,
+        seatId: directoryFromSeat,
+        displayName: envelope.displayName,
+        roomCode: envelope.r,
+        expiresAt: this.clock() + ROOM_JOIN_REQUEST_TTL_MS,
+      });
+      this.emitRoomRequests();
+      return;
+    }
+    if (envelope.t === "join_cancel") {
+      if (this.roomCode === envelope.r && this.isAuthority() && envelope.to === this.selfSeatId) {
+        this.pendingRoomRequests.delete(fromId);
+        this.emitRoomRequests();
+      }
+      return;
+    }
+    if (envelope.t === "join_decision") {
+      const outgoing = this.outgoingRoomRequest;
+      if (
+        envelope.to !== this.selfConnectionId ||
+        outgoing === null ||
+        outgoing.roomCode !== envelope.r ||
+        directoryFromSeat !== outgoing.hostSeatId
+      ) return;
+      this.outgoingRoomRequest = null;
+      this.emitRoomRequests();
+      this.roomDecisionSignal.emit({
+        roomCode: envelope.r,
+        accepted: envelope.accepted,
+        reason: envelope.reason,
+      });
       return;
     }
 
@@ -1834,6 +2070,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
   }
 
   private flush(): void {
+    this.expireRoomRequests();
     if (this.selfSeatId === null) return;
     this.drainPaintResend();
     this.drainEyeReport();
@@ -2260,6 +2497,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
     // Nothing leaves a client that is not in a room: there is no match for it
     // to belong to, and an unaddressed envelope would be dropped by everyone.
     if (room === null) return false;
+    return this.sendForRoom(room, body);
+  }
+
+  /** Directory-level counterpart used before the requester has a room. */
+  private sendForRoom(room: string, body: Record<string, unknown>): boolean {
+    if (this.connection.status !== "connected") return false;
     const payload = { ...body, r: room };
     const bytes = jsonByteLength(payload);
     if (bytes > MAX_PAYLOAD_BYTES) {

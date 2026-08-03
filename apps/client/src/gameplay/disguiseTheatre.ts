@@ -3,6 +3,8 @@ import type { TauntId } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
 
 import { distanceGain } from "../audio/distance";
+import type { LocomotionSample } from "../forge/BodyLanguage";
+import { LocomotionRig } from "../forge/LocomotionRig";
 import type { AABB } from "../inspector/navData";
 import type { InspectableProxy } from "../inspector/FocusSystem";
 import {
@@ -40,6 +42,15 @@ const DISGUISE_CATEGORY = "curio";
 
 /** Fallback for a disguise the authority locked without a pose (§5.8). */
 const FALLBACK_ARRANGEMENT = "upright";
+
+const STILL_MIMIC: LocomotionSample = {
+  speedFraction: 0,
+  travelYaw: 0,
+  airborne: false,
+  climbing: false,
+  creeping: false,
+  landingSpeed: 0,
+};
 
 /**
  * One taunt's shape. Amplitudes are shares of the body's own measured height
@@ -106,6 +117,20 @@ interface TauntPlayback {
   elapsedMs: number;
 }
 
+/** The readable two-beat takedown after a correct warrant hit. */
+interface DeathPlayback {
+  elapsedMs: number;
+  /** Stable side for every client, derived from the public object id. */
+  readonly direction: number;
+  /** Bottom-centre hinge: the body collapses onto the floor instead of orbiting. */
+  readonly pivot: THREE.Vector3;
+  readonly heightM: number;
+}
+
+/** Fast impact, then a weightier mechanical collapse. */
+export const CATCH_IMPACT_MS = 140;
+export const CATCH_DEATH_MS = 1_250;
+
 /**
  * Turns the event's seed into the two free parameters of the gesture. The
  * authority mints one seed and broadcasts it, so every client animates the same
@@ -121,6 +146,9 @@ function tauntDirection(seed: number): number {
 
 const scratchSize = new THREE.Vector3();
 const scratchCentre = new THREE.Vector3();
+const scratchDeathQuaternion = new THREE.Quaternion();
+const scratchDeathEuler = new THREE.Euler();
+const scratchDeathPivot = new THREE.Vector3();
 
 /**
  * A precompile walks the same render list a frame does, culling included, so a
@@ -156,6 +184,30 @@ function applyTauntPose(root: THREE.Object3D, taunt: TauntPlayback, t: number): 
   root.rotation.set(0, wave * motion.twistRad, wave * motion.tiltRad);
 }
 
+/**
+ * Hit reaction followed by a powered-down fall. The root's children are posed
+ * in world coordinates, so the rotation is conjugated around the body's own
+ * floor contact rather than around scene origin.
+ */
+function applyDeathPose(root: THREE.Object3D, death: DeathPlayback): void {
+  const totalMs = CATCH_IMPACT_MS + CATCH_DEATH_MS;
+  const elapsed = Math.min(totalMs, death.elapsedMs);
+  const impactT = Math.min(1, elapsed / CATCH_IMPACT_MS);
+  const fallT = Math.max(0, Math.min(1, (elapsed - CATCH_IMPACT_MS) / CATCH_DEATH_MS));
+  const impact = Math.sin(Math.PI * impactT) * (1 - fallT);
+  const easedFall = 1 - Math.pow(1 - fallT, 3);
+  const roll = death.direction * (impact * 0.18 + easedFall * Math.PI * 0.47);
+  const pitch = -impact * 0.12 - easedFall * 0.16;
+
+  scratchDeathQuaternion.setFromEuler(scratchDeathEuler.set(pitch, 0, roll));
+  root.quaternion.copy(scratchDeathQuaternion);
+  root.position
+    .copy(death.pivot)
+    .sub(scratchDeathPivot.copy(death.pivot).applyQuaternion(scratchDeathQuaternion));
+  // The warrant strike pops the shell for one sharp frame before gravity wins.
+  root.position.y += impact * death.heightM * 0.09;
+}
+
 interface Actor {
   readonly publicObjectId: string;
   readonly visual: MimicVisual;
@@ -166,6 +218,8 @@ interface Actor {
    */
   readonly merged: MergedMimicBody;
   readonly pose: PoseState;
+  /** Mixamo retargeting layered over the player's authored disguise. */
+  readonly motion: LocomotionRig;
   readonly bounds: THREE.Box3;
   readonly proxy: InspectableProxy;
   /** The pose text last applied, so an unchanged disguise is not re-solved. */
@@ -187,6 +241,8 @@ interface Actor {
   appliedPaint: string | null;
   /** The gesture this object is performing, if any. */
   taunt: TauntPlayback | null;
+  /** A correct-shot reaction, retained in its final collapsed pose. */
+  death: DeathPlayback | null;
 }
 
 export class DisguiseTheatre {
@@ -201,6 +257,8 @@ export class DisguiseTheatre {
   private readonly pool = new MimicMaterialPool();
   /** Bodies built ahead of time or handed back by a disguise that left. */
   private readonly spare: MimicVisual[] = [];
+  /** Catches can arrive before the hider's own Forge yields its body. */
+  private readonly pendingDeaths = new Set<string>();
   private castShadow: boolean;
   /** Bumped whenever an actor is added or removed, never on a pose change. */
   private castRevision = 0;
@@ -369,11 +427,46 @@ export class DisguiseTheatre {
       heightM: size.y > 0 ? size.y : FALLBACK_BODY_HEIGHT_M,
       elapsedMs: 0,
     };
+    actor.motion.reset();
+    actor.motion.playAction("taunt");
     // A taunt is bait, so where it came from is the point of it: an Inspector
     // has to be able to tell a hider jeering at their elbow from one across the
     // sales floor, and a flat taunt tells them only that somebody did it.
     this.audio?.play(TAUNT_SOUND, TAUNT_PITCH_JITTER, this.gainAt(actor.bounds));
     return true;
+  }
+
+  /**
+   * Starts the shared catch/death animation. If the body is currently omitted
+   * because it belongs to this client, the request waits until `sync` creates
+   * its theatre actor on the caught state.
+   */
+  playCatch(publicObjectId: string): boolean {
+    const actor = this.actors.get(publicObjectId);
+    if (actor === undefined) {
+      this.pendingDeaths.add(publicObjectId);
+      return false;
+    }
+    this.beginDeath(actor);
+    return true;
+  }
+
+  private beginDeath(actor: Actor): void {
+    if (actor.death !== null) return;
+    actor.taunt = null;
+    actor.motion.reset();
+    actor.motion.playAction("death");
+    restPose(actor.visual.root);
+    const centre = actor.bounds.getCenter(new THREE.Vector3());
+    const direction = [...actor.publicObjectId].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 2 === 0 ? 1 : -1;
+    actor.death = {
+      elapsedMs: 0,
+      direction,
+      pivot: new THREE.Vector3(centre.x, actor.bounds.min.y, centre.z),
+      heightM: Math.max(FALLBACK_BODY_HEIGHT_M, actor.bounds.max.y - actor.bounds.min.y),
+    };
+    // A corpse stays visible but is no longer a legal reticle target.
+    this.castRevision += 1;
   }
 
   /** How loud a body's gesture is from where the player is standing. */
@@ -391,15 +484,30 @@ export class DisguiseTheatre {
    */
   update(dtMs: number): void {
     for (const actor of this.actors.values()) {
+      const death = actor.death;
+      if (death !== null) {
+        death.elapsedMs += dtMs;
+        actor.motion.update(dtMs / 1_000, STILL_MIMIC, 0);
+        actor.visual.applyPose(actor.motion.pose(actor.pose));
+        actor.merged.refresh();
+        applyDeathPose(actor.visual.root, death);
+        continue;
+      }
       const taunt = actor.taunt;
       if (taunt === null) continue;
       taunt.elapsedMs += dtMs;
       const t = taunt.elapsedMs / taunt.motion.durationMs;
       if (t >= 1) {
         actor.taunt = null;
+        actor.motion.reset();
+        actor.visual.applyPose(actor.pose);
+        actor.merged.refresh();
         restPose(actor.visual.root);
         continue;
       }
+      actor.motion.update(dtMs / 1_000, STILL_MIMIC, 0);
+      actor.visual.applyPose(actor.motion.pose(actor.pose));
+      actor.merged.refresh();
       applyTauntPose(actor.visual.root, taunt, t);
     }
   }
@@ -424,7 +532,7 @@ export class DisguiseTheatre {
   }
 
   proxies(): readonly InspectableProxy[] {
-    return [...this.actors.values()].map((actor) => actor.proxy);
+    return [...this.actors.values()].filter((actor) => actor.death === null).map((actor) => actor.proxy);
   }
 
   dispose(): void {
@@ -501,6 +609,7 @@ export class DisguiseTheatre {
         actor.visual.applyMaterials(state.materials);
       }
       actor.visual.applyPose(actor.pose);
+      if (actor.taunt === null && actor.death === null) actor.motion.reset();
       // Measured at rest. A taunt displaces the whole body and the box is not
       // re-taken while it runs, so measuring mid-gesture would bake the lean
       // into the bracket the reticle draws and the authority shoots against.
@@ -565,6 +674,7 @@ export class DisguiseTheatre {
       visual,
       merged: new MergedMimicBody(visual),
       pose: createPoseState(),
+      motion: new LocomotionRig(),
       bounds,
       proxy: {
         objectId: publicObjectId,
@@ -580,9 +690,11 @@ export class DisguiseTheatre {
       paint: null,
       appliedPaint: null,
       taunt: null,
+      death: null,
     };
     this.actors.set(publicObjectId, actor);
     this.castRevision += 1;
+    if (this.pendingDeaths.delete(publicObjectId)) this.beginDeath(actor);
     return actor;
   }
 }

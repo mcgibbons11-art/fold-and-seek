@@ -181,7 +181,8 @@ describe("a hider creeping through the hunt", () => {
     const roomRoot = publishedRoot(fixture.adapter);
     const travelled = Math.hypot(roomRoot.x - start.x, roomRoot.y - start.y, roomRoot.z - start.z);
 
-    expect(travelled).toBeGreaterThan(budget / 2);
+    // The shop, not a hidden hunt slowdown, is what eventually stops this run.
+    expect(travelled).toBeGreaterThan(DEFAULT_MATCH_SETTINGS.hiderCreepSpeed * 0.1);
     expect(travelled).toBeLessThanOrEqual(budget);
 
     // The rubber-band test: the body the player is steering and the body the
@@ -254,10 +255,9 @@ describe("a hider creeping through the hunt", () => {
     fixture.adapter.dispose();
   });
 
-  it("would be refused if the round published a pose in mid-air", async () => {
-    // The other half of the hop's legality, and the reason `RoundSession` holds
-    // its publication while `bodyAirborne` is true. The same hop, published on
-    // the interval regardless of whether the body is off the ground.
+  it("accepts the agile hunt hop even if a pose is published in mid-air", async () => {
+    // The hunt now keeps the Forge movement cap, which is large enough for the
+    // authored hop arc. Publishing an airborne sample must not rubber-band it.
     vi.useFakeTimers();
     const fixture = createFixture();
     for (let index = 0; index < BOT_COUNT; index += 1) fixture.adapter.addBot({ autoPlay: true });
@@ -290,14 +290,12 @@ describe("a hider creeping through the hunt", () => {
       fixture.adapter.sendForgeSnapshot({ encodedPose: lockedPoseAt(root, revision), revision });
     }
 
-    expect(fixture.rejections.map((rejection) => rejection.reason)).toContain("moved_too_fast");
+    expect(fixture.rejections).toEqual([]);
 
     fixture.adapter.dispose();
   });
 
-  it("is refused the moment the same creep is driven at the Forge run speed", async () => {
-    // The other half of the claim: the authority really is checking, so the
-    // local cap is what is keeping the round clean rather than a dead rule.
+  it("keeps accepting the Forge run speed after the hunt begins", async () => {
     vi.useFakeTimers();
     const fixture = createFixture();
     for (let index = 0; index < BOT_COUNT; index += 1) fixture.adapter.addBot({ autoPlay: true });
@@ -330,7 +328,7 @@ describe("a hider creeping through the hunt", () => {
       fixture.adapter.sendForgeSnapshot({ encodedPose: lockedPoseAt(root, revision), revision });
     }
 
-    expect(fixture.rejections.map((rejection) => rejection.reason)).toContain("moved_too_fast");
+    expect(fixture.rejections).toEqual([]);
 
     fixture.adapter.dispose();
   });

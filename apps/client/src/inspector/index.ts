@@ -275,7 +275,11 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
       // Losing the target is reported at once: a stale "still looking at it" is
       // the direction that would misinform the gaze scoring of §6.3, whereas a
       // late "now looking at something else" only delays a gain.
-      const focusId = focus === null ? null : focus.objectId;
+      // Local focus also brackets decorative scenery. The simulation registers
+      // only legal accusation targets, so those local-only ids must collapse to
+      // null on the wire instead of filling the rejection feed with
+      // `focus target_unknown` and delaying the real target that follows.
+      const focusId = target?.accusationPolicy === "allowed" ? target.objectId : null;
       const dueAt = focusId === null ? lastFocusCommandAtMs : lastFocusCommandAtMs + FOCUS_COMMAND_MIN_INTERVAL_MS;
       if (focusId !== sentFocusId && nowMs >= dueAt) {
         sentFocusId = focusId;

@@ -503,9 +503,9 @@ export class RoundSession {
    * state, which `update` re-reads every frame, so a creep and a brushstroke
    * already reach the screen without anything here listening for them.
    *
-   * `mimic_caught` is absent for a different reason: every catch already arrives
-   * as `accusation_resolved`, which is where the sting is played, and answering
-   * both would double it.
+   * `mimic_caught` drives the physical collapse only. Its sting already arrives
+   * as `accusation_resolved`, so the animation path stays silent and cannot
+   * double the hit sound.
    */
   private presentEvent(event: SimEvent): void {
     switch (event.type) {
@@ -540,6 +540,10 @@ export class RoundSession {
 
       case "direct_look_escape":
         if (this.ownsDisguise(event.publicObjectId)) this.audio.play(ESCAPE_SOUND);
+        break;
+
+      case "mimic_caught":
+        this.theatre.playCatch(event.publicObjectId);
         break;
 
       case "match_ended": {
@@ -665,23 +669,24 @@ export class RoundSession {
 
   /**
    * The Forge's own frame, plus the one thing about it that the phase decides.
-   * A Mimic runs freely while it is folding; once the disguise has manifested
-   * the authority caps root motion at `hiderCreepSpeed`, and the Forge is told
-   * the same number so the body a player is steering never gets ahead of the
-   * body the room has.
+   * A Mimic keeps its full run after the disguise manifests. The historical
+   * `hiderCreepSpeed` field carries that same speed on client and authority so
+   * prediction never gets ahead of the room.
    */
   private driveForge(dtMs: number, state: RoundViewState): void {
     const forge = this.forge;
     if (forge === null) return;
     const creeping = INSPECTION_PHASES.has(state.phase);
     forge.setCreepLimit(creeping ? this.settings().hiderCreepSpeed : null);
+    // Reconnects can land directly inside the hunt without observing the phase
+    // edge that normally unlocks the Forge. Editing and WASD are core hider
+    // controls here, so enforce the live state rather than trusting one event.
+    if (creeping && forge.snapshot().locked) forge.unlock(HUNT_EDIT_HINT);
     forge.update(dtMs);
 
     // A Mimic on its feet walks the same controller the Inspector does, so it
-    // gets the same boards underfoot. Once the disguise has manifested it is
-    // capped at a creep, and a creep scrapes rather than walks: a disguise
-    // audibly striding across the shop would give itself away for a reason its
-    // owner never chose.
+    // gets the same boards underfoot. The quieter hunt footstep mix preserves
+    // the hide-and-seek read without making the movement itself sluggish.
     const motion = forge.bodyMotion;
     if (motion !== null) this.footsteps.update(dtMs, motion, creeping);
   }

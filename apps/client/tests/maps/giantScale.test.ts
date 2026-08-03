@@ -164,9 +164,9 @@ describe("the shipped reach settings", () => {
     expect(DEFAULT_MATCH_SETTINGS.inspectorFocusDistance).toBeLessThan(SHOP_SHORT_AXIS_M / 2);
   });
 
-  it("keeps a creeping hider slower than a searching Inspector", () => {
-    expect(DEFAULT_MATCH_SETTINGS.hiderCreepSpeed).toBeLessThan(
-      DEFAULT_MATCH_SETTINGS.inspectorMoveSpeed / 4,
+  it("keeps the hider agile after the hunt starts", () => {
+    expect(DEFAULT_MATCH_SETTINGS.hiderCreepSpeed).toBeGreaterThan(
+      DEFAULT_MATCH_SETTINGS.inspectorMoveSpeed,
     );
   });
 

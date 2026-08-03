@@ -288,6 +288,30 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * cycle.
    */
   z.object({ v: version, t: z.literal("ad"), r: roomCode, ad: z.unknown() }),
+  /** A browser asks the named room's host for permission to enter. */
+  z.object({
+    v: version,
+    t: z.literal("join_request"),
+    r: roomCode,
+    to: connectionId,
+    displayName: z.string().min(1).max(LIMITS.displayNameLength),
+  }),
+  /** A browser withdraws its still-pending request. */
+  z.object({
+    v: version,
+    t: z.literal("join_cancel"),
+    r: roomCode,
+    to: connectionId,
+  }),
+  /** The host's addressed answer; `to` is a relay connection id pre-seat. */
+  z.object({
+    v: version,
+    t: z.literal("join_decision"),
+    r: roomCode,
+    to: connectionId,
+    accepted: z.boolean(),
+    reason: z.enum(["accepted", "declined", "expired", "room_full", "room_started", "host_left"]),
+  }),
   /**
    * A client taking a seat in a room.
    *

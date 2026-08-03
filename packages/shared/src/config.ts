@@ -29,15 +29,6 @@ export const PLAYER_HEIGHT_M = 0.35;
 const INSPECTOR_BODY_LENGTHS_PER_SECOND = 3.4;
 
 /**
- * Hider creep speed, in body lengths per second. Seven tenths of a body length
- * a second still reads as furniture shifting while nobody was looking rather
- * than as an object walking away, and it is just over a fifth of the
- * Inspector's walk, so creeping can never outrun a search. Over the full hunt a
- * patient hider can still relocate the length of the shop.
- */
-const HIDER_CREEP_BODY_LENGTHS_PER_SECOND = 0.7;
-
-/**
  * Hider running speed during the Forge, in body lengths per second.
  *
  * A Mimic crossing the shop to find somewhere to hide is running, carries no
@@ -162,11 +153,11 @@ export const DEFAULT_MATCH_SETTINGS = {
   warrantsBonus: 2,
   inspectorMoveSpeed: PLAYER_HEIGHT_M * INSPECTOR_BODY_LENGTHS_PER_SECOND,
   /**
-   * How fast a locked Mimic may creep, in metres per second. Hiders stay active
-   * during the hunt, so root motion is allowed but far slower than an Inspector
-   * walks: the disguise has to read as furniture that moved when nobody looked.
+   * How fast a live Mimic may move during the hunt. Hiders keep the same agile
+   * run they use while forging; starting the hunt must not silently turn WASD
+   * into a crawl. The historical field name remains for wire compatibility.
    */
-  hiderCreepSpeed: PLAYER_HEIGHT_M * HIDER_CREEP_BODY_LENGTHS_PER_SECOND,
+  hiderCreepSpeed: HIDER_FORGE_RUN_SPEED,
   /**
    * Cycle for the live missed-finds board during the hunt. The original shows
    * a visible countdown to the next update on roughly this period.

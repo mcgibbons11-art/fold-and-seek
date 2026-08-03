@@ -291,9 +291,6 @@
   .fs-command-hero {
     align-self: center;
   }
-  .fs-start-screen header span:last-child {
-    display: none;
-  }
 }
 
 /* Matchmaking is a destination of its own: roster, operation, and actions. */

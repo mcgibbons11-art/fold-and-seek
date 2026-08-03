@@ -71,6 +71,24 @@ describe("createInspectorSystem", () => {
     expect(h.commands).toEqual([{ type: "focus", targetObjectId: "prop-shelf" }]);
   });
 
+  it("brackets decorative scenery locally without reporting an unknown target", () => {
+    const h = harness();
+    h.system.setInspectables(new InspectableSet([
+      {
+        objectId: "decorative-shelf",
+        categoryId: "shelf",
+        bounds: SHELF,
+        pickProxy: { kind: "box", box: SHELF },
+        accusationPolicy: "decorative_only",
+      },
+    ]));
+
+    h.system.update(FRAME_MS, 0);
+
+    expect(h.system.focusSystem.current?.objectId).toBe("decorative-shelf");
+    expect(h.commands).toEqual([]);
+  });
+
   it("publishes camera samples at the settings rate", () => {
     const h = harness();
     for (let frame = 0; frame < 63; frame += 1) h.system.update(FRAME_MS, frame * FRAME_MS);
