@@ -34,11 +34,19 @@ export interface EyedropperSample {
 interface MaterialLike {
   readonly color?: THREE.Color;
   readonly map?: THREE.Texture | null;
+  readonly vertexColors?: boolean;
 }
 
 const scratchColor = new THREE.Color();
 const texelColor = new THREE.Color();
 const outColor = new THREE.Color();
+const vertexColor = new THREE.Color();
+const scratchUv = new THREE.Vector2();
+const localPoint = new THREE.Vector3();
+const vertexA = new THREE.Vector3();
+const vertexB = new THREE.Vector3();
+const vertexC = new THREE.Vector3();
+const barycentric = new THREE.Vector3();
 
 export class Eyedropper {
   private readonly raycaster: THREE.Raycaster;
@@ -75,9 +83,15 @@ export class Eyedropper {
     if (base === undefined) return null;
     scratchColor.copy(base);
 
+    if (material.vertexColors === true) {
+      const sampledVertex = sampleVertexColor(hit);
+      if (sampledVertex !== null) scratchColor.multiply(sampledVertex);
+    }
+
     const map = material.map ?? null;
-    if (map !== null && hit.uv !== undefined) {
-      const texel = this.sampleTexture(map, hit.uv.x, hit.uv.y);
+    const uv = map?.channel === 1 ? hit.uv1 : hit.uv;
+    if (map !== null && uv !== undefined) {
+      const texel = this.sampleTexture(map, uv.x, uv.y);
       if (texel !== null) {
         // The texel is authored in the texture's own space and the material
         // colour is already in the working space, so the product is taken in
@@ -100,16 +114,11 @@ export class Eyedropper {
     const source = this.pixelsOf(texture);
     if (source === null || source.width <= 0 || source.height <= 0) return null;
 
-    const transformedU = u * texture.repeat.x + texture.offset.x;
-    const transformedV = v * texture.repeat.y + texture.offset.y;
-    const wrappedU = wrap(transformedU, texture.wrapS);
-    const wrappedV = wrap(transformedV, texture.wrapT);
-
-    const x = Math.min(source.width - 1, Math.max(0, Math.floor(wrappedU * source.width)));
-    // A flipped texture shows its first row at v = 1, which is the default for
-    // anything loaded from an image or a canvas.
-    const row = texture.flipY ? 1 - wrappedV : wrappedV;
-    const y = Math.min(source.height - 1, Math.max(0, Math.floor(row * source.height)));
+    texture.updateMatrix();
+    scratchUv.set(u, v);
+    texture.transformUv(scratchUv);
+    const x = Math.min(source.width - 1, Math.max(0, Math.floor(scratchUv.x * source.width)));
+    const y = Math.min(source.height - 1, Math.max(0, Math.floor(scratchUv.y * source.height)));
 
     const index = (y * source.width + x) * 4;
     return [
@@ -136,6 +145,31 @@ export class Eyedropper {
   }
 }
 
+/** Interpolates the vertex tint actually underneath a ray hit. */
+function sampleVertexColor(hit: THREE.Intersection): THREE.Color | null {
+  const object = hit.object;
+  const face = hit.face;
+  if (!(object instanceof THREE.Mesh) || face === null || face === undefined) return null;
+  const position = object.geometry.getAttribute("position");
+  const color = object.geometry.getAttribute("color");
+  if (position === undefined || color === undefined || color.itemSize < 3) return null;
+
+  vertexA.fromBufferAttribute(position, face.a);
+  vertexB.fromBufferAttribute(position, face.b);
+  vertexC.fromBufferAttribute(position, face.c);
+  localPoint.copy(hit.point);
+  object.worldToLocal(localPoint);
+  THREE.Triangle.getBarycoord(localPoint, vertexA, vertexB, vertexC, barycentric);
+  if (!Number.isFinite(barycentric.x)) return null;
+
+  vertexColor.setRGB(
+    color.getX(face.a) * barycentric.x + color.getX(face.b) * barycentric.y + color.getX(face.c) * barycentric.z,
+    color.getY(face.a) * barycentric.x + color.getY(face.b) * barycentric.y + color.getY(face.c) * barycentric.z,
+    color.getZ(face.a) * barycentric.x + color.getZ(face.b) * barycentric.y + color.getZ(face.c) * barycentric.z,
+  );
+  return vertexColor;
+}
+
 /** A hit on a multi-material mesh names its material through the face. */
 function resolveMaterial(hit: THREE.Intersection): MaterialLike | null {
   const object = hit.object;
@@ -146,17 +180,6 @@ function resolveMaterial(hit: THREE.Intersection): MaterialLike | null {
     return (material[index] as MaterialLike | undefined) ?? null;
   }
   return (material as MaterialLike | null) ?? null;
-}
-
-function wrap(value: number, mode: THREE.Wrapping): number {
-  if (mode === THREE.ClampToEdgeWrapping) {
-    return value < 0 ? 0 : value > 1 ? 1 : value;
-  }
-  const fraction = value - Math.floor(value);
-  if (mode === THREE.MirroredRepeatWrapping) {
-    return Math.floor(value) % 2 === 0 ? fraction : 1 - fraction;
-  }
-  return fraction;
 }
 
 /**

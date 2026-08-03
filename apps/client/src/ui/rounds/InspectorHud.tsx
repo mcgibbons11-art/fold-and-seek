@@ -516,31 +516,42 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
             top: "calc(50% - 106px)",
             left: "50%",
             transform: "translateX(-50%)",
+            width: "min(440px, calc(100vw - 32px))",
             textAlign: "center",
-            whiteSpace: "nowrap",
-            ...plate(),
-            borderRadius: 8,
-            padding: "9px 20px",
           }}
-          className="fs-rise"
+          data-shot-callout="true"
           role="status"
           aria-live="assertive"
         >
           <div
+            className="fs-rise"
             style={{
-              font: `600 19px/1.2 ${FONT_DISPLAY}`,
-              letterSpacing: "0.2em",
-              textTransform: "uppercase",
-              color: latest.correct ? BRASS_LIT : CREAM,
-              textShadow: latest.correct ? "0 0 16px rgba(255, 190, 107, 0.4)" : "none",
+              boxSizing: "border-box",
+              width: "fit-content",
+              maxWidth: "100%",
+              margin: "0 auto",
+              ...plate(),
+              borderRadius: 8,
+              padding: "9px 20px",
             }}
           >
-            {latest.stamp}
-          </div>
-          <div style={{ ...labelStyle, marginTop: 3, letterSpacing: "0.06em" }}>
-            {latest.correct
-              ? (latest.revealedDisplayName ?? "")
-              : `${latest.warrantsRemaining} round${latest.warrantsRemaining === 1 ? "" : "s"} left`}
+            <div
+              style={{
+                font: `600 19px/1.2 ${FONT_DISPLAY}`,
+                letterSpacing: "0.2em",
+                textTransform: "uppercase",
+                color: latest.correct ? BRASS_LIT : CREAM,
+                textShadow: latest.correct ? "0 0 16px rgba(255, 190, 107, 0.4)" : "none",
+                overflowWrap: "anywhere",
+              }}
+            >
+              {latest.stamp}
+            </div>
+            <div style={{ ...labelStyle, marginTop: 3, letterSpacing: "0.06em" }}>
+              {latest.correct
+                ? (latest.revealedDisplayName ?? "")
+                : `${latest.warrantsRemaining} round${latest.warrantsRemaining === 1 ? "" : "s"} left`}
+            </div>
           </div>
         </div>
       ) : null}

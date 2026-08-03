@@ -3,9 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   INSPECTOR_ASSET_SHA256,
   INSPECTOR_ASSET_URL,
+  INSPECTOR_RUN_ANIMATION_WEIGHT,
   inspectorActionForFrame,
   inspectorUsesGunIk,
+  sanitizeInspectorClip,
 } from "../../src/inspector/InspectorAvatar";
+import * as THREE from "three";
 import type { InspectorBodyFrame } from "../../src/inspector/InspectorBody";
 
 const STILL: InspectorBodyFrame = {
@@ -36,6 +39,23 @@ describe("authored Inspector action selection", () => {
     expect(inspectorUsesGunIk("none")).toBe(true);
     expect(inspectorUsesGunIk("hit")).toBe(false);
     expect(inspectorUsesGunIk("death")).toBe(false);
+  });
+
+  it("removes the corrupt left-arm flourish from the fire take", () => {
+    const clip = new THREE.AnimationClip("rifle-fire", 1, [
+      new THREE.QuaternionKeyframeTrack("LeftArm.quaternion", [0], [0, 0, 0, 1]),
+      new THREE.QuaternionKeyframeTrack("RightArm.quaternion", [0], [0, 0, 0, 1]),
+      new THREE.QuaternionKeyframeTrack("mixamorig_LeftForeArm.quaternion", [0], [0, 0, 0, 1]),
+    ]);
+
+    expect(sanitizeInspectorClip(clip).tracks.map((track) => track.name)).toEqual([
+      "RightArm.quaternion",
+    ]);
+  });
+
+  it("tones down the authored run instead of applying its full swagger", () => {
+    expect(INSPECTOR_RUN_ANIMATION_WEIGHT).toBeGreaterThan(0.5);
+    expect(INSPECTOR_RUN_ANIMATION_WEIGHT).toBeLessThan(0.8);
   });
 
   it("cache-busts the authored asset with its checked-in identity", () => {

@@ -72,6 +72,30 @@ describe("eyedropper on a solid material", () => {
     expect(sample?.color[0]).toBeCloseTo(0, 4);
   });
 
+  it("includes the interpolated vertex tint used by the room geometry", () => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3),
+    );
+    geometry.setAttribute(
+      "color",
+      new THREE.Float32BufferAttribute([1, 0, 0, 0, 1, 0, 0, 0, 1], 3),
+    );
+    const material = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true });
+    const mesh = new THREE.Mesh(geometry, material);
+    const hit = {
+      ...intersectionOn(mesh, 0, 0),
+      point: new THREE.Vector3(0, 0, 0),
+      face: { a: 0, b: 1, c: 2, normal: new THREE.Vector3(0, 0, 1), materialIndex: 0 },
+    } as THREE.Intersection;
+
+    const sample = makeEyedropper().sampleIntersection(hit);
+    expect(sample?.color[0]).toBeCloseTo(1, 4);
+    expect(sample?.color[1]).toBeCloseTo(0, 4);
+    expect(sample?.color[2]).toBeCloseTo(0, 4);
+  });
+
   it("returns nothing for an object with no colour to give", () => {
     const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.Material());
     const bare = new THREE.Object3D();

@@ -1,7 +1,7 @@
 import { MatchPhase, type PlayerRole } from "@foldseek/shared";
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
-import type { ForgeController } from "../forge/ForgeController";
+import { FORGE_UI_ATTRIBUTE, type ForgeController } from "../forge/ForgeController";
 import type { RoundViewState } from "../gameplay/roundView";
 import type { InspectorGunView } from "./rounds/InspectorHud";
 import { BRASS_LIT, CREAM, FONT_UI, PRESS_CLASS, buttonStyle, labelStyle, plate } from "./rounds/theme";
@@ -143,6 +143,7 @@ export function FirstRoundGuide({ state, forge, gun, pointerLocked }: FirstRound
 
   return (
     <aside
+      {...{ [FORGE_UI_ATTRIBUTE]: "true" }}
       aria-label={`${role === "mimic" ? "Mimic" : "Inspector"} first-round guide`}
       style={{
         position: "absolute",

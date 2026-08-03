@@ -712,8 +712,8 @@ export class CharacterController {
   /**
    * Applies a lost movement intent immediately, without waiting for another
    * animation frame. Mantles (authored and procedural) remain committed and
-   * finish on their bounded clock; a ladder is released at its exact current
-   * point, or top-outs if the body has already cleared the lip.
+   * finish on their bounded clock; a ladder returns to its known-safe footing,
+   * or top-outs if the body has already cleared the lip.
    */
   releaseClimbInput(): void {
     const climb = this.climb;
@@ -722,18 +722,19 @@ export class CharacterController {
       this.finishClimb(climb);
       return;
     }
-    this.cancelClimb();
+    this.abortClimbToStart(climb);
   }
 
   /**
    * Explicit bail-out used by a Hider pressing S. This never reverses the
-   * route or climbs downward: it releases any ladder/mantle at the current
-   * point and lets ordinary gravity take over on the next frame.
+   * route or climbs downward: it returns any ladder/mantle to the safe footing
+   * where that traversal began.
    */
   disengageClimb(): boolean {
-    if (this.climb === null) return false;
+    const climb = this.climb;
+    if (climb === null) return false;
     this.solidClimbRequiresJumpRelease = true;
-    this.cancelClimb();
+    this.abortClimbToStart(climb);
     return true;
   }
 
@@ -787,8 +788,12 @@ export class CharacterController {
     if (this.surfaceId !== null) {
       for (const link of this.navData.climbLinks) {
         if (link === this.climbLatch) continue;
-        const ascending = link.from === this.surfaceId;
-        if (!ascending && link.to !== this.surfaceId) continue;
+        // Climbing down is not an input in Fold & Seek. A body standing on a
+        // shelf leaves it by walking/falling off its edge; allowing the upper
+        // endpoint here made a held W auto-grab the ladder during that fall and
+        // strand the Hider in climb mode.
+        if (link.from !== this.surfaceId) continue;
+        const ascending = true;
 
         const start = ascending ? link.position : link.target;
         const end = ascending ? link.target : link.position;
@@ -863,16 +868,80 @@ export class CharacterController {
     const insetZ = Math.min(SOLID_TOP_INSET, depth * 0.5);
     const targetX = clamp(bestFaceX + headingX * SOLID_TOP_INSET, blocker.min.x + insetX, blocker.max.x - insetX);
     const targetZ = clamp(bestFaceZ + headingZ * SOLID_TOP_INSET, blocker.min.z + insetZ, blocker.max.z - insetZ);
+    const safeTarget = this.safeSolidTopTarget(
+      blocker,
+      targetX,
+      targetZ,
+      headingX,
+      headingZ,
+      insetX,
+      insetZ,
+    );
     const rise = blocker.max.y - this.position.y;
     const link: ClimbLink = {
       from: this.surfaceId ?? `solid_start_${bestIndex}`,
       to: `solid_top_${bestIndex}`,
       kind: rise <= PROCEDURAL_MANTLE_RISE ? "mantle" : "ladder",
       position: { x: this.position.x, y: this.position.y, z: this.position.z },
-      target: { x: targetX, y: blocker.max.y, z: targetZ },
+      target: { x: safeTarget.x, y: blocker.max.y, z: safeTarget.z },
     };
     this.beginClimb(link, true, link.target);
     return true;
+  }
+
+  /**
+   * Moves a procedural arrival away from an adjacent cabinet's grown capsule
+   * footprint. Multi-box furniture such as the steel rack may have no point on
+   * a narrow top that passes this conservative probe; in that case its authored
+   * target remains valid and the ordinary movement resolver handles the frame.
+   */
+  private safeSolidTopTarget(
+    blocker: NavData["blockers"][number],
+    targetX: number,
+    targetZ: number,
+    headingX: number,
+    headingZ: number,
+    insetX: number,
+    insetZ: number,
+  ): { x: number; z: number } {
+    const sideX = -headingZ;
+    const sideZ = headingX;
+    const step = INSPECTOR_RADIUS_M * 0.9;
+    const offsets = [
+      [0, 0],
+      [step, 0],
+      [step * 2, 0],
+      [step, step],
+      [step, -step],
+      [0, step],
+      [0, -step],
+    ] as const;
+    for (const [forward, side] of offsets) {
+      const x = clamp(
+        targetX + headingX * forward + sideX * side,
+        blocker.min.x + insetX,
+        blocker.max.x - insetX,
+      );
+      const z = clamp(
+        targetZ + headingZ * forward + sideZ * side,
+        blocker.min.z + insetZ,
+        blocker.max.z - insetZ,
+      );
+      if (
+        !blocksCapsule(
+          this.navData.blockers,
+          x,
+          z,
+          blocker.max.y,
+          INSPECTOR_RADIUS_M,
+          INSPECTOR_HEIGHT_M,
+          INSPECTOR_STEP_HEIGHT_M,
+        )
+      ) {
+        return { x, z };
+      }
+    }
+    return { x: targetX, z: targetZ };
   }
 
   private beginClimb(link: ClimbLink, ascending: boolean, end: Vec3Like): void {
@@ -902,6 +971,8 @@ export class CharacterController {
       startX: this.position.x,
       startY: this.position.y,
       startZ: this.position.z,
+      startSurfaceId: this.surfaceId,
+      startGrounded: this.grounded,
       endX: end.x,
       endY: end.y,
       endZ: end.z,
@@ -925,10 +996,9 @@ export class CharacterController {
       if (climb.ascending && climb.progress >= MANTLE_RISE_FRACTION) {
         this.finishClimb(climb);
       } else {
-        // Let go cleanly. Gravity takes over on the following frame from the
-        // exact point reached instead of an invisible climb state pinning the
-        // body in mid-air until Forward happens to be pressed again.
-        this.cancelClimb();
+        // Let go cleanly at the last known-safe footing instead of leaving the
+        // body in an interpolated point that may overlap a shelf corner.
+        this.abortClimbToStart(climb);
       }
       return;
     }
@@ -968,11 +1038,17 @@ export class CharacterController {
     this.climb = null;
   }
 
-  private cancelClimb(): void {
+  /** Returns an interrupted/unsafe climb to its last collision-safe footing. */
+  private abortClimbToStart(climb: MutableClimb): void {
+    this.position.x = climb.startX;
+    this.position.y = climb.startY;
+    this.position.z = climb.startZ;
     this.climb = null;
-    this.surfaceId = null;
-    this.grounded = false;
+    this.surfaceId = climb.startSurfaceId;
+    this.grounded = climb.startGrounded;
     this.verticalVelocity = 0;
+    this.velocityX = 0;
+    this.velocityZ = 0;
     this.speed = 0;
     this.lastResolution = "idle";
   }
@@ -1000,6 +1076,8 @@ interface MutableClimb {
   readonly startX: number;
   readonly startY: number;
   readonly startZ: number;
+  readonly startSurfaceId: string | null;
+  readonly startGrounded: boolean;
   readonly endX: number;
   readonly endY: number;
   readonly endZ: number;

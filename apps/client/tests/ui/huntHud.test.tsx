@@ -50,6 +50,7 @@ function huntState(overrides: {
   readonly watchedLevel?: 0 | 1 | 2;
   readonly finalTen?: boolean;
   readonly warrantsRemaining?: number;
+  readonly accusations?: RoundViewState["accusations"];
 }): RoundViewState {
   const gate = { allowed: false, reason: "wrong_role" as const };
   return {
@@ -111,7 +112,7 @@ function huntState(overrides: {
     warrantsRemaining: 3,
     warrantsTotal: 3,
     mimicsRemaining: 2,
-    accusations: [],
+    accusations: overrides.accusations ?? [],
     missedFinds: {
       received: false,
       rows: [],
@@ -461,6 +462,42 @@ function expectDisjoint(regions: readonly HudRegion[], width: number, height: nu
 }
 
 describe("hunt HUD grammar", () => {
+  it("centres shot callouts in an outer wrapper the rise animation cannot overwrite", () => {
+    render(
+      <HuntHud
+        state={huntState({
+          role: "inspector",
+          accusations: [{
+            id: 11,
+            atServerMs: 1,
+            inspectorPublicId: "p1",
+            byMe: true,
+            targetObjectId: "mimic-1",
+            correct: true,
+            stamp: "MIMIC FOUND",
+            reactionId: null,
+            revealedPlayerPublicId: "p2",
+            revealedDisplayName: "Bot",
+            warrantsRemaining: 2,
+          }],
+        })}
+        gun={GUN}
+        forge={null}
+        pointerLocked
+        boardOpen={false}
+        onToggleBoard={() => undefined}
+        onTaunt={() => undefined}
+      />,
+    );
+
+    const wrapper = container.querySelector<HTMLElement>('[data-shot-callout="true"]');
+    expect(wrapper).not.toBeNull();
+    expect(wrapper?.style.transform).toBe("translateX(-50%)");
+    expect(wrapper?.classList.contains("fs-rise")).toBe(false);
+    expect(wrapper?.querySelector(".fs-rise")).not.toBeNull();
+    expect(wrapper?.textContent).toContain("MIMIC FOUND");
+  });
+
   it("gives a hider only the persistent anchors needed during play", () => {
     render(
       <HuntHud

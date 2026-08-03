@@ -308,12 +308,13 @@ describe("InspectorController climbing", () => {
     expect(controller.position.y).toBeCloseTo(MANTLE_TO_TABLE.target.y, 6);
   });
 
-  it("climbs back down the same link from the surface above", () => {
+  it("does not auto-grab a climb link downward from the surface above", () => {
     const controller = spawned(testNavData(), YAW_TOWARD_WALL, -1.3, 0, 0.75);
     expect(controller.surfaceId).toBe("table");
 
-    walkUntil(controller, { forward: 1 }, (c) => c.surfaceId === "floor");
-    expect(controller.position.y).toBeCloseTo(0, 6);
+    walk(controller, 1, { forward: 1 });
+    expect(controller.climbState).toBeNull();
+    expect(controller.surfaceId).toBe("table");
   });
 
   it("does not start a climb without forward intent or without facing the link", () => {
@@ -333,13 +334,12 @@ describe("InspectorController climbing", () => {
     expect(controller.climbState?.link).toBe(LADDER_TO_SHELF);
 
     walk(controller, 20, { forward: 1 });
-    const heightWhenReleased = controller.position.y;
-    expect(heightWhenReleased).toBeGreaterThan(0);
+    expect(controller.position.y).toBeGreaterThan(0);
 
     walk(controller, 1, { forward: 0 });
-    expect(controller.position.y).toBeCloseTo(heightWhenReleased, 6);
+    expect(controller.position.y).toBeCloseTo(0, 6);
     expect(controller.climbState).toBeNull();
-    expect(controller.grounded).toBe(false);
+    expect(controller.grounded).toBe(true);
   });
 
   it("steps onto the top when forward is released after clearing the ladder lip", () => {

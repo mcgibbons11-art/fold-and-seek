@@ -13,6 +13,8 @@ const AUTHORED_HEIGHT_M = 2.05;
 const CROSS_FADE_SECONDS = 0.1;
 const FIRE_FADE_SECONDS = 0.045;
 const HIT_FADE_SECONDS = 0.065;
+/** Keep the Mixamo stride readable without its exaggerated hip/shoulder swagger. */
+export const INSPECTOR_RUN_ANIMATION_WEIGHT = 0.58;
 /** Maximum correction away from the authored pose for each solved joint. */
 const ARM_IK_LIMIT_RAD = 1.45;
 const FOREARM_IK_LIMIT_RAD = 1.8;
@@ -24,6 +26,23 @@ export type InspectorReaction = "none" | "hit" | "death";
 
 export function inspectorUsesGunIk(reaction: InspectorReaction): boolean {
   return reaction === "none";
+}
+
+/**
+ * The downloaded fire take contains a corrupt flourish on the unsupported
+ * left arm. The gun and right arm still perform the shot; removing only these
+ * tracks leaves the off hand in the stable rifle-idle pose instead of spinning
+ * around the shoulder.
+ */
+export function sanitizeInspectorClip(clip: THREE.AnimationClip): THREE.AnimationClip {
+  if (clip.name !== "rifle-fire") return clip;
+  const unsafeBones = ["leftshoulder", "leftarm", "leftforearm", "lefthand"];
+  clip.tracks = clip.tracks.filter((track) => {
+    const name = track.name.toLowerCase().replaceAll("_", "");
+    return !unsafeBones.some((bone) => name.includes(bone));
+  });
+  clip.resetDuration();
+  return clip;
 }
 
 /** Locomotion choice is kept pure so the gameplay thresholds stay testable. */
@@ -127,7 +146,7 @@ export class InspectorAvatar {
       });
 
       for (const clip of gltf.animations) {
-        this.actions.set(clip.name, this.mixer.clipAction(clip));
+        this.actions.set(clip.name, this.mixer.clipAction(sanitizeInspectorClip(clip)));
       }
       for (const required of [
         "rifle-idle",
@@ -179,6 +198,7 @@ export class InspectorAvatar {
     if (run !== undefined) {
       const fraction = frame.speedCapMps > 0 ? Math.min(1, frame.speedMps / frame.speedCapMps) : 0;
       run.timeScale = THREE.MathUtils.lerp(0.78, 1.42, fraction);
+      run.setEffectiveWeight(INSPECTOR_RUN_ANIMATION_WEIGHT);
     }
     mixer.update(Math.min(dtSeconds, 0.1));
     // Hit and death are full-body performances. Solving the arm back onto the

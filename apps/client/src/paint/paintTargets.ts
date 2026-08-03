@@ -30,11 +30,11 @@ export const PAINT_TILE_COLUMNS = 8;
 export const PAINT_TILE_ROWS = 4;
 export const PAINT_TILE_COUNT = PAINT_TILE_COLUMNS * PAINT_TILE_ROWS;
 export const PAINT_TARGET_COUNT = PAINT_TARGET_IDS.length;
-// 512 keeps 64×128 px per body part—more detail than the on-screen Mimic can
-// resolve—while cutting each live colour/material upload to a quarter of the
-// old 1024 atlas. Painting is an interaction-rate path, so that difference is
-// felt directly under the cursor.
-export const DEFAULT_ATLAS_SIZE = 512;
+// 256 keeps 32×64 px per body part—still more detail than the in-match Mimic can
+// resolve—while cutting each live colour/material upload to one quarter of the
+// former 512 atlas. Painting is an interaction-rate path, so GPU upload
+// bandwidth matters more here than close-up texture detail.
+export const DEFAULT_ATLAS_SIZE = 256;
 
 /** Panel sockets follow the segments in the shared target order. */
 export const PANEL_TARGET_OFFSET = RIG_SEGMENT_BONES.length;
