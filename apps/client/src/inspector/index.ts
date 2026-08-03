@@ -226,6 +226,21 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
       controller.update(dtSeconds, moveInput);
       root.position.set(controller.position.x, controller.position.y, controller.position.z);
       root.rotation.y = controller.yaw;
+      // Browser-level multiplayer gates navigate the real controller rather
+      // than guessing from screenshots. Keep that read-only state on the
+      // render surface; it costs no React work and is removed with the system.
+      if (deps.domElement != null) {
+        const dataset = deps.domElement.dataset;
+        dataset["inspectorPosition"] = [
+          controller.position.x,
+          controller.position.y,
+          controller.position.z,
+        ].join(",");
+        dataset["inspectorYaw"] = String(controller.yaw);
+        dataset["inspectorPitch"] = String(controller.pitch);
+        dataset["inspectorGrounded"] = String(controller.grounded);
+        dataset["inspectorClimbing"] = String(controller.climbState !== null);
+      }
 
       cameraRig.update(dtSeconds, controller, aiming);
       focusSystem.update(dtMs, cameraRig.origin, cameraRig.forward, cameraRig.eye, aiming);
@@ -335,6 +350,13 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
 
     dispose(): void {
       input?.dispose();
+      if (deps.domElement != null) {
+        delete deps.domElement.dataset["inspectorPosition"];
+        delete deps.domElement.dataset["inspectorYaw"];
+        delete deps.domElement.dataset["inspectorPitch"];
+        delete deps.domElement.dataset["inspectorGrounded"];
+        delete deps.domElement.dataset["inspectorClimbing"];
+      }
       gun.dispose();
       body.dispose();
       root.removeFromParent();
