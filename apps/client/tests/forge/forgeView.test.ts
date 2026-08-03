@@ -1,6 +1,6 @@
 import { PLAYER_HEIGHT_M } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ForgeController, type ForgeWorkspace } from "../../src/forge/ForgeController";
 import { humanMimicSpawn } from "../../src/gameplay/botDisguises";
@@ -267,6 +267,68 @@ describe("the pose handles", () => {
     applyDisguiseStateToPose(harness.controller.disguise, after);
     expect(after.worldPositions[boneIndex("hand_L")]!.distanceTo(beforeLeft)).toBeGreaterThan(0.002);
     expect(after.worldPositions[boneIndex("hand_R")]!.distanceTo(beforeRight)).toBeGreaterThan(0.002);
+  });
+
+  it("uses the newest pointer sample once per rendered frame", () => {
+    harness.layout();
+    const grip = harness.screenPointOf("head");
+    const before = harness.controller.disguise.revision;
+    const internals = harness.controller as unknown as { solveAndRefresh(): void };
+    const solve = vi.spyOn(internals, "solveAndRefresh");
+
+    harness.pointer("pointerdown", grip);
+    harness.pointer("pointermove", { ...grip, clientX: grip.clientX + 10 });
+    harness.pointer("pointermove", { ...grip, clientX: grip.clientX + 24 });
+    harness.pointer("pointermove", { ...grip, clientX: grip.clientX + 42 });
+    harness.controller.update(1000 / 60);
+
+    const afterFrame = harness.controller.disguise;
+    expect(afterFrame.revision).toBe(before + 1);
+    expect(solve).toHaveBeenCalledTimes(1);
+
+    // Releasing at the last delivered position closes the edit without paying
+    // for the same IK solve a second time.
+    harness.pointer("pointerup", { ...grip, clientX: grip.clientX + 42 });
+    expect(solve).toHaveBeenCalledTimes(1);
+    expect(harness.controller.snapshot().canUndo).toBe(true);
+  });
+
+  it("coalesces rapid shape slider input into the newest frame value", () => {
+    harness.controller.setToolMode("shape");
+    harness.layout();
+    const hand = harness.screenPointOf("hand_L");
+    harness.pointer("pointerdown", hand);
+    harness.pointer("pointerup", hand);
+    const selected = harness.controller.snapshot().segment;
+    expect(selected).not.toBeNull();
+    const start = selected?.form.length ?? 0.5;
+    const before = harness.controller.disguise.revision;
+
+    harness.controller.setSegmentFormValue("length", start + 0.05);
+    harness.controller.setSegmentFormValue("length", start + 0.1);
+    harness.controller.setSegmentFormValue("length", start + 0.15);
+    harness.controller.update(1000 / 60);
+
+    expect(harness.controller.disguise.revision).toBe(before + 1);
+    expect(harness.controller.snapshot().segment?.form.length).toBeCloseTo(start + 0.15);
+    harness.controller.commitEdits();
+    expect(harness.controller.snapshot().canUndo).toBe(true);
+  });
+
+  it("cycles high-impact shape options from the movement hand", () => {
+    harness.controller.setToolMode("shape");
+    harness.layout();
+    const hand = harness.screenPointOf("hand_L");
+    harness.pointer("pointerdown", hand);
+    harness.pointer("pointerup", hand);
+
+    harness.key("keydown", "q");
+    expect(harness.controller.snapshot().segment?.form.profileId).toBe("capsule");
+    expect(harness.controller.snapshot().segment?.form.width).toBeCloseTo(0.18);
+
+    harness.key("keydown", "q");
+    expect(harness.controller.snapshot().segment?.form.profileId).toBe("rounded_box");
+    expect(harness.controller.snapshot().segment?.form.width).toBeCloseTo(0.88);
   });
 
   it("takes effect between live shape edits instead of retaining the old mirror mode", () => {

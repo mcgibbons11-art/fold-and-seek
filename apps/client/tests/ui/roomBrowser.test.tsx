@@ -127,6 +127,34 @@ describe("the room browser", () => {
     );
   });
 
+  it("returns to the main menu from both the lobby button and Escape", async () => {
+    const reader = await browsingClient("b", "Bex");
+    let backs = 0;
+    act(() => {
+      root.render(
+        <RoomBrowser
+          rooms={reader.listRooms()}
+          onJoin={() => undefined}
+          onCreate={() => undefined}
+          onQuickJoin={() => undefined}
+          onBack={() => {
+            backs += 1;
+          }}
+        />,
+      );
+    });
+
+    const back = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Return to main menu",
+    );
+    if (back === undefined) throw new Error("main-menu control is missing");
+    click(back);
+    act(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(backs).toBe(2);
+  });
+
   it("opens a room without a native form submission that Portals sandboxes block", async () => {
     const reader = await browsingClient("b", "Bex");
     let creates = 0;

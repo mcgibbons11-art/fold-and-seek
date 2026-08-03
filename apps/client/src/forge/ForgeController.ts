@@ -680,6 +680,8 @@ export class ForgeController {
   private selectedSocket: PanelSocketName | null = null;
   private formEpoch = 0;
   private arrangementIndex = 0;
+  private quickShapeIndex = 0;
+  private quickPanelIndex = 0;
 
   private readonly anchorLookup = new Map<string, THREE.Object3D>();
   private readonly anchorTargets = new Map<string, CoreVector3>();
@@ -744,6 +746,13 @@ export class ForgeController {
   private panelEditSocket: PanelSocketName | null = null;
   private panelMirrorEditBefore: PanelState | null = null;
   private panelMirrorEditSocket: PanelSocketName | null = null;
+  /**
+   * Continuous controls may deliver several DOM events between rendered game
+   * frames. Keep their newest value, then do the expensive solve/layout once
+   * on the frame clock instead of building a backlog behind the pointer.
+   */
+  private pendingValueRefresh: "none" | "refresh" | "solve" = "none";
+  private pointerGestureDirty = false;
 
   private readonly dragPlane = new THREE.Plane();
   private readonly dragOffset = new THREE.Vector3();
@@ -904,6 +913,8 @@ export class ForgeController {
 
   update(dtMs = 0): void {
     this.refreshCreepBudget(dtMs);
+    this.flushPointerGesture();
+    this.flushPendingValueRefresh();
     this.stepLocomotion(dtMs);
     this.stepBodyMotion(dtMs / 1_000);
     this.stepCameraFollow(dtMs / 1_000);
@@ -1011,6 +1022,7 @@ export class ForgeController {
    * was actually re-posed does.
    */
   get bodyBounds(): AABB | null {
+    this.flushPendingValueRefresh();
     if (this.boundsRevision !== this.state.revision) {
       this.boundsRevision = this.state.revision;
       this.measureBodyBounds();
@@ -1636,12 +1648,15 @@ export class ForgeController {
     if (edit !== null && edit.mirrorSlot >= 0) {
       this.pose.segments[edit.mirrorSlot] = cloneSegmentForm(form);
     }
-    this.solveAndRefresh();
+    this.pendingValueRefresh = "solve";
     this.audio.playThrottled("servo_move", SERVO_INTERVAL_MS, 0.08);
   }
 
   /** Closes any open continuous edit and records it as one undoable command. */
   commitEdits(): void {
+    // A slider release must serialize the value the player can see, even when
+    // it arrives before the next animation frame has had a chance to solve it.
+    this.flushPendingValueRefresh();
     // A walk in progress is an edit like any other, so an undo, a lock or a new
     // arrangement closes it first rather than folding it into whatever follows.
     this.endWalk();
@@ -1828,7 +1843,9 @@ export class ForgeController {
       copyPanelForm(panel, mirrored);
       clampPanelState(mirrored);
     }
-    this.refreshAll();
+    if (this.pendingValueRefresh === "none") {
+      this.pendingValueRefresh = "refresh";
+    }
     this.audio.playThrottled("servo_move", SERVO_INTERVAL_MS, 0.08);
   }
 
@@ -1974,6 +1991,35 @@ export class ForgeController {
     }
   }
 
+  /**
+   * Q keeps the highest-impact option for the active authoring tool under the
+   * movement hand. It deliberately does not add another always-visible HUD
+   * control: the buttons remain available in the contextual panel and the key
+   * lives in How to Play.
+   */
+  private cycleQuickOption(step: -1 | 1): void {
+    if (this.locked) return;
+    if (this.mode === "pose") {
+      this.cycleArrangement(step);
+      return;
+    }
+    if (this.mode === "shape") {
+      const count = FORGE_QUICK_SHAPES.length;
+      if (step < 0) this.quickShapeIndex = (this.quickShapeIndex - 1 + count) % count;
+      const preset = FORGE_QUICK_SHAPES[this.quickShapeIndex];
+      if (preset !== undefined) this.applySegmentFormPreset(preset.values, preset.profileId);
+      if (step > 0) this.quickShapeIndex = (this.quickShapeIndex + 1) % count;
+      return;
+    }
+    if (this.mode === "panels") {
+      const count = FORGE_QUICK_PANELS.length;
+      if (step < 0) this.quickPanelIndex = (this.quickPanelIndex - 1 + count) % count;
+      const preset = FORGE_QUICK_PANELS[this.quickPanelIndex];
+      if (preset !== undefined) this.applyPanelPreset(preset.values, preset.profileId);
+      if (step > 0) this.quickPanelIndex = (this.quickPanelIndex + 1) % count;
+    }
+  }
+
   /** Enter: freeze the disguise and hide the handles (§7.16, §24.5). */
   lock(): void {
     if (this.locked) {
@@ -2036,6 +2082,9 @@ export class ForgeController {
    * actually changed, so a publisher can skip a frame nobody edited.
    */
   get disguise(): DisguiseState {
+    // Publication is allowed between frames (tests and the network adapter both
+    // do this), so it is also a synchronization boundary for queued controls.
+    this.flushPendingValueRefresh();
     return serializeDisguiseState(this.state);
   }
 
@@ -2086,6 +2135,18 @@ export class ForgeController {
     this.layoutHandles();
     this.layoutAnchorMarkers();
     this.layoutPanelTipHandles();
+  }
+
+  /** Applies the newest slider value once, never every intermediate DOM event. */
+  private flushPendingValueRefresh(): void {
+    const refresh = this.pendingValueRefresh;
+    if (refresh === "none") return;
+    this.pendingValueRefresh = "none";
+    if (refresh === "solve") {
+      this.solveAndRefresh();
+    } else {
+      this.refreshAll();
+    }
   }
 
   /**
@@ -2989,9 +3050,9 @@ export class ForgeController {
         );
         this.updateCamera();
       } else if (this.draggedHandle !== null) {
-        this.dragHandle(this.draggedHandle);
+        this.pointerGestureDirty = true;
       } else if (this.draggedPanelSocket !== null) {
-        this.dragPanelTip(this.draggedPanelSocket);
+        this.pointerGestureDirty = true;
       } else if (this.mode === "pose" && !this.locked) {
         this.setHovered(this.pickHandle());
       }
@@ -3004,6 +3065,11 @@ export class ForgeController {
       if (this.paintOwnsPointer()) return;
       event.stopPropagation();
       if (this.draggedHandle !== null) {
+        if (event.clientX !== this.lastPointerX || event.clientY !== this.lastPointerY) {
+          this.updatePointerNdc(event);
+          this.pointerGestureDirty = true;
+        }
+        this.flushPointerGesture();
         const released = this.draggedHandle;
         this.draggedHandle = null;
         this.setHandleOpacity(
@@ -3013,10 +3079,16 @@ export class ForgeController {
         this.endPoseEdit(released);
         this.canvas.style.cursor = "default";
       } else if (this.draggedPanelSocket !== null) {
+        if (event.clientX !== this.lastPointerX || event.clientY !== this.lastPointerY) {
+          this.updatePointerNdc(event);
+          this.pointerGestureDirty = true;
+        }
+        this.flushPointerGesture();
         this.endPanelTipDrag(this.draggedPanelSocket);
         this.canvas.style.cursor = "default";
       }
       this.cameraDrag = null;
+      this.pointerGestureDirty = false;
       if (this.dragPointerId >= 0 && this.canvas.hasPointerCapture(this.dragPointerId)) {
         this.canvas.releasePointerCapture(this.dragPointerId);
       }
@@ -3112,6 +3184,21 @@ export class ForgeController {
     return this.mode === "paint" && !this.locked && this.cameraDrag === null;
   }
 
+  /**
+   * Runs at most one pose/panel solve for all pointer events received since the
+   * previous game frame. Pointer-up calls it too, preserving the exact release
+   * position when the browser delivers down/move/up before another frame.
+   */
+  private flushPointerGesture(): void {
+    if (!this.pointerGestureDirty) return;
+    this.pointerGestureDirty = false;
+    if (this.draggedHandle !== null) {
+      this.dragHandle(this.draggedHandle);
+    } else if (this.draggedPanelSocket !== null) {
+      this.dragPanelTip(this.draggedPanelSocket);
+    }
+  }
+
   private handleKey(event: KeyboardEvent): void {
     const key = event.key.toLowerCase();
     if (event.ctrlKey || event.metaKey) {
@@ -3200,6 +3287,9 @@ export class ForgeController {
         break;
       case "m":
         this.setMirror(!this.mirror);
+        break;
+      case "q":
+        this.cycleQuickOption(event.shiftKey ? -1 : 1);
         break;
       case "x":
         if (this.mode !== "paint" || this.locked) return;

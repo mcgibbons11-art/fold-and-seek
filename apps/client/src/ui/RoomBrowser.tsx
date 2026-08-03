@@ -150,7 +150,7 @@ export interface RoomBrowserProps {
   readonly onAcceptRequest?: (connectionId: string) => void;
   readonly onDeclineRequest?: (connectionId: string) => void;
   readonly onCancelRequest?: () => void;
-  /** Returns to the title without dropping the shared directory session. */
+  /** Returns to the main menu and closes any room/request owned by this client. */
   readonly onBack?: () => void;
 }
 
@@ -187,6 +187,17 @@ export function RoomBrowser({
       setSelectedCode(rooms[0]?.code ?? null);
     }
   }, [rooms, selectedCode]);
+
+  useEffect(() => {
+    if (onBack === undefined) return undefined;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      onBack();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onBack]);
 
   const full = rooms.length >= MAX_CONCURRENT_ROOMS;
   const anyJoinable = rooms.some((room) => room.joinable);
@@ -225,7 +236,7 @@ export function RoomBrowser({
           </div>
           {onBack === undefined ? null : (
             <button type="button" className={PRESS_CLASS} style={smallButtonStyle} onClick={onBack}>
-              Return to title
+              Return to main menu
             </button>
           )}
         </div>

@@ -23,6 +23,7 @@ const GENERAL_HOTKEYS: readonly ControlHint[] = [
 const FORGE_HOTKEYS: readonly ControlHint[] = [
   { id: "tools", keys: ["1", "2", "3", "4", "5"], label: "Pose · Shape · Panels · Material · Paint" },
   { id: "cycle-tools", keys: ["Tab"], label: "Cycle tools (Shift reverses)" },
+  { id: "cycle-preset", keys: ["Q"], label: "Cycle the active pose, shape, or panel option (Shift reverses)" },
   { id: "quick-preset", keys: ["Shift", "1–5"], label: "Apply a quick pose or selected-part preset" },
   { id: "mirror", keys: ["M"], label: "Mirror every supported edit live" },
   { id: "eyedropper", keys: ["F"], label: "Copy a material or paint colour" },
