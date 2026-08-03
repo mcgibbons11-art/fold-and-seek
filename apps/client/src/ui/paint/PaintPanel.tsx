@@ -179,7 +179,12 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
   const isSaved = state.savedColors.some((entry) => sameColorByte(entry, state.color));
 
   return (
-    <div style={panelStyle} {...hudProps}>
+    <div
+      style={panelStyle}
+      {...hudProps}
+      data-paint-stroke-count={state.strokeCount}
+      data-paint-active={state.active ? "true" : "false"}
+    >
       <ColorWheel hsv={state.hsv} onChange={(hsv) => tool.setHsv(hsv)} />
 
       <div style={{ ...labelStyle, marginTop: 10 }}>Value</div>

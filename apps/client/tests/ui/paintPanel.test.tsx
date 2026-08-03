@@ -82,6 +82,12 @@ afterEach(() => {
 });
 
 describe("paint panel material channels", () => {
+  it("exposes live stroke state to the Portals interaction gate", () => {
+    const panel = container.querySelector<HTMLElement>("[data-paint-stroke-count]");
+    expect(panel?.dataset.paintActive).toBe("true");
+    expect(panel?.dataset.paintStrokeCount).toBe("0");
+  });
+
   it("offers all three of the original's channels", () => {
     expect(readingFor("Metallic")).toBe("Metallic 0");
     expect(readingFor("Smoothness")).toBe("Smoothness 35");
