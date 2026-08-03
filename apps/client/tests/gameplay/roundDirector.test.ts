@@ -3,7 +3,7 @@ import { MatchPhase } from "@foldseek/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RoundActions } from "../../src/gameplay/RoundActions";
-import { RoundDirector } from "../../src/gameplay/RoundDirector";
+import { isPlayerFacingRejection, RoundDirector } from "../../src/gameplay/RoundDirector";
 import type { RoundViewState } from "../../src/gameplay/roundView";
 import { LocalLoopbackAdapter } from "../../src/networking/LocalLoopbackAdapter";
 
@@ -126,6 +126,21 @@ afterEach(() => {
 });
 
 describe("RoundDirector", () => {
+  it("keeps stale background Forge publications out of the player error feed", () => {
+    expect(
+      isPlayerFacingRejection({ type: "paint_update", reason: "wrong_phase" }, MatchPhase.Reveal),
+    ).toBe(false);
+    expect(
+      isPlayerFacingRejection(
+        { type: "forge_snapshot", reason: "wrong_phase" },
+        MatchPhase.Inspection,
+      ),
+    ).toBe(false);
+    expect(
+      isPlayerFacingRejection({ type: "paint_update", reason: "invalid_paint" }, MatchPhase.Forge),
+    ).toBe(true);
+  });
+
   it("carries a round through every phase with the copy deck and a live countdown", async () => {
     vi.useFakeTimers();
     const fixture = await seatedFixture();

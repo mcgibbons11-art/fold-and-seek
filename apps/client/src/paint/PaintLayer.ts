@@ -132,6 +132,15 @@ const DEFAULT_STROKE_EMISSIVE = 0;
 /** Stamp spacing along an interpolated drag, as a fraction of the brush radius. */
 const STAMP_SPACING = 0.35;
 
+/**
+ * Paint has a fixed wire budget. Pruning one stamp whenever that budget is
+ * full forces a replay of the surviving target on every rendered frame, which
+ * turns a sustained spray into an ever-growing CPU spike. Retire a useful
+ * runway at once instead: the image still agrees exactly with the published
+ * log, while the expensive replay is amortized across the next 96 dabs.
+ */
+const STROKE_EVICTION_RUNWAY = 96;
+
 /** Smallest brush the wire can carry, in UV units. */
 const MIN_RADIUS_UV = 1 / 63;
 
@@ -422,17 +431,18 @@ export class PaintLayer {
       // brush that dies mid-drag reads as a broken tool. Dropping one changes
       // the image, so the atlas is rebuilt from the surviving log and the two
       // stay identical.
-      const evicted = this.strokes.splice(0, this.strokes.length - MAX_PAINT_STROKES + 1);
+      const evicted = this.strokes.splice(
+        0,
+        Math.min(this.strokes.length, STROKE_EVICTION_RUNWAY),
+      );
       this.strokes.push(wire);
       this.batch?.evicted.push(...evicted);
       this.batch?.added.push(wire);
       this.changeRevision += 1;
-      // Removing the oldest stamp can only change its own tile. Replaying that
-      // tile (and the new stamp's tile when different) avoids the old 768-stamp
-      // full-atlas cliff while producing byte-identical pixels to a full replay.
-      this.rebuildTargets(evicted[0]?.target === wire.target
-        ? [wire.target]
-        : [evicted[0]?.target ?? wire.target, wire.target]);
+      // Only tiles represented in the retired runway (plus the new stamp) can
+      // change. Replaying those avoids all 27 targets while producing pixels
+      // byte-identical to a full replay of the surviving wire log.
+      this.rebuildTargets(this.targetsOf([...evicted, wire]));
       return;
     }
 
@@ -497,10 +507,16 @@ export class PaintLayer {
    * evicts the same strokes again, so a redo needs no record of its own.
    */
   reapplyStrokeBatch(batch: PaintStrokeBatch): void {
+    if (batch.evicted.length > 0) {
+      // Redo must retire the same runway the original gesture retired. Doing
+      // it one stamp at a time would reintroduce the ceiling replay cliff and
+      // would not reconstruct the painted image the batch recorded.
+      this.strokes.splice(0, Math.min(this.strokes.length, batch.evicted.length));
+    }
     for (const stroke of batch.added) {
       if (stroke.emissive > 0 && this.emissivePixels === null) this.allocateEmissiveAtlas();
       if (this.strokes.length >= MAX_PAINT_STROKES) {
-        this.strokes.splice(0, this.strokes.length - MAX_PAINT_STROKES + 1);
+        this.strokes.splice(0, Math.min(this.strokes.length, STROKE_EVICTION_RUNWAY));
       }
       this.strokes.push(stroke);
     }

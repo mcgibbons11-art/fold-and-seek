@@ -169,17 +169,35 @@ describe("paint layer stroke ceiling", () => {
 
     const painted = makeLayer();
     painted.applyStrokes(strokes);
-    expect(painted.strokeCount).toBe(MAX_PAINT_STROKES);
+    expect(painted.strokeCount).toBeLessThan(MAX_PAINT_STROKES);
 
     // Exactly the surviving log, painted from scratch, is the same image: the
     // atlas was rebuilt rather than left with the dropped stroke baked in.
     const surviving = makeLayer();
-    surviving.applyStrokes(strokes.slice(1));
+    surviving.restoreStrokeLog(painted.captureStrokeLog());
     expect(hashOf(painted)).toBe(hashOf(surviving));
 
     const roundTripped = makeLayer();
     expect(roundTripped.fromWireData(painted.toDataForWire())).toBe(true);
     expect(hashOf(roundTripped)).toBe(hashOf(painted));
+  });
+
+  it("amortizes sustained spraying instead of replaying at the ceiling every frame", () => {
+    const layer = makeLayer();
+    layer.applyStrokes(
+      Array.from({ length: MAX_PAINT_STROKES + 400 }, (_, index) =>
+        stroke(index, { segmentId: 3, continued: false }),
+      ),
+    );
+
+    expect(layer.strokeCount).toBeLessThanOrEqual(MAX_PAINT_STROKES);
+    expect(layer.strokeCount).toBeGreaterThan(MAX_PAINT_STROKES - 96);
+    // The old one-at-a-time policy performed 400 target replays here.
+    expect(layer.uploadStats.rebuilds).toBeLessThanOrEqual(5);
+
+    const replayed = makeLayer();
+    replayed.restoreStrokeLog(layer.captureStrokeLog());
+    expect(hashOf(replayed)).toBe(hashOf(layer));
   });
 });
 

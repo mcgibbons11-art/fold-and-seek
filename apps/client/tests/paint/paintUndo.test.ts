@@ -211,9 +211,9 @@ describe("paint undo", () => {
   });
 
   it("puts back the strokes the ceiling dropped to make room for a drag", () => {
-    // At the ceiling every new stamp evicts the oldest one. An undo that only
-    // popped the new stamps would leave the body permanently short of its first
-    // marks, so the batch carries what was evicted and restores that too.
+    // At the ceiling the first new stamp opens an eviction runway. An undo that
+    // only popped the new stamps would leave the body permanently short of its
+    // first marks, so the batch carries the runway and restores it too.
     const layer = makeLayer();
     for (let i = 0; i < MAX_PAINT_STROKES; i++) {
       layer.applyStroke(stroke({ segmentId: i % 19, uv: [(i % 10) / 10, ((i % 7) + 1) / 10] }));
@@ -222,8 +222,8 @@ describe("paint undo", () => {
     const before = hashOf(layer);
 
     const batch = drag(layer, 3, { segmentId: 11 });
-    expect(batch.evicted).toHaveLength(3);
-    expect(layer.strokeCount).toBe(MAX_PAINT_STROKES);
+    expect(batch.evicted).toHaveLength(96);
+    expect(layer.strokeCount).toBe(MAX_PAINT_STROKES - 96 + 3);
 
     layer.revertStrokeBatch(batch);
     expect(layer.strokeCount).toBe(MAX_PAINT_STROKES);
@@ -240,7 +240,7 @@ describe("paint undo", () => {
 
     layer.revertStrokeBatch(batch);
     layer.reapplyStrokeBatch(batch);
-    expect(layer.strokeCount).toBe(MAX_PAINT_STROKES);
+    expect(layer.strokeCount).toBe(MAX_PAINT_STROKES - 96 + 3);
     expect(hashOf(layer)).toBe(painted);
   });
 });

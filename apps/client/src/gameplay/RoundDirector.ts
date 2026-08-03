@@ -42,7 +42,19 @@ export function isPlayerFacingRejection(
   rejection: CommandRejection,
   phase: MatchPhase | null,
 ): boolean {
-  return rejection.type !== "focus" && !isStaleReadyRejection(rejection, phase);
+  if (rejection.type === "focus" || isStaleReadyRejection(rejection, phase)) return false;
+  // Forge snapshots and paint packets are coalesced background state, not a
+  // button the player pressed. Around a phase edge the sender can still be on
+  // the previous public snapshot while authority has already advanced; that
+  // harmless race must not announce that the player attempted an illegal
+  // action. Decoder and validation failures remain visible.
+  if (
+    rejection.reason === "wrong_phase" &&
+    (rejection.type === "forge_snapshot" || rejection.type === "paint_update")
+  ) {
+    return false;
+  }
+  return true;
 }
 import { correctAccusationStamp, phaseLabel, wrongAccusationStamp } from "./copy";
 import type {
