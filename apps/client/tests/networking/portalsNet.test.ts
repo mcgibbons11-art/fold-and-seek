@@ -1954,6 +1954,37 @@ describe("PortalsNetAdapter bot seats", () => {
     session.dispose();
   });
 
+  it("clears a guest's private ready state when a failed rematch returns to lobby", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS, playingBots());
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    session.advance(4);
+
+    session.startMatch("a", MatchPhase.Forge);
+    session.lockDisguises();
+    session.runTo(MatchPhase.Results, "a", 400);
+    expect(session.peer("b").adapter.getSync().privateState?.ready).toBe(true);
+
+    session.peer("a").adapter.sendCommand({ type: "vote_rematch", yes: false });
+    session.peer("b").adapter.sendCommand({ type: "vote_rematch", yes: false });
+    session.runTo(MatchPhase.Lobby, "a", 400);
+    session.advance(3);
+
+    const guest = session.peer("b");
+    expect(guest.adapter.getSync().privateState?.ready).toBe(false);
+    expect(
+      guest.adapter.getSync().publicState?.players.find((player) => player.seatId === "b")?.ready,
+    ).toBe(false);
+
+    guest.adapter.sendCommand({ type: "player_ready", ready: true });
+    session.advance(3);
+    expect(guest.adapter.getSync().privateState?.ready).toBe(true);
+    expect(guest.rejections).toEqual([]);
+
+    session.dispose();
+  });
+
   it("sends no private traffic to a seat nobody is connected on", async () => {
     vi.useFakeTimers();
     const session = new Session(RECONNECT_SETTINGS, playingBots());

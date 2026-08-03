@@ -271,7 +271,7 @@ describe("InspectorController climbing", () => {
     expect(facingAway.climbState).toBeNull();
   });
 
-  it("rides a ladder up while forward is held and hangs when it is released", () => {
+  it("lets go below a ladder lip instead of getting stuck in climbing mode", () => {
     const controller = spawned(testNavData(), YAW_TOWARD_WALL, -4.25, 2.5);
     walk(controller, 1, { forward: 1 });
     expect(controller.climbState?.link).toBe(LADDER_TO_SHELF);
@@ -280,12 +280,25 @@ describe("InspectorController climbing", () => {
     const heightWhenReleased = controller.position.y;
     expect(heightWhenReleased).toBeGreaterThan(0);
 
-    walk(controller, 60, { forward: 0 });
+    walk(controller, 1, { forward: 0 });
     expect(controller.position.y).toBeCloseTo(heightWhenReleased, 6);
-    expect(controller.climbState).not.toBeNull();
+    expect(controller.climbState).toBeNull();
+    expect(controller.grounded).toBe(false);
+  });
 
-    walkUntil(controller, { forward: 1 }, (c) => c.climbState === null);
+  it("steps onto the top when forward is released after clearing the ladder lip", () => {
+    const controller = spawned(testNavData(), YAW_TOWARD_WALL, -4.25, 2.5);
+    walk(controller, 1, { forward: 1 });
+    walkUntil(
+      controller,
+      { forward: 1 },
+      (current) => (current.climbState?.progress ?? 0) >= 0.6,
+    );
+
+    walk(controller, 1, { forward: 0 });
+    expect(controller.climbState).toBeNull();
     expect(controller.surfaceId).toBe("shelf");
+    expect(controller.grounded).toBe(true);
     expect(controller.position.y).toBeCloseTo(SHELF_TOP.bounds.max.y, 6);
   });
 

@@ -269,6 +269,48 @@ describe("the pose handles", () => {
     expect(after.worldPositions[boneIndex("hand_R")]!.distanceTo(beforeRight)).toBeGreaterThan(0.002);
   });
 
+  it("takes effect between live shape edits instead of retaining the old mirror mode", () => {
+    harness.controller.setToolMode("shape");
+    harness.layout();
+    const hand = harness.screenPointOf("hand_L");
+    harness.pointer("pointerdown", hand);
+    harness.pointer("pointerup", hand);
+    const selected = harness.controller.snapshot().segment;
+    expect(selected?.bone.endsWith("_L")).toBe(true);
+    const selectedBone = selected?.bone ?? "forearm_L";
+    const oppositeBone = `${selectedBone.slice(0, -2)}_R`;
+    const form = selected?.form;
+    expect(form).toBeDefined();
+    const firstLength = (form?.length ?? 1) * 1.08;
+    const mirroredLength = (form?.length ?? 1) * 1.16;
+    const finalLeftLength = (form?.length ?? 1) * 1.24;
+
+    // This opens an unmirrored continuous edit on the selected hand.
+    harness.controller.setSegmentFormValue("length", firstLength);
+    harness.controller.setMirror(true);
+    harness.controller.setSegmentFormValue("length", mirroredLength);
+
+    let disguise = harness.controller.disguise;
+    expect(disguise.segments.find((entry) => entry.bone === selectedBone)?.form.length).toBeCloseTo(
+      mirroredLength,
+    );
+    expect(disguise.segments.find((entry) => entry.bone === oppositeBone)?.form.length).toBeCloseTo(
+      mirroredLength,
+    );
+
+    // The inverse transition matters too: the open mirrored gesture must not
+    // keep copying after the player switches Mirror off.
+    harness.controller.setMirror(false);
+    harness.controller.setSegmentFormValue("length", finalLeftLength);
+    disguise = harness.controller.disguise;
+    expect(disguise.segments.find((entry) => entry.bone === selectedBone)?.form.length).toBeCloseTo(
+      finalLeftLength,
+    );
+    expect(disguise.segments.find((entry) => entry.bone === oppositeBone)?.form.length).toBeCloseTo(
+      mirroredLength,
+    );
+  });
+
   it("draws a grip far smaller than the body it is attached to", () => {
     const ring = harness.radiusOf("forge_handle_ring_head");
     const grip = harness.radiusOf("forge_handle_grip_head");
@@ -344,6 +386,23 @@ describe("running the Mimic about the room", () => {
     walk(90);
     const moving = walker.controller.disguise;
 
+    const travel = new THREE.Vector3(
+      moving.root.position[0] - start[0],
+      0,
+      moving.root.position[2] - start[2],
+    ).normalize();
+    const rotation = new THREE.Quaternion(...moving.root.rotation);
+    const authoredFace = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation).setY(0).normalize();
+
+    expect(authoredFace.dot(travel)).toBeGreaterThan(0.9);
+  });
+
+  it("finishes a 180-degree facing correction before the run reads backward", () => {
+    const start = walker.controller.disguise.root.position;
+
+    walker.key("keydown", "w");
+    walk(8);
+    const moving = walker.controller.disguise;
     const travel = new THREE.Vector3(
       moving.root.position[0] - start[0],
       0,

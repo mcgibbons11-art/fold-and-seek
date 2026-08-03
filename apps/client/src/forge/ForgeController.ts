@@ -200,9 +200,13 @@ export const FORGE_QUICK_PANELS: readonly {
   { label: "Tile", values: { deployed: 0.72, width: 0.68, height: 0.68, extension: 0, hingeAngle: 0 }, profileId: "rectangle" },
 ];
 
-/** The creature snaps toward travel during Forge, but only quietly pivots while hiding. */
-const FORGE_TURN_RATE_RAD_PER_SECOND = 8.5;
-const CREEP_TURN_RATE_RAD_PER_SECOND = 1.15;
+/**
+ * Facing is a control response, not an inertial animation. The old hunt rate
+ * took nearly three seconds to reverse 180 degrees, leaving the Mimic visibly
+ * running backward. The gait still supplies weight; steering answers quickly.
+ */
+const FORGE_TURN_RATE_RAD_PER_SECOND = 28;
+const CREEP_TURN_RATE_RAD_PER_SECOND = 22;
 
 /** Preview cameras of bible §7.6. `inspector` is held, the rest toggle. */
 export type ForgePreviewMode = "none" | "inspector" | "doorway";
@@ -1491,6 +1495,12 @@ export class ForgeController {
   }
 
   setMirror(mirror: boolean): void {
+    if (this.mirror === mirror) return;
+    // Shape and panel gestures capture their mirror partner when the gesture
+    // begins. Close the current one before changing symmetry, or turning Mirror
+    // on keeps an old "no partner" edit alive (and turning it off keeps copying
+    // to the old partner), making the toggle appear to do nothing.
+    this.commitEdits();
     this.mirror = mirror;
     this.status = mirror
       ? "Mirror on: limb posing, shaping, panels, materials, and paint repeat on the other side."

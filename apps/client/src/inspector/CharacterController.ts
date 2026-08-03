@@ -808,8 +808,8 @@ export class CharacterController {
   }
 
   /**
-   * Advances the climb in progress. A ladder only moves while forward is held,
-   * so letting go hangs the player where they are. A mantle is committed once
+   * Advances the climb in progress. Releasing below a ladder lip lets go;
+   * releasing after clearing it completes the dismount. A mantle is committed once
    * it starts, matching the authored vault of §26.4.
    */
   private advanceClimb(dtSeconds: number, input: CharacterMoveInput): void {
@@ -818,7 +818,20 @@ export class CharacterController {
 
     this.grounded = false;
     this.speed = 0;
-    if (climb.link.kind === "ladder" && input.forward <= 0) return;
+    if (climb.link.kind === "ladder" && input.forward <= 0) {
+      if (climb.ascending && climb.progress >= MANTLE_RISE_FRACTION) {
+        this.finishClimb(climb);
+      } else {
+        // Let go cleanly. Gravity takes over on the following frame from the
+        // exact point reached instead of an invisible climb state pinning the
+        // body in mid-air until Forward happens to be pressed again.
+        this.climb = null;
+        this.surfaceId = null;
+        this.verticalVelocity = 0;
+        this.lastResolution = "idle";
+      }
+      return;
+    }
 
     climb.progress = Math.min(1, climb.progress + dtSeconds / climb.durationSeconds);
 
@@ -835,6 +848,10 @@ export class CharacterController {
 
     if (climb.progress < 1) return;
 
+    this.finishClimb(climb);
+  }
+
+  private finishClimb(climb: MutableClimb): void {
     this.position.x = climb.endX;
     this.position.y = climb.endY;
     this.position.z = climb.endZ;

@@ -1299,13 +1299,33 @@ export class PortalsNetAdapter implements NetworkAdapter {
         if (fromSeat !== undefined) this.applyCommandFrom(fromSeat, envelope.cmd);
         return;
 
-      case "ev":
+      case "ev": {
         if (fromSeat !== this.authoritySeatId) {
           console.warn("[portals] ignored events from non-authority", fromId);
           return;
         }
+        // The durable room snapshot is deliberately lower-frequency than the
+        // event stream. Apply ready events to the cached public roster at once,
+        // so a guest never sees its button reset while its own roster pip still
+        // claims the previous round is ready.
+        let nextPublicState = this.sync.publicState;
+        for (const event of envelope.events) {
+          if (event.type !== "player_ready_changed" || nextPublicState === null) continue;
+          nextPublicState = {
+            ...nextPublicState,
+            players: nextPublicState.players.map((player) =>
+              player.publicPlayerId === event.publicPlayerId
+                ? { ...player, ready: event.ready }
+                : player,
+            ),
+          };
+        }
+        if (nextPublicState !== this.sync.publicState) {
+          this.setSync(nextPublicState, this.sync.privateState);
+        }
         for (const event of envelope.events) this.eventSignal.emit(event);
         return;
+      }
 
       case "pev":
         if (fromSeat !== this.authoritySeatId || envelope.to !== this.selfSeatId) return;
@@ -2057,6 +2077,28 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
     this.botSeats.observe(output.public);
     this.publicOutbox.push(...output.public);
+    // Ready can also change because the simulation entered Loading or returned
+    // to Lobby after a failed rematch. Those are host timer transitions, not a
+    // command from the affected guest, so `applyCommandFrom` has no sender to
+    // refresh. Pair every public ready change with that player's private slice;
+    // otherwise the roster resets while the guest's own button stays stuck on
+    // the previous round's `ready: true` forever.
+    const readyChanged = new Set(
+      output.public
+        .filter((event) => event.type === "player_ready_changed")
+        .map((event) => event.publicPlayerId),
+    );
+    if (readyChanged.size > 0) {
+      for (const player of this.sim?.getPublicState().players ?? []) {
+        if (
+          readyChanged.has(player.publicPlayerId) &&
+          player.seatId !== this.selfSeatId &&
+          !isBotSeat(player.seatId)
+        ) {
+          this.pendingSync.add(player.seatId);
+        }
+      }
+    }
     for (const [seatId, events] of output.private) {
       if (seatId === this.selfSeatId || events.length === 0) continue;
       // A bot's private stream is read by the driver straight off the

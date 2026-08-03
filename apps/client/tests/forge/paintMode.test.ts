@@ -276,6 +276,40 @@ describe("paint in the forge history", () => {
     expect(harness.controller.paint.layer.strokeLog.every((stroke) => !stroke.continued)).toBe(true);
   }
 
+  it("paints only the newest cursor position once per rendered frame", () => {
+    harness.controller.setToolMode("paint");
+    const at = harness.pointOnBody();
+    expect(at).not.toBeNull();
+    const [x, y] = at ?? [0, 0];
+    const make = (clientX: number, clientY: number) => ({
+      pointerId: 11,
+      button: 0,
+      clientX,
+      clientY,
+      target: harness.canvas,
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+
+    harness.canvasListeners.dispatch("pointerdown", make(x, y));
+    expect(harness.controller.paint.layer.strokeCount).toBe(1);
+
+    // A high-polling-rate mouse may deliver many moves before the next frame.
+    // They update the cursor immediately, but only the newest one paints.
+    harness.windowListeners.dispatch("pointermove", make(x + 2, y + 1));
+    harness.windowListeners.dispatch("pointermove", make(x + 4, y + 2));
+    harness.windowListeners.dispatch("pointermove", make(x + 6, y + 3));
+    expect(harness.controller.paint.layer.strokeCount).toBe(1);
+
+    harness.controller.update();
+    expect(harness.controller.paint.layer.strokeCount).toBe(2);
+    harness.controller.update();
+    expect(harness.controller.paint.layer.strokeCount).toBe(2);
+
+    harness.windowListeners.dispatch("pointerup", make(x + 6, y + 3));
+    expect(harness.controller.paint.layer.strokeCount).toBe(2);
+  });
+
   it("offers an undo for the drag rather than for the pose before it", () => {
     // The regression: with paint outside the history, this undo reverted the
     // last POSE command and left every stamp on the body.

@@ -172,6 +172,7 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
 
     update(): void {
       binder.sync();
+      brush.update();
       layer.flush();
     },
 

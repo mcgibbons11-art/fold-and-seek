@@ -9,9 +9,11 @@ import { normalizeTargetUv, paintTargetOfObject } from "./paintTargets";
  * arrives with the UV that `writeSegmentShell` wrote, so a stamp lands where the
  * player pointed without any projection of our own.
  *
- * Samples are spaced in screen coordinates so quick cursor motion cannot leave
- * gaps. Each sample remains an independent circular dab rather than a UV-space
- * streak, which keeps the spray under the cursor across shell seams.
+ * Pointer events only queue the latest real cursor position. The Forge consumes
+ * that position once per rendered frame, so a fast mouse cannot flood the CPU
+ * atlas with hundreds of synthetic samples. Every sample remains an independent
+ * circular dab rather than a UV-space streak, which keeps the spray exactly
+ * where the player pointed across shell seams.
  */
 
 export interface PaintBrushOptions {
@@ -38,9 +40,6 @@ export interface PaintBrushOptions {
   readonly expandStroke?: (stroke: PaintStroke) => readonly PaintStroke[];
 }
 
-/** Maximum screen travel between raycasts while spraying. */
-const SCREEN_SAMPLE_SPACING_PX = 5;
-
 export const MIN_BRUSH_RADIUS = 0.025;
 export const MAX_BRUSH_RADIUS = 0.45;
 export const DEFAULT_BRUSH_RADIUS = 0.12;
@@ -60,8 +59,9 @@ export class PaintBrushController {
   private active = false;
   private detach: (() => void) | null = null;
   private pointerId = -1;
-  private lastClientX = 0;
-  private lastClientY = 0;
+  private pendingClientX = 0;
+  private pendingClientY = 0;
+  private hasPendingSample = false;
   private readonly cursor: HTMLDivElement | null;
 
   constructor(options: PaintBrushOptions) {
@@ -143,22 +143,25 @@ export class PaintBrushController {
       event.preventDefault();
       this.pointerId = event.pointerId;
       this.options.canvas.setPointerCapture(event.pointerId);
-      this.lastClientX = event.clientX;
-      this.lastClientY = event.clientY;
+      this.hasPendingSample = false;
       this.options.onStrokeStart?.();
       this.emit(hit.target, hit.u, hit.v, false);
     };
 
     const onPointerMove = (event: PointerEvent): void => {
       if (event.pointerId !== this.pointerId) return;
-      const coalesced =
-        typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [];
-      const samples = coalesced.length > 0 ? coalesced : [event];
-      for (const sample of samples) this.sprayTo(sample.clientX, sample.clientY);
+      // The event itself is the browser's newest pointer position. Replaying
+      // coalesced history here made one frame perform dozens of raycasts and
+      // software atlas stamps, which is exactly the lag a spray tool must avoid.
+      this.pendingClientX = event.clientX;
+      this.pendingClientY = event.clientY;
+      this.hasPendingSample = true;
+      this.positionCursor(event.clientX, event.clientY);
     };
 
     const onPointerUp = (event: PointerEvent): void => {
       if (event.pointerId !== this.pointerId) return;
+      this.flushPendingSample();
       if (this.options.canvas.hasPointerCapture(event.pointerId)) {
         this.options.canvas.releasePointerCapture(event.pointerId);
       }
@@ -194,6 +197,7 @@ export class PaintBrushController {
     if (!this.active) return;
     this.active = false;
     const wasPainting = this.pointerId >= 0;
+    if (wasPainting) this.flushPendingSample();
     if (wasPainting && this.options.canvas.hasPointerCapture(this.pointerId)) {
       this.options.canvas.releasePointerCapture(this.pointerId);
     }
@@ -209,6 +213,11 @@ export class PaintBrushController {
   dispose(): void {
     this.deactivate();
     this.cursor?.remove();
+  }
+
+  /** Commits no more than the newest queued cursor position each render frame. */
+  update(): void {
+    if (this.pointerId >= 0) this.flushPendingSample();
   }
 
   /** Paints one stamp at a screen point, for a caller driving this by hand. */
@@ -258,25 +267,12 @@ export class PaintBrushController {
     return null;
   }
 
-  /**
-   * Raycasts along the actual screen path and lays independent circular dabs.
-   * UV interpolation made a short cursor move become a long streak whenever it
-   * crossed a shell seam or a stretched chart; screen-space resampling follows
-   * what the player pointed at instead.
-   */
-  private sprayTo(clientX: number, clientY: number): void {
-    const dx = clientX - this.lastClientX;
-    const dy = clientY - this.lastClientY;
-    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / SCREEN_SAMPLE_SPACING_PX));
-    for (let step = 1; step <= steps; step += 1) {
-      const t = step / steps;
-      this.setPointerFromClient(this.lastClientX + dx * t, this.lastClientY + dy * t);
-      const hit = this.pick();
-      if (hit !== null) this.emit(hit.target, hit.u, hit.v, false);
-    }
-    this.lastClientX = clientX;
-    this.lastClientY = clientY;
-    this.positionCursor(clientX, clientY);
+  private flushPendingSample(): void {
+    if (!this.hasPendingSample) return;
+    this.hasPendingSample = false;
+    this.setPointerFromClient(this.pendingClientX, this.pendingClientY);
+    const hit = this.pick();
+    if (hit !== null) this.emit(hit.target, hit.u, hit.v, false);
   }
 
   private emit(target: number, u: number, v: number, continued: boolean): PaintStroke {
