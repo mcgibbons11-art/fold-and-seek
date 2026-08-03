@@ -324,11 +324,11 @@ export function LobbyHud({
             Blend into the Curiosity Shop
           </h3>
           <p style={{ margin: 0, maxWidth: 520, opacity: 0.74, lineHeight: 1.7 }}>
-            Mimics forge a convincing object and hide in plain sight. Inspectors memorize the untouched room, then spend limited warrants finding what changed.
+            Mimics forge a convincing object and choose a hiding place. Inspectors wait in Security, then spend limited warrants finding the players.
           </p>
           <div style={{ margin: "auto 0", display: "grid", gap: 10, padding: "24px 0" }}>
             {[
-              ["01", "Memorize", "Inspectors study the untouched shop."],
+              ["01", "Get ready", "Inspectors can move around the Security Office."],
               ["02", "Forge", "Mimics shape, panel, pose, and paint."],
               ["03", "Hunt", "Every wrong accusation burns a warrant."],
             ].map(([number, title, copy]) => (

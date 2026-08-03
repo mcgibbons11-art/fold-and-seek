@@ -150,6 +150,8 @@ export interface RoomBrowserProps {
   readonly onAcceptRequest?: (connectionId: string) => void;
   readonly onDeclineRequest?: (connectionId: string) => void;
   readonly onCancelRequest?: () => void;
+  /** Retires this client's advertised room and declines any waiting guests. */
+  readonly onCancelHostedRoom?: () => void;
   /** Returns to the main menu and closes any room/request owned by this client. */
   readonly onBack?: () => void;
 }
@@ -168,6 +170,7 @@ export function RoomBrowser({
   onAcceptRequest,
   onDeclineRequest,
   onCancelRequest,
+  onCancelHostedRoom,
   onBack,
 }: RoomBrowserProps): ReactElement {
   const [name, setName] = useState("");
@@ -406,6 +409,20 @@ export function RoomBrowser({
                         </div>
                       ))
                     )}
+                    <button
+                      type="button"
+                      className={PRESS_CLASS}
+                      style={{
+                        ...smallButtonStyle,
+                        width: "100%",
+                        marginTop: 14,
+                        borderColor: "rgba(205, 93, 72, 0.7)",
+                        color: "#ffd4ca",
+                      }}
+                      onClick={onCancelHostedRoom}
+                    >
+                      Cancel hosted room
+                    </button>
                   </div>
                 ) : outgoingRequest?.roomCode === selected.code ? (
                   <div style={{ ...plate(true), borderRadius: 8, padding: 14, marginTop: 24 }}>

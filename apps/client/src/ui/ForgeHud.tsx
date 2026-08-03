@@ -609,6 +609,45 @@ export function ForgeToolPanels({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10, width }}>
+      <div
+        {...hudProps}
+        role="group"
+        aria-label="Forge tools"
+        style={{ ...cardStyle, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}
+      >
+        {FORGE_TOOL_MODES.map((mode) => (
+          <button
+            key={mode}
+            type="button"
+            aria-pressed={state.mode === mode}
+            className={PRESS_CLASS}
+            style={{
+              ...(state.mode === mode ? activeButtonStyle : buttonStyle),
+              marginBottom: 0,
+              padding: "7px 8px",
+            }}
+            onClick={() => controller.setToolMode(mode)}
+          >
+            <Keycap>{TOOL_KEYS[mode]}</Keycap>
+            {TOOL_LABELS[mode]}
+          </button>
+        ))}
+        <button
+          type="button"
+          aria-pressed={state.mirror}
+          className={PRESS_CLASS}
+          style={{
+            ...(state.mirror ? activeButtonStyle : buttonStyle),
+            marginBottom: 0,
+            padding: "7px 8px",
+          }}
+          onClick={() => controller.setMirror(!state.mirror)}
+        >
+          <Keycap>M</Keycap>
+          Mirror
+        </button>
+      </div>
+
       {state.mode === "paint" ? null : (
         <div {...hudProps} style={cardStyle}>
           <ContextPanel controller={controller} state={state} onCommit={commit} />

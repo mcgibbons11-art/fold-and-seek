@@ -161,7 +161,6 @@ describe("RoundDirector", () => {
       MatchPhase.Loading,
       MatchPhase.MapIntro,
       MatchPhase.RoleReveal,
-      MatchPhase.BaselineScan,
       MatchPhase.Forge,
       MatchPhase.Locking,
       MatchPhase.InspectionIntro,
@@ -189,7 +188,7 @@ describe("RoundDirector", () => {
     fixture.runTo(MatchPhase.Results, 200);
     for (const state of fixture.states) labelled.set(state.phase, state.phaseLabel);
 
-    expect(labelled.get(MatchPhase.BaselineScan)).toBe("MEMORIZE THE ROOM");
+    expect(labelled.has(MatchPhase.BaselineScan)).toBe(false);
     expect(labelled.get(MatchPhase.Forge)).toBe("FOLD");
     expect(labelled.get(MatchPhase.Locking)).toBe("LOCKING THE LIES");
     expect(labelled.get(MatchPhase.InspectionIntro)).toBe("INSPECTION BEGINS");

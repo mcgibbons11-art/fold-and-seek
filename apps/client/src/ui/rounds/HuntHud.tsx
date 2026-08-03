@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { useEffect, useState, type ReactElement, type ReactNode } from "react";
 
 import type { ForgeController, ForgeHudState, ForgeToolMode } from "../../forge/ForgeController";
 import { POINTER_LOCK_BODY, POINTER_LOCK_TITLE } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { ForgeToolPanels } from "../ForgeHud";
 import { ActionRail } from "./ActionRail";
-import { columnDensityFor, forgePanelsOpenByDefault, type ColumnDensity } from "./columnFit";
+import { columnDensityFor, type ColumnDensity } from "./columnFit";
 import { ModeNote } from "./ControlStrip";
 import { HiderHud } from "./HiderHud";
 import {
@@ -68,27 +68,15 @@ function useForgeState(controller: ForgeController | null): ForgeHudState | null
  * column cannot hold them whole, and unfold on any deliberate change of tool, so
  * a hider who presses a tool key is never left pressing it at a folded panel.
  */
-function useForgePanelsOpen(columnHeight: number, mode: ForgeToolMode | null): {
+function useForgePanelsOpen(_columnHeight: number, _mode: ForgeToolMode | null): {
   readonly open: boolean;
   toggle: () => void;
 } {
-  const [open, setOpen] = useState(() => forgePanelsOpenByDefault(columnHeight));
-  const lastMode = useRef(mode);
-
-  useEffect(() => {
-    setOpen(forgePanelsOpenByDefault(columnHeight));
-  }, [columnHeight]);
-
-  useEffect(() => {
-    if (mode !== null && lastMode.current !== null && mode !== lastMode.current) setOpen(true);
-    lastMode.current = mode;
-  }, [mode]);
-
+  // Hunt authoring is a persistent control panel. It cannot disappear because
+  // the viewport is short or because a disclosure was clicked accidentally.
   return {
-    open,
-    toggle: () => {
-      setOpen((current) => !current);
-    },
+    open: true,
+    toggle: () => undefined,
   };
 }
 

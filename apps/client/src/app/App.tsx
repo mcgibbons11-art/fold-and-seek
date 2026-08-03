@@ -967,6 +967,12 @@ export function App(): ReactElement {
           onCancelRequest: () => {
             lobby.adapter.cancelRoomRequest();
           },
+          onCancelHostedRoom: () => {
+            lobby.adapter.leaveRoom();
+            setRoomRequests([]);
+            setOutgoingRoomRequest(null);
+            setRoundError(null);
+          },
           onBack: () => {
             lobby.adapter.cancelRoomRequest();
             lobby.adapter.leaveRoom();

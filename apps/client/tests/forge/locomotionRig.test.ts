@@ -154,12 +154,13 @@ describe("the walking gait", () => {
     );
   });
 
-  it("breathes while it stands, so a standing creature is not a prop", () => {
+  it("holds the authored pose perfectly still while hiding", () => {
     const rig = new LocomotionRig();
-    const breath = excursion(rig, STILL, WORLD_SCALE.playerHeight, (r) => r.angles.torsoPitch);
-    expect(breath).toBeGreaterThan(0);
-    // And it is a breath rather than a bow: under a degree of travel.
-    expect(breath).toBeLessThan(4 * DEG_TO_RAD);
+    const torsoMotion = excursion(rig, STILL, WORLD_SCALE.playerHeight, (r) => r.angles.torsoPitch);
+    const armMotion = excursion(rig, STILL, WORLD_SCALE.playerHeight, (r) => r.angles.armL);
+    expect(torsoMotion).toBe(0);
+    expect(armMotion).toBe(0);
+    expect(rig.neutral).toBe(true);
   });
 });
 

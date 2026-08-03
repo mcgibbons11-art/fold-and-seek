@@ -232,6 +232,8 @@ export class CharacterController {
    * player between the two surfaces forever.
    */
   private climbLatch: ClimbLink | null = null;
+  /** Procedural links are rebuilt on every probe, so identity cannot latch them. */
+  private solidClimbRequiresJumpRelease = false;
 
   constructor(navData: NavData, speedFor: SpeedForInput) {
     this.navData = navData;
@@ -298,6 +300,7 @@ export class CharacterController {
     this.hopBaseY = null;
     this.climb = null;
     this.climbLatch = null;
+    this.solidClimbRequiresJumpRelease = false;
     this.lastResolution = "idle";
   }
 
@@ -322,6 +325,7 @@ export class CharacterController {
 
     this.justLanded = false;
     this.sinceJumpRequest = input.jump ? 0 : this.sinceJumpRequest + dtSeconds;
+    if (!input.jump) this.solidClimbRequiresJumpRelease = false;
 
     this.yaw = wrapAngle(this.yaw + input.lookYawDelta);
     this.pitch = clamp(this.pitch + input.lookPitchDelta, -MAX_PITCH_RAD, MAX_PITCH_RAD);
@@ -339,7 +343,11 @@ export class CharacterController {
       // but an explicit forward+jump still takes any solid face. Its climb is
       // slowed to the creep cap below, so the eventual landing remains legal.
       const startedSolidClimb =
-        this.grounded && input.forward > 0 && input.jump && this.tryStartSolidClimbForHeading();
+        this.grounded &&
+        input.forward > 0 &&
+        input.jump &&
+        !this.solidClimbRequiresJumpRelease &&
+        this.tryStartSolidClimbForHeading();
       if (startedSolidClimb) {
         this.consumeJump();
         return;
@@ -350,7 +358,11 @@ export class CharacterController {
       // It is checked before launching the hop; normal walking into that same
       // face still stops or slides exactly as ordinary collision requires.
       const startedSolidClimb =
-        this.grounded && input.forward > 0 && input.jump && this.tryStartSolidClimbForHeading();
+        this.grounded &&
+        input.forward > 0 &&
+        input.jump &&
+        !this.solidClimbRequiresJumpRelease &&
+        this.tryStartSolidClimbForHeading();
       if (startedSolidClimb) {
         this.consumeJump();
         return;
@@ -859,6 +871,7 @@ export class CharacterController {
     this.grounded = true;
     this.verticalVelocity = 0;
     this.climbLatch = climb.link;
+    if (climb.link.to.startsWith("solid_top_")) this.solidClimbRequiresJumpRelease = true;
     this.climb = null;
   }
 

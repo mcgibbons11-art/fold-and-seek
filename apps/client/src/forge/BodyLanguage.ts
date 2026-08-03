@@ -54,9 +54,7 @@ const TURN_RATE_FOR_FULL_BANK = 3;
  * and the rate blended by speed, so there is no seam where one hands over to the
  * other.
  */
-const IDLE_SWAY_RAD = 0.9 * DEG;
 const RUN_SWAY_RAD = 2.6 * DEG;
-const IDLE_SWAY_RATE = 1.5;
 const RUN_SWAY_RATE = 7.5;
 
 /** Creeping slows the gait as well as shortening it: the hunt is not a walk. */
@@ -258,9 +256,10 @@ export class BodyLanguage {
     const bank = this.bank.step(dtSeconds, bankTarget, POSTURE_OMEGA);
 
     const gaitScale = sample.creeping ? CREEP_GAIT_SCALE : 1;
-    this.swayPhase +=
-      dtSeconds * gaitScale * (IDLE_SWAY_RATE + speed * (RUN_SWAY_RATE - IDLE_SWAY_RATE));
-    const swayAmplitude = (IDLE_SWAY_RAD + speed * (RUN_SWAY_RAD - IDLE_SWAY_RAD)) * gait;
+    // Automatic idle motion gives the Inspector a free tell. Only movement
+    // drives the sway, so a stationary disguise stays visually motionless.
+    this.swayPhase += dtSeconds * gaitScale * RUN_SWAY_RATE * speed;
+    const swayAmplitude = RUN_SWAY_RAD * speed * gait;
     const sway = Math.sin(this.swayPhase) * swayAmplitude * gaitScale;
 
     if (sample.landingSpeed > 0) this.dip.push(this.landingImpulse(sample.landingSpeed));

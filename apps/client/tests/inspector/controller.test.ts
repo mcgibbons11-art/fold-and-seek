@@ -233,6 +233,21 @@ describe("InspectorController climbing", () => {
     expect(controller.surfaceId).toBe("solid_top_0");
   });
 
+  it("stays out of climb mode after a procedural top-out until Jump is released", () => {
+    const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.78, 0);
+    walkUntil(
+      controller,
+      { forward: 1, jump: true },
+      (current) => current.surfaceId === "solid_top_0" && current.climbState === null,
+    );
+
+    walk(controller, 120, { forward: 1, jump: true });
+    expect(controller.climbState).toBeNull();
+    // Forward remains live after the dismount; the player walks off the far
+    // side rather than being pinned to the lip in an invisible climb state.
+    expect(controller.position.y).toBeLessThan(WALL.max.y);
+  });
+
   it("mantles from the floor onto the table and reports progress on the way", () => {
     const controller = spawned(testNavData(), YAW_TOWARD_TABLE, -0.9, 0);
     walk(controller, 1, { forward: 1 });

@@ -14,10 +14,11 @@ import {
   type InspectorSystem,
 } from "../inspector";
 import { DEFAULT_LOOK_SENSITIVITY } from "../inspector/InspectorInput";
-import type { AABB } from "../inspector/navData";
+import { INSPECTOR_RADIUS_M, type AABB } from "../inspector/navData";
 import { MIMIC_NAV_DATA, NAV_DATA } from "../world/maps/nav";
 import { OFFICE_DOOR_NAME } from "../world/maps/props";
 import { CURIOSITY_SHOP_OBJECTS } from "../world/maps/registry";
+import { SECURITY_OFFICE_BOUNDS } from "../world/maps/zones";
 import { encodeDisguiseState } from "../mimic/poseWire";
 import type {
   InspectorCameraSample,
@@ -606,7 +607,12 @@ export class RoundSession {
       if (phase === MatchPhase.Forge || phase === MatchPhase.Locking) return "forge";
       if (INSPECTION_PHASES.has(phase)) return "forge";
     }
-    if (self.role === "inspector" && INSPECTION_PHASES.has(phase)) return "inspect";
+    if (
+      self.role === "inspector" &&
+      (OFFICE_VIGIL_PHASES.has(phase) || INSPECTION_PHASES.has(phase))
+    ) {
+      return "inspect";
+    }
     return "survey";
   }
 
@@ -844,6 +850,21 @@ export class RoundSession {
     inspector.enabled = state.phase !== MatchPhase.InspectionIntro;
     this.loadWarrants(inspector, state);
     inspector.update(dtMs, nowMs);
+    if (OFFICE_VIGIL_PHASES.has(state.phase)) {
+      // The pre-game Inspector can walk and look normally, but the shut door is
+      // also a gameplay boundary: never let collision interpolation squeeze the
+      // capsule through it before the hunt opens.
+      const position = inspector.controller.position;
+      position.x = Math.min(
+        SECURITY_OFFICE_BOUNDS.max.x - INSPECTOR_RADIUS_M,
+        Math.max(SECURITY_OFFICE_BOUNDS.min.x + INSPECTOR_RADIUS_M, position.x),
+      );
+      position.z = Math.min(
+        SECURITY_OFFICE_BOUNDS.max.z - INSPECTOR_RADIUS_M,
+        Math.max(SECURITY_OFFICE_BOUNDS.min.z + INSPECTOR_RADIUS_M, position.z),
+      );
+      inspector.root.position.set(position.x, position.y, position.z);
+    }
     // The Inspector never creeps: the cap belongs to a disguised hider.
     this.footsteps.update(dtMs, inspector.controller, false);
     this.stepGun();

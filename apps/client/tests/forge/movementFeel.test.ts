@@ -296,10 +296,9 @@ describe("the weight of a landing", () => {
     }
     expect(body.posture.leanRad).toBe(0);
     expect(body.atRest).toBe(true);
-    // Resting is not the same as neutral: a creature that stops breathing reads
-    // as a prop, so the sway carries on under a body that has stopped walking.
-    expect(body.posture.bankRad).not.toBe(0);
-    expect(body.neutral).toBe(false);
+    // Standing still is the disguise. No automatic sway may reveal the Hider.
+    expect(body.posture.bankRad).toBe(0);
+    expect(body.neutral).toBe(true);
     body.reset();
     expect(body.neutral).toBe(true);
   });

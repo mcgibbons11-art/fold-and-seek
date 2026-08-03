@@ -220,6 +220,40 @@ describe("the room browser", () => {
     expect(buttonIn(pending).disabled).toBe(true);
   });
 
+  it("lets the host retire their advertised room without leaving matchmaking", async () => {
+    const host = await browsingClient("a", "Ada");
+    const opened = host.createRoom("The Attic");
+    if (!opened.ok) throw new Error(opened.reason);
+    advance();
+    let cancellations = 0;
+    act(() => {
+      root.render(
+        <RoomBrowser
+          rooms={host.listRooms()}
+          currentCode={host.getRoomCode()}
+          onJoin={() => undefined}
+          onCreate={() => undefined}
+          onQuickJoin={() => undefined}
+          onCancelHostedRoom={() => {
+            cancellations += 1;
+            host.leaveRoom();
+          }}
+        />,
+      );
+    });
+
+    const cancel = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Cancel hosted room",
+    );
+    if (cancel === undefined) throw new Error("host cancellation control is missing");
+    click(cancel);
+    advance();
+
+    expect(cancellations).toBe(1);
+    expect(host.getRoomCode()).toBeNull();
+    expect(host.listRooms()).toHaveLength(0);
+  });
+
   it("refuses a full room and says the session is out of slots", async () => {
     const first = await browsingClient("a", "Ada");
     const second = await browsingClient("b", "Bex");

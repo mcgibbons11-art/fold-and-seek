@@ -317,7 +317,7 @@ describe("hunt HUD region ownership", () => {
     expect(scrollers[0]).toBe(column);
   });
 
-  it("opens a hider's tool panels where they fit, folds them only at 720p", () => {
+  it("keeps a hider's tool panel open at every supported viewport", () => {
     // USER DIRECTIVE (2026-08-02): the fold tools must never READ as taken
     // away mid-round, so the panels start open wherever the column holds them
     // whole. At 720p they would open onto a scrollbar, so the critic's folded
@@ -349,11 +349,11 @@ describe("hunt HUD region ownership", () => {
     Object.defineProperty(window, "innerWidth", { value: restore.width, configurable: true });
     Object.defineProperty(window, "innerHeight", { value: restore.height, configurable: true });
 
-    expect(folded["1280x720"]).toBe("folded");
+    expect(folded["1280x720"]).toBe("open");
     expect(folded["1920x1080"]).toBe("open");
   });
 
-  it("opens the folded panels when the header is pressed", () => {
+  it("does not let the persistent panel be collapsed accidentally", () => {
     Object.defineProperty(window, "innerHeight", { value: 720, configurable: true });
     Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
     render(
@@ -371,8 +371,8 @@ describe("hunt HUD region ownership", () => {
       window.dispatchEvent(new Event("resize"));
     });
     const wrapper = container.querySelector("[data-forge-panels]");
-    expect(wrapper?.getAttribute("data-forge-panels")).toBe("folded");
-    expect(textOf("leftColumn")).not.toContain("Starter arrangements");
+    expect(wrapper?.getAttribute("data-forge-panels")).toBe("open");
+    expect(textOf("leftColumn")).toContain("Starter arrangements");
 
     const header = wrapper?.querySelector("button");
     act(() => {
@@ -403,7 +403,7 @@ describe("hunt HUD region ownership", () => {
     });
     expect(
       container.querySelector("[data-forge-panels]")?.getAttribute("data-forge-panels"),
-    ).toBe("folded");
+    ).toBe("open");
 
     render(<HuntHud {...props} forge={stubForge("shape")} />);
     expect(

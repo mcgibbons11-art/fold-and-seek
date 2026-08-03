@@ -128,10 +128,6 @@ const SQUASH_MAX_SCALE = 2;
 const SQUASH_TORSO_SHARE = 0.28;
 
 /** The breath a standing creature takes, so it never reads as a prop. */
-const BREATH_RAD = 0.75 * DEG_TO_RAD;
-const BREATH_ARM_RAD = 1.3 * DEG_TO_RAD;
-const BREATH_RATE = 1.15;
-
 /** How long the gait, the air tuck and the climb take to blend in and out. */
 const BLEND_SECONDS = 0.11;
 
@@ -266,7 +262,6 @@ export class LocomotionRig {
 
   /** Ground covered since the last footfall, which is what places the step. */
   private stridePhase = 0;
-  private breathPhase = 0;
   private wasAirborne = false;
   /** Seconds left in the launch window, counted down while the body is rising. */
   private launchLeft = 0;
@@ -315,7 +310,6 @@ export class LocomotionRig {
     this.creep.reset();
     this.squash.reset();
     this.stridePhase = 0;
-    this.breathPhase = 0;
     this.wasAirborne = false;
     this.launchLeft = 0;
     this.mixamo.reset();
@@ -382,7 +376,6 @@ export class LocomotionRig {
     const stepLength = FOOTFALL_DISTANCE_M / (1 + creeping * (CREEP_STEP_SHORTENING - 1));
     this.stridePhase += (Math.abs(speedMetresPerSecond) * dtSeconds * Math.PI) / stepLength;
     this.stridePhase %= Math.PI * 2;
-    this.breathPhase = (this.breathPhase + dtSeconds * BREATH_RATE) % (Math.PI * 2);
 
     const phase = this.stridePhase;
     const swing = Math.sin(phase);
@@ -462,15 +455,6 @@ export class LocomotionRig {
       a.kneeR = mix(a.kneeR, CLIMB_KNEE_RAD, climbing);
       a.sinkM = mix(a.sinkM, 0, climbing);
     }
-
-    // The breath, under whatever else is happening. It is loudest on a body
-    // standing still and never stops entirely: a creature that holds perfectly
-    // still is a prop, which is exactly what a locked disguise wants to be and
-    // what an unlocked one must not look like.
-    const breath = Math.sin(this.breathPhase) * (1 - walking * 0.7);
-    a.torsoPitch += BREATH_RAD * breath;
-    a.armL += BREATH_ARM_RAD * breath;
-    a.armR += BREATH_ARM_RAD * breath;
 
     // The head holds its heading and its horizon against the trunk under it.
     a.headTwist = -a.torsoTwist * HEAD_COUNTER_SHARE;

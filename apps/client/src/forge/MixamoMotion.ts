@@ -146,11 +146,7 @@ export class MixamoMotion {
     const climb = this.active * this.climbing;
     const jump = this.active * this.airborne * (1 - this.climbing);
     const run = this.active * this.run * (1 - this.airborne) * (1 - this.climbing);
-    const locomotion = Math.max(this.run, this.airborne, this.climbing);
-    const idle = this.active * (1 - locomotion) * 0.32;
-
     return [
-      { name: "idle", weight: idle, phase: this.elapsedSeconds },
       {
         name: "run",
         weight: run,

@@ -19,7 +19,7 @@ import type { DeceptionEventKind } from "./roundView";
 export function phaseLabel(phase: MatchPhase): string | null {
   switch (phase) {
     case MatchPhase.BaselineScan:
-      return "MEMORIZE THE ROOM";
+      return null;
     case MatchPhase.Forge:
       return "FOLD";
     case MatchPhase.Locking:
@@ -60,7 +60,7 @@ const ROLE_CARDS: Readonly<Record<PlayerRole, RoleCard>> = {
   // Revised for the hunt design: the Inspector carries a warrant gun.
   inspector: {
     title: "INSPECTOR",
-    body: "Memorize the room. Hunt the furniture that is lying. Every shot costs a warrant round.",
+    body: "Hunt the furniture that is lying. Every shot costs a warrant round.",
   },
   spectator: { title: "SPECTATOR", body: null },
 };
@@ -91,7 +91,7 @@ const ROLE_BRIEFS: Readonly<Record<PlayerRole, RoleBrief>> = {
     win: "You win by still being furniture when the clock runs out.",
   },
   inspector: {
-    goal: "Learn the room, then shoot whatever looks wrong. Each shot spends a warrant round.",
+    goal: "Patrol the Security Office until the hunt starts, then shoot whatever looks wrong.",
     win: "You win by finding every Mimic before the clock runs out.",
   },
   spectator: {
@@ -154,9 +154,9 @@ export const AMMO_READY_PROMPT = "HOLD TO FIRE";
  * "memorize the room" is only an instruction if the reason for it is on screen
  * beside the clock.
  */
-export const INSPECTOR_FORGE_LABEL = "MEMORIZE";
+export const INSPECTOR_FORGE_LABEL = "STAND BY";
 export const INSPECTOR_FORGE_GOAL =
-  "Memorize what belongs. When the hunt starts, shoot what doesn't.";
+  "Move around the Security Office. The hunt begins when the Hiders finish forging.";
 export const INSPECTOR_FORGE_PLACE = "Security Office";
 
 /**

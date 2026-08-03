@@ -1852,11 +1852,12 @@ export class MatchSimulation {
 
       case MatchPhase.RoleReveal:
         if (!expired) return false;
-        this.enterPhase(MatchPhase.BaselineScan);
+        this.enterPhase(MatchPhase.Forge);
         return true;
 
+      // Kept in the wire enum so an older snapshot can still be read, but new
+      // rounds never enter the old twelve-second memorize phase.
       case MatchPhase.BaselineScan:
-        if (!expired) return false;
         this.enterPhase(MatchPhase.Forge);
         return true;
 
