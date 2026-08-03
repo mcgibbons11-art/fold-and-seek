@@ -326,15 +326,6 @@ export function loadingLabel(label: string): string {
 }
 
 /**
- * Taking the mouse for a look around, which the browser only grants from a
- * gesture. It said "click to take the room", which reads as a game verb the
- * game does not have.
- */
-export const POINTER_LOCK_TITLE = "Click to look around";
-export const POINTER_LOCK_BODY =
-  "WASD to walk · right mouse to aim · left mouse to fire a warrant";
-
-/**
  * Body painting, said once. Three panels used to carry three wordings of it at
  * once: this is the one, and it lives on the paint panel because the panel is
  * the only one of the three that travels into the hunt with the tool.

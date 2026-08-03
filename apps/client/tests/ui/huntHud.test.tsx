@@ -602,7 +602,7 @@ describe("hunt HUD grammar", () => {
     expect(claimedRegions()).not.toContain("bottomCenter");
   });
 
-  it("replaces an Inspector's control strip with the pointer-lock prompt until the room is theirs", () => {
+  it("keeps controls out of the persistent HUD before pointer lock", () => {
     render(
       <HuntHud
         state={huntState({ role: "inspector" })}
@@ -614,8 +614,8 @@ describe("hunt HUD grammar", () => {
         onTaunt={() => undefined}
       />,
     );
-    expect(textOf("bottomCenter")).toContain("Click to look around");
-    expect(textOf("bottomCenter")).not.toContain("Walk");
+    expect(claimedRegions()).not.toContain("bottomCenter");
+    expect(container.textContent).not.toContain("WASD");
   });
 
   it("lets danger and traversal preempt a returning Hider's low-priority hint", () => {

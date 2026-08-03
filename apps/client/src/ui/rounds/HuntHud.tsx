@@ -1,7 +1,6 @@
 import { useState, type ReactElement, type ReactNode } from "react";
 
 import type { ForgeController } from "../../forge/ForgeController";
-import { POINTER_LOCK_BODY, POINTER_LOCK_TITLE } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { ForgeToolPanels } from "../ForgeHud";
 import { ActionRail } from "./ActionRail";
@@ -45,7 +44,7 @@ export interface HuntHudProps {
 }
 
 export function HuntHud(props: HuntHudProps): ReactElement {
-  const { state, gun, forge, pointerLocked, boardOpen, onToggleBoard, onTaunt } = props;
+  const { state, gun, forge, boardOpen, onToggleBoard, onTaunt } = props;
   const [actionsOpen, setActionsOpen] = useState(false);
 
   const role = state.self.role;
@@ -101,14 +100,11 @@ export function HuntHud(props: HuntHudProps): ReactElement {
         onPress={onRailPress}
       />
     ),
-    bottomCenter:
-      isInspector && !pointerLocked ? <PointerLockPrompt /> : undefined,
     center: isInspector ? <InspectorSight state={state} gun={gun} /> : undefined,
   };
 
   return <HudLayout regions={regions} mode={layoutMode} />;
 }
-
 /** Keeps the full verb/key list one deliberate click away instead of permanently covering the room. */
 function ActionsDisclosure({
   actions,
@@ -269,27 +265,3 @@ function SpectatorStatusCard({ state }: { readonly state: RoundViewState }): Rea
   );
 }
 
-/**
- * Pointer lock can only be taken from a gesture, so the Inspector is told to
- * click rather than having the browser refuse the request on their behalf. It
- * stands in for the control strip, because until the room has the mouse none of
- * those controls do anything.
- */
-function PointerLockPrompt(): ReactElement {
-  return (
-    <div
-      style={{
-        ...plate(),
-        borderRadius: 10,
-        padding: "11px 20px",
-        textAlign: "center",
-        pointerEvents: "none",
-      }}
-    >
-      <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, fontSize: 12 }}>
-        {POINTER_LOCK_TITLE}
-      </div>
-      <div style={{ marginTop: 4, opacity: 0.8 }}>{POINTER_LOCK_BODY}</div>
-    </div>
-  );
-}
