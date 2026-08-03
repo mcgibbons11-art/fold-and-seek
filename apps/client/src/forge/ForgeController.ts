@@ -223,6 +223,18 @@ export interface ForgePanelSelection {
   readonly panel: PanelState | null;
 }
 
+/** Read-only movement telemetry used by browser-level traversal checks. */
+export interface ForgeMovementDiagnostics {
+  readonly position: readonly [number, number, number];
+  /** World yaw of the Mimic's authored +Z face. */
+  readonly facingYaw: number;
+  /** World yaw the character controller is actually travelling toward. */
+  readonly travelYaw: number;
+  readonly speedFraction: number;
+  readonly climbing: boolean;
+  readonly grounded: boolean;
+}
+
 export interface ForgeHudState {
   readonly mode: ForgeToolMode;
   readonly locked: boolean;
@@ -241,6 +253,7 @@ export interface ForgeHudState {
   readonly preview: ForgePreviewMode;
   readonly silhouette: boolean;
   readonly status: string;
+  readonly movement: ForgeMovementDiagnostics | null;
   /**
    * Bumped only when something other than the player's own slider changes the
    * selected values: a different selection, an undo, a starter arrangement. The
@@ -1429,6 +1442,11 @@ export class ForgeController {
             swatchId: resolvedSwatchFor(this.state.materials, bone, DEFAULT_BODY_SWATCH_ID),
           };
     const panelState = this.selectedSocket === null ? null : this.findPanel(this.selectedSocket);
+    const rotation = this.pose.rootRotation;
+    const faceX = 2 * (rotation.x * rotation.z + rotation.w * rotation.y);
+    const faceZ = 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y);
+    const locomotion = this.locomotion;
+    const sample = locomotion?.sample;
     return {
       mode: this.mode,
       locked: this.locked,
@@ -1454,6 +1472,21 @@ export class ForgeController {
       preview: this.preview,
       silhouette: this.silhouette,
       status: this.status,
+      movement:
+        locomotion === null || sample === undefined
+          ? null
+          : {
+              position: [
+                this.pose.rootPosition.x,
+                this.pose.rootPosition.y,
+                this.pose.rootPosition.z,
+              ],
+              facingYaw: Math.atan2(-faceX, -faceZ),
+              travelYaw: sample.travelYaw,
+              speedFraction: sample.speedFraction,
+              climbing: locomotion.motion.climbState !== null,
+              grounded: locomotion.motion.grounded,
+            },
       formEpoch: this.formEpoch,
     };
   }

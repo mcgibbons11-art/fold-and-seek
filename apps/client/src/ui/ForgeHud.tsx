@@ -351,7 +351,15 @@ export function ForgeHud({
   const showContextPanel = state.mode !== "paint";
 
   return (
-    <div style={rootStyle}>
+    <div
+      style={rootStyle}
+      data-hider-position={state.movement?.position.join(",")}
+      data-hider-facing-yaw={state.movement?.facingYaw}
+      data-hider-travel-yaw={state.movement?.travelYaw}
+      data-hider-speed={state.movement?.speedFraction}
+      data-hider-climbing={state.movement?.climbing}
+      data-hider-grounded={state.movement?.grounded}
+    >
       {showHeader ? (
         <div
           {...hudProps}
@@ -608,7 +616,15 @@ export function ForgeToolPanels({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10, width }}>
+    <div
+      style={{ display: "flex", flexDirection: "column", gap: 10, width }}
+      data-hider-position={state.movement?.position.join(",")}
+      data-hider-facing-yaw={state.movement?.facingYaw}
+      data-hider-travel-yaw={state.movement?.travelYaw}
+      data-hider-speed={state.movement?.speedFraction}
+      data-hider-climbing={state.movement?.climbing}
+      data-hider-grounded={state.movement?.grounded}
+    >
       <div
         {...hudProps}
         role="group"
