@@ -1,5 +1,34 @@
 # STATUS
 
+## Matchmaking is live in the real two-player Portals editor (2026-08-02)
+
+The full redesign and gameplay pass shipped through GitHub sync at `cc0f140`,
+then the editor exposed one integration defect the fake relay could not: room
+creation still appeared to do nothing. This time the relay emitted no malformed
+envelope. The editor console instead reported that form submission was blocked
+because the hosted iframe sandbox does not grant `allow-forms`. The redesigned
+room browser had made **New room** a native HTML form submit, so the browser
+stopped the action before `PortalsNetAdapter.createRoom` was called.
+
+`d47d48d` replaces the native form with explicit click and Enter handlers and
+adds a jsdom regression that requires the browser to contain no `<form>` while
+both input paths still invoke room creation. Portals built, runtime-validated,
+and applied that exact commit successfully.
+
+**Verified live, headless, in the editor's 2p preview.** Both panes loaded the
+new fullscreen start screen and reported the Portals network available. Player
+1 opened `PLAYWRIGHT QA`; player 2 immediately rendered `1 of 2 rooms live`,
+the room code, occupancy, and an enabled Join action. Player 2 joined, both
+independent shop builds completed, and both panes converged on the same lobby
+code and two-person roster with the correct 1 Inspector / 1 Mimic role preview.
+The host alone could start. There were zero `dropped malformed message` or
+other matchmaking warnings. The only browser warnings were headless Chrome's
+expected WebGPU-adapter probe before the supported WebGL 2 fallback.
+
+Evidence is in the workspace Playwright captures:
+`../.playwright-mcp/portals-matchmaking-room-listed.png` and
+`../.playwright-mcp/portals-matchmaking-shared-lobby.png`.
+
 ## The load was waiting on 281 compiles for 13 programs (2026-08-02)
 
 **The premise this pass was handed was wrong, and finding that out was most of
