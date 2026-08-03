@@ -842,8 +842,8 @@ function cabinetPlacements(): readonly PropPlacement[] {
           zoneId: "cabinet_maze",
           position: [x + item.offset[0], item.offset[1], z],
           rotationY: (itemIndex % 4) * 0.4,
-          // Sealed behind glass: a Mimic cannot legally root here (§10.4), so
-          // the object stays in the baseline but never becomes a target.
+          // Background stock remains non-targetable so the open shelves add
+          // hiding space without flooding the Inspector's target registry.
           inspectable: false,
           swatchIds: item.swatchIds,
           focus: item.focus,

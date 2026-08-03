@@ -160,7 +160,7 @@ describe("running the Mimic during the Forge", () => {
     const root = at(start.x + 0.5, 0, start.z);
 
     // Yaw +π/2 faces -X, which is straight at the mantle's floor endpoint.
-    holdUntil(locomotion, ["w"], root, Math.PI / 2, (body) => body.y >= TABLE_TOP.bounds.max.y);
+    holdUntil(locomotion, ["w", " "], root, Math.PI / 2, (body) => body.y >= TABLE_TOP.bounds.max.y);
     expect(root.y).toBeCloseTo(TABLE_TOP.bounds.max.y, 3);
 
     // That link is the only way onto the table. Space hops, but a hop reaches
@@ -175,6 +175,7 @@ describe("running the Mimic during the Forge", () => {
     const root = at(start.x + 0.5, 0, start.z);
 
     locomotion.press("w");
+    locomotion.press(" ");
     holdUntil(
       locomotion,
       [],
@@ -201,6 +202,7 @@ describe("running the Mimic during the Forge", () => {
     const root = at(start.x + 0.5, 0, start.z);
 
     locomotion.press("w");
+    locomotion.press(" ");
     holdUntil(
       locomotion,
       [],

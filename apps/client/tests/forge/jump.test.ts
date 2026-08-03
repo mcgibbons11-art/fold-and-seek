@@ -224,15 +224,15 @@ describe("the hop", () => {
     locomotion.press(" ");
     let apexY = root.y;
     for (let frame = 0; frame < 4 / FRAME_SECONDS; frame += 1) {
-      locomotion.update(FRAME_SECONDS, Math.PI, root);
+      locomotion.update(FRAME_SECONDS, 0, root);
       apexY = Math.max(apexY, root.y);
       if (root.y >= board.bounds.max.y && locomotion.motion.climbState === null) break;
     }
     locomotion.releaseAll();
 
-    expect(apexY).toBeGreaterThan(board.bounds.max.y);
-    // The rack's frame is a taller solid than its first published board. The
-    // contextual route takes the actual solid top, not the lower nav shelf.
+    expect(apexY).toBeCloseTo(board.bounds.max.y, 5);
+    // The contextual route lands exactly on the first published shelf instead
+    // of overshooting it or embedding the body in the frame above.
     expect(root.y).toBeCloseTo(apexY, 5);
   });
 
@@ -265,20 +265,16 @@ describe("the hop", () => {
     locomotion.update(FRAME_SECONDS, 0.7, root);
     expect(locomotion.motion.climbState).toBeNull();
     expect(root.y).toBeLessThanOrEqual(topY);
-    let landedBelow = false;
-    for (let frame = 0; frame < 4 / FRAME_SECONDS; frame += 1) {
+    const landedAt = { x: root.x, z: root.z };
+    for (let frame = 0; frame < 1 / FRAME_SECONDS; frame += 1) {
       locomotion.update(FRAME_SECONDS, 0.7, root);
-      if (locomotion.motion.grounded && root.y < topY) {
-        landedBelow = true;
-        break;
-      }
     }
     expect(
       locomotion.motion.grounded,
       JSON.stringify({ root, surfaceId: locomotion.motion.surfaceId, resolution: locomotion.motion.lastResolution }),
     ).toBe(true);
-    expect(landedBelow).toBe(true);
-    expect(root.y).toBeLessThan(topY);
+    expect(Math.hypot(root.x - landedAt.x, root.z - landedAt.z)).toBeGreaterThan(0.05);
+    expect(root.y).toBeLessThanOrEqual(topY);
     locomotion.releaseAll();
   });
 

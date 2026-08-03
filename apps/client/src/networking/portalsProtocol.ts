@@ -31,6 +31,9 @@ export const PORTALS_PROTOCOL_VERSION = 2;
 
 /** Hard ceiling for one net.send payload and for one net.setState value. */
 export const MAX_PAYLOAD_BYTES = 8_192;
+/** ASCII paint-sync data per relay part, leaving ample room for the envelope. */
+export const PAINT_RELAY_PART_CHARS = 7_000;
+export const MAX_PAINT_RELAY_PARTS = 4;
 /** Relay allowance per player per second. */
 export const SEND_RATE_LIMIT = 20;
 export const RATE_WINDOW_MS = 1_000;
@@ -247,6 +250,18 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     to: connectionId,
     term: authorityTerm,
     paint: paintRelayUpdate,
+  }),
+  /** One part of a checkpoint too large for a single Portals relay message. */
+  z.object({
+    v: version,
+    t: z.literal("paint_part"),
+    r: roomCode,
+    to: connectionId,
+    term: authorityTerm,
+    revision: z.number().int().min(0),
+    index: z.number().int().min(0).max(MAX_PAINT_RELAY_PARTS - 1),
+    count: z.number().int().min(2).max(MAX_PAINT_RELAY_PARTS),
+    data: z.string().min(1).max(PAINT_RELAY_PART_CHARS),
   }),
   /** Authority asks one Mimic to recover a missed delta with a checkpoint. */
   z.object({

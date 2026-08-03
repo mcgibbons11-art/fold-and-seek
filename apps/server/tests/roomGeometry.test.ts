@@ -406,9 +406,9 @@ describe("MatchRoom close passes", () => {
 });
 
 /**
- * A disguise tucked against the west face of the cabinet island of zone E,
+ * A disguise tucked against the west face of an open bookcase in zone E,
  * whose footprint runs from x 0.65 eastward. The creep below is 0.12 m due
- * east, which walks the body into the cabinet.
+ * east, into the lowest shelf opening.
  */
 const BESIDE_CABINET: [number, number, number] = [0.6, 0.3, 0.5];
 const INTO_CABINET: [number, number, number] = [0.72, 0.3, 0.5];
@@ -433,10 +433,10 @@ describe("MatchRoom creep destinations", () => {
     return last;
   }
 
-  it("refuses a creep that walks the body into the cabinet island", () => {
+  it("accepts a creep into the open lowest bookcase shelf", () => {
     const hunt = new HuntRoom({}, BESIDE_CABINET);
 
-    expect(creepTo(hunt, INTO_CABINET)?.reason).toBe("outside_play_volume");
+    expect(creepTo(hunt, INTO_CABINET)).toBeNull();
   });
 
   it("accepts the same creep along the aisle, so it is the walls and not the speed", () => {

@@ -227,6 +227,7 @@ describe("InspectorController climbing", () => {
       const dt = 1 / hz;
       const forward = createMoveInput();
       forward.forward = 1;
+      forward.jump = true;
 
       const mantle = spawned(testNavData(), YAW_TOWARD_TABLE, -0.9, 0);
       mantle.update(dt, forward);
@@ -291,17 +292,17 @@ describe("InspectorController climbing", () => {
 
   it("mantles from the floor onto the table and reports progress on the way", () => {
     const controller = spawned(testNavData(), YAW_TOWARD_TABLE, -0.9, 0);
-    walk(controller, 1, { forward: 1 });
+    walk(controller, 1, { forward: 1, jump: true });
 
     expect(controller.climbState?.link).toBe(MANTLE_TO_TABLE);
     expect(controller.climbState?.ascending).toBe(true);
 
-    walk(controller, 2, { forward: 1 });
+    walk(controller, 2, { forward: 1, jump: true });
     const progress = controller.climbState?.progress ?? 0;
     expect(progress).toBeGreaterThan(0);
     expect(progress).toBeLessThan(1);
 
-    walkUntil(controller, { forward: 1 }, (c) => c.climbState === null && c.surfaceId === "table");
+    walkUntil(controller, { forward: 1, jump: true }, (c) => c.climbState === null && c.surfaceId === "table");
     expect(controller.surfaceId).toBe("table");
     expect(controller.grounded).toBe(true);
     expect(controller.position.x).toBeCloseTo(MANTLE_TO_TABLE.target.x, 6);
@@ -330,15 +331,15 @@ describe("InspectorController climbing", () => {
 
   it("lets go below a ladder lip instead of getting stuck in climbing mode", () => {
     const controller = spawned(testNavData(), YAW_TOWARD_WALL, -4.25, 2.5);
-    walk(controller, 1, { forward: 1 });
+    walk(controller, 1, { forward: 1, jump: true });
     expect(controller.climbState?.link).toBe(LADDER_TO_SHELF);
 
-    walk(controller, 20, { forward: 1 });
+    walk(controller, 20, { forward: 1, jump: true });
     expect(controller.position.y).toBeGreaterThan(0);
 
     const releasedAt = controller.position.y;
-    walk(controller, 1, { forward: 0 });
-    expect(controller.position.y).toBeCloseTo(releasedAt, 6);
+    walk(controller, 1, { forward: 0, jump: false });
+    expect(controller.position.y).toBeLessThan(releasedAt);
     expect(controller.climbState).toBeNull();
     expect(controller.grounded).toBe(false);
     walk(controller, 1, { forward: 0 });
@@ -386,14 +387,14 @@ describe("InspectorController climbing", () => {
 
   it("steps onto the top when forward is released after clearing the ladder lip", () => {
     const controller = spawned(testNavData(), YAW_TOWARD_WALL, -4.25, 2.5);
-    walk(controller, 1, { forward: 1 });
+    walk(controller, 1, { forward: 1, jump: true });
     walkUntil(
       controller,
-      { forward: 1 },
-      (current) => (current.climbState?.progress ?? 0) >= 0.6,
+      { forward: 1, jump: true },
+      (current) => (current.climbState?.progress ?? 0) >= 0.75,
     );
 
-    walk(controller, 1, { forward: 0 });
+    walk(controller, 1, { forward: 0, jump: false });
     expect(controller.climbState).toBeNull();
     expect(controller.surfaceId).toBe("shelf");
     expect(controller.grounded).toBe(true);
@@ -403,8 +404,8 @@ describe("InspectorController climbing", () => {
   it("takes a ladder more slowly than a mantle", () => {
     const mantle = spawned(testNavData(), YAW_TOWARD_TABLE, -0.9, 0);
     const ladder = spawned(testNavData(), YAW_TOWARD_WALL, -4.25, 2.5);
-    walk(mantle, 2, { forward: 1 });
-    walk(ladder, 2, { forward: 1 });
+    walk(mantle, 2, { forward: 1, jump: true });
+    walk(ladder, 2, { forward: 1, jump: true });
 
     const mantleRise = (mantle.climbState?.progress ?? 0) * MANTLE_TO_TABLE.target.y;
     const ladderRise = (ladder.climbState?.progress ?? 0) * LADDER_TO_SHELF.target.y;

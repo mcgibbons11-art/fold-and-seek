@@ -4,6 +4,7 @@ import {
   audioMixer,
   getAudioBusGain,
   getAudioLevels,
+  resolveStoredAudioLevels,
   setAudioBusVolume,
 } from "../../src/audio/AudioMixer";
 
@@ -25,6 +26,12 @@ describe("audio mixer", () => {
     setAudioBusVolume("music", 0.4);
     expect(getAudioLevels().music).toBe(0.4);
     expect(getAudioBusGain("music")).toBeCloseTo(0.2);
+  });
+
+  it("starts a fresh browser profile audible instead of treating a missing legacy key as zero", () => {
+    expect(resolveStoredAudioLevels(null, null).master).toBe(1);
+    expect(resolveStoredAudioLevels(undefined, undefined).master).toBe(1);
+    expect(resolveStoredAudioLevels(null, "0").master).toBe(0);
   });
 
   it("does not let low priority texture steal an important cue", () => {

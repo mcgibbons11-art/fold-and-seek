@@ -164,6 +164,25 @@ describe("Curiosity Shop walkable surfaces", () => {
       expect(surface.clearance, surface.id).toBeGreaterThan(0);
     }
   });
+
+  it("keeps all four display bookcases open and gives each three usable shelves", () => {
+    const shelves = NAV_DATA.floors.filter((surface) => /^cabinet_\d+_shelf_\d+$/.test(surface.id));
+    expect(shelves).toHaveLength(12);
+
+    for (let cabinet = 1; cabinet <= 4; cabinet += 1) {
+      const firstShelf = surfaceOrFail(`cabinet_${cabinet}_shelf_1`);
+      const x = (firstShelf.bounds.min.x + firstShelf.bounds.max.x) * 0.5;
+      const z = (firstShelf.bounds.min.z + firstShelf.bounds.max.z) * 0.5;
+      // Feet on the bookcase base, inside its former glass enclosure.
+      expect(
+        blocksCapsule(NAV_DATA.blockers, x, z, 0.16),
+        `cabinet ${cabinet} still has a sealed collision volume`,
+      ).toBe(false);
+      for (let shelf = 1; shelf <= 3; shelf += 1) {
+        expect(surfaceOrFail(`cabinet_${cabinet}_shelf_${shelf}`)).toBeDefined();
+      }
+    }
+  });
 });
 
 describe("Curiosity Shop climb links", () => {

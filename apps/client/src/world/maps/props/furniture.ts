@@ -12,7 +12,7 @@ import {
   roundedRectShape,
   superellipseColumn,
 } from "./geometry";
-import { GLASS_PANE_MATERIAL, SCREEN_MATERIAL } from "./materials";
+import { SCREEN_MATERIAL } from "./materials";
 
 /**
  * Furniture and fixtures: the objects that define zone silhouettes and most of
@@ -404,13 +404,12 @@ export function buildPlinth(ctx: PropContext, placement: PropPlacement): void {
 }
 
 /**
- * Glass display cabinet, the vocabulary of zone E. Swatch roles: 0 = carcass,
+ * Open display bookcase, the vocabulary of zone E. Swatch roles: 0 = carcass,
  * 1 = shelf. `size` is the cabinet width.
  */
 export function buildDisplayCabinet(ctx: PropContext, placement: PropPlacement): void {
   const wood = ctx.materials.get(swatchRole(placement, 0, "walnut_dark_01"));
   const shelfMaterial = ctx.materials.get(swatchRole(placement, 1, "oak_pale_03"));
-  const glass = ctx.materials.get(GLASS_PANE_MATERIAL);
   const width = quantize(placement.size ?? 1.9, 0.35);
   const depth = 0.55;
   const height = 1.95;
@@ -419,11 +418,6 @@ export function buildDisplayCabinet(ctx: PropContext, placement: PropPlacement):
   b.part(ctx.geometry.get(sized("cabinet.base", width, depth), () => chamferedSlab(width, 0.16, depth, 0.016)), wood, {
     y: 0.08,
   });
-  b.part(
-    ctx.geometry.get(sized("cabinet.crown", width, depth), () => chamferedSlab(width + 0.06, 0.09, depth + 0.06, 0.014)),
-    wood,
-    { y: height - 0.045 },
-  );
 
   const post = ctx.geometry.get(sized("cabinet.post", height), () => chamferedBox(0.06, height - 0.25, 0.06, 0.012));
   for (const dx of [-1, 1]) {
@@ -454,22 +448,6 @@ export function buildDisplayCabinet(ctx: PropContext, placement: PropPlacement):
     });
   }
 
-  const frontGlass = ctx.geometry.get(sized("cabinet.glass.front", width, height), () =>
-    new THREE.PlaneGeometry(width - 0.1, height - 0.32),
-  );
-  const sideGlass = ctx.geometry.get(sized("cabinet.glass.side", depth, height), () =>
-    new THREE.PlaneGeometry(depth - 0.1, height - 0.32),
-  );
-  b.part(frontGlass, glass, { y: height / 2 + 0.04, z: depth / 2 }, { shadow: false, receive: false });
-  b.part(frontGlass, glass, { y: height / 2 + 0.04, z: -depth / 2 }, { shadow: false, receive: false });
-  for (const dx of [-1, 1]) {
-    b.part(
-      sideGlass,
-      glass,
-      { x: (dx * width) / 2, y: height / 2 + 0.04, ry: Math.PI / 2 },
-      { shadow: false, receive: false },
-    );
-  }
 }
 
 /** Wall-hung shelf. Swatch roles: 0 = plank, 1 = brackets. `size` is width. */

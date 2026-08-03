@@ -426,8 +426,8 @@ export function App(): ReactElement {
   // The whole shell's click and hover, for the life of the page. It listens at
   // the document rather than in the components, so every panel the game grows
   // later is audible without being wired for it.
-  useEffect(() => installUiSounds(), []);
   useEffect(() => installAudioRuntime(), []);
+  useEffect(() => installUiSounds(), []);
 
   const menuAmbience = useMemo(() => new MenuAmbience(), []);
   useEffect(() => () => {

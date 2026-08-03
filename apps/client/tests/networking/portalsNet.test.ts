@@ -4,6 +4,7 @@ import {
   decodeDisguiseWire,
   encodeDisguiseWire,
   encodePaintLayer,
+  MAX_PAINT_STROKES,
   MatchPhase,
 } from "@foldseek/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -62,6 +63,20 @@ const PAINT_LAYER = encodePaintLayer(
     target: index % 19,
     u: (index % 8) / 8,
     v: (index % 5) / 5,
+    radius: 0.25,
+    color: [0.9, 0.3, 0.1] as const,
+    opacity: 1,
+    erase: false,
+    continued: index % 3 !== 0,
+  })),
+);
+
+/** A legal worst-case layer which is too large for one Portals relay message. */
+const MAX_PAINT_LAYER = encodePaintLayer(
+  Array.from({ length: MAX_PAINT_STROKES }, (_, index) => ({
+    target: index % 19,
+    u: (index % 251) / 250,
+    v: ((index * 31) % 251) / 250,
     radius: 0.25,
     color: [0.9, 0.3, 0.1] as const,
     opacity: 1,
@@ -1456,6 +1471,34 @@ describe("PortalsNetAdapter transport budget", () => {
 });
 
 describe("PortalsNetAdapter body paint", () => {
+  it("relays a maximum-size paint checkpoint without crossing the 8 KB cap", async () => {
+    vi.useFakeTimers();
+    const session = new Session(RECONNECT_SETTINGS);
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    await session.addPeer("c", "Cora");
+    session.advance(2);
+    session.startMatch("a", MatchPhase.Forge);
+    session.advance(4);
+
+    const painter = session.peers.find(
+      (peer) => peer.id !== "a" && peer.adapter.getSync().privateState?.role === "mimic",
+    );
+    expect(painter).toBeDefined();
+    if (!painter) return;
+
+    expect(MAX_PAINT_LAYER.length).toBeGreaterThan(MAX_PAYLOAD_BYTES);
+    painter.adapter.sendPaintUpdate({ encodedPaint: MAX_PAINT_LAYER, revision: 3 });
+    session.advance(3);
+    painter.adapter.sendCommand({ type: "lock_disguise", payload: VALID_POSE, revision: 9 });
+    session.advance(4);
+
+    expect(painter.adapter.getSync().privateState?.ownDisguise?.encodedPaint).toBe(MAX_PAINT_LAYER);
+    expect(painter.rejections).toEqual([]);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
   it("carries a non-host Mimic's layer to the host and out through the paint range", async () => {
     vi.useFakeTimers();
     const session = new Session(RECONNECT_SETTINGS);

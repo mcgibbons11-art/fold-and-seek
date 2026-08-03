@@ -50,11 +50,17 @@ function clamp(value: unknown, fallback = 1): number {
     : fallback;
 }
 
-function loadLevels(): AudioLevels {
+export function resolveStoredAudioLevels(
+  savedRaw: string | null | undefined,
+  legacyRaw: string | null | undefined,
+): AudioLevels {
   try {
-    const legacy = Number(globalThis.localStorage?.getItem("foldseek.masterVolume"));
-    const raw = globalThis.localStorage?.getItem(STORAGE_KEY);
-    const saved = raw === null || raw === undefined ? {} : JSON.parse(raw) as Partial<AudioLevels>;
+    // Number(null) is zero. Treating a missing legacy preference as that number
+    // silently muted every fresh profile, including a new Portals iframe.
+    const legacy = legacyRaw === null || legacyRaw === undefined ? Number.NaN : Number(legacyRaw);
+    const saved = savedRaw === null || savedRaw === undefined
+      ? {}
+      : JSON.parse(savedRaw) as Partial<AudioLevels>;
     return {
       master: clamp(saved.master, Number.isFinite(legacy) ? legacy : DEFAULT_LEVELS.master),
       music: clamp(saved.music, DEFAULT_LEVELS.music),
@@ -62,6 +68,17 @@ function loadLevels(): AudioLevels {
       gameplay: clamp(saved.gameplay, DEFAULT_LEVELS.gameplay),
       ui: clamp(saved.ui, DEFAULT_LEVELS.ui),
     };
+  } catch {
+    return DEFAULT_LEVELS;
+  }
+}
+
+function loadLevels(): AudioLevels {
+  try {
+    return resolveStoredAudioLevels(
+      globalThis.localStorage?.getItem(STORAGE_KEY),
+      globalThis.localStorage?.getItem("foldseek.masterVolume"),
+    );
   } catch {
     return DEFAULT_LEVELS;
   }

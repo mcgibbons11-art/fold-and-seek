@@ -234,6 +234,23 @@ const ZONE_D_LEDGES: readonly WalkableSurface[] = [
   pad("counter_crate_top", 0.55, 4.4, 2.7, 0.24, 1),
 ];
 
+/** The three open shelves inside each former glass cabinet. */
+const CABINET_SHELF_TOPS = [0.693, 1.163, 1.613] as const;
+const ZONE_E_LEDGES: readonly WalkableSurface[] = CABINET_BLOCKS.flatMap((block, cabinetIndex) => {
+  const centerZ = (block.min.z + block.max.z) * 0.5;
+  return CABINET_SHELF_TOPS.map((topY, shelfIndex) =>
+    ledge(
+      `cabinet_${cabinetIndex + 1}_shelf_${shelfIndex + 1}`,
+      topY,
+      block.min.x + 0.06,
+      centerZ - 0.225,
+      block.max.x - 0.06,
+      centerZ + 0.225,
+      shelfIndex + 1,
+    ),
+  );
+});
+
 /**
  * Zone F, the back workshop. The steel rack is a four-storey climb and the
  * leaning ladder is the express route to its top board.
@@ -273,6 +290,7 @@ export const WALKABLE_SURFACES: readonly WalkableSurface[] = [
   ...ZONE_B_LEDGES,
   ...ZONE_C_LEDGES,
   ...ZONE_D_LEDGES,
+  ...ZONE_E_LEDGES,
   ...ZONE_F_LEDGES,
   ...ZONE_G_LEDGES,
 ];
@@ -347,9 +365,31 @@ const FURNITURE_BLOCKERS: readonly AABB[] = [
   aabb(2.36, 0.66, 2.86, 2.64, 0.707, 3.14),
   aabb(4.08, 0, 2.38, 4.72, 0.55, 3.02),
 
-  // E — the four glass cabinets. Solid from the floor: the base slab fills the
-  // bottom 0.16 and the glazing runs to the crown, so there is nothing to enter.
-  ...CABINET_BLOCKS.map((block) => aabb(block.min.x, 0, block.min.z, block.max.x, 1.95, block.max.z)),
+  // E — four open display bookcases: base, shelf boards and corner posts only.
+  // No pane or full-volume proxy remains, so the visible openings are real.
+  ...CABINET_BLOCKS.flatMap((block) => {
+    const centerZ = (block.min.z + block.max.z) * 0.5;
+    const minZ = centerZ - 0.275;
+    const maxZ = centerZ + 0.275;
+    const post = 0.06;
+    return [
+      aabb(block.min.x, 0, minZ, block.max.x, 0.16, maxZ),
+      ...CABINET_SHELF_TOPS.map((topY) =>
+        aabb(
+          block.min.x + 0.05,
+          topY - 0.026,
+          minZ + 0.05,
+          block.max.x - 0.05,
+          topY,
+          maxZ - 0.05,
+        ),
+      ),
+      aabb(block.min.x, 0.16, minZ, block.min.x + post, 1.95, minZ + post),
+      aabb(block.max.x - post, 0.16, minZ, block.max.x, 1.95, minZ + post),
+      aabb(block.min.x, 0.16, maxZ - post, block.min.x + post, 1.95, maxZ),
+      aabb(block.max.x - post, 0.16, maxZ - post, block.max.x, 1.95, maxZ),
+    ];
+  }),
 
   // F — workbench slab and legs, with the bay beneath left open.
   aabb(6.38, 0.836, -1.85, 7.22, 0.92, 0.45),
@@ -474,6 +514,32 @@ function ladder(
   };
 }
 
+const CABINET_CLIMB_LINKS: readonly ClimbLink[] = CABINET_BLOCKS.flatMap(
+  (block, cabinetIndex) => {
+    const x = (block.min.x + block.max.x) * 0.5;
+    const z = (block.min.z + block.max.z) * 0.5;
+    const approachZ = cabinetIndex < 2 ? block.max.z + 0.05 : block.min.z - 0.05;
+    const names = CABINET_SHELF_TOPS.map(
+      (_top, shelfIndex) => `cabinet_${cabinetIndex + 1}_shelf_${shelfIndex + 1}`,
+    );
+    return [
+      ladder("floor_10", names[0] as string, [x, 0, approachZ], [x, CABINET_SHELF_TOPS[0], z]),
+      mantle(
+        names[0] as string,
+        names[1] as string,
+        [x, CABINET_SHELF_TOPS[0], z],
+        [x, CABINET_SHELF_TOPS[1], z],
+      ),
+      mantle(
+        names[1] as string,
+        names[2] as string,
+        [x, CABINET_SHELF_TOPS[1], z],
+        [x, CABINET_SHELF_TOPS[2], z],
+      ),
+    ];
+  },
+);
+
 /**
  * Every route between levels, usable in both directions. Ladders are reserved
  * for props whose geometry really offers rungs: the open bookcases, the brass
@@ -506,6 +572,9 @@ export const CLIMB_LINKS: readonly ClimbLink[] = [
   mantle("counter_stool_east", "counter_top", [2.5, 0.707, 3.11], [2.5, 1.05, 3.72]),
   ladder("floor_03", "back_cabinet_top", [2.2, 0, 4.82], [2.2, 2.1, 5.16]),
   mantle("floor_03", "counter_crate_top", [3.88, 0, 2.7], [4.3, 0.55, 2.7]),
+
+  // E — the open bookcases: enter from the cross aisle, then climb shelfwise.
+  ...CABINET_CLIMB_LINKS,
 
   // F — the rack climbs board by board, with the ladder as the express route.
   mantle("floor_04", "shelving_board_1", [6.6, 0, -3.6], [6.95, 0.26, -3.6]),

@@ -64,7 +64,9 @@ import {
   MAX_COMMANDS_PER_SECOND,
   MAX_FORGE_SNAPSHOTS_PER_SECOND,
   MAX_PAYLOAD_BYTES,
+  MAX_PAINT_RELAY_PARTS,
   MAX_REJECTIONS_PER_MESSAGE,
+  PAINT_RELAY_PART_CHARS,
   PORTALS_PROTOCOL_VERSION,
   RATE_WINDOW_MS,
   RateWindow,
@@ -376,6 +378,11 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private readonly publishedPaint = new Map<string, string>();
   /** Authority-side reconstructed layers, one ordered revision stream per seat. */
   private readonly paintRevisionStates = new Map<string, PaintRevisionState>();
+  /** Incomplete oversized checkpoints, bounded to one newest transfer per seat. */
+  private readonly paintRelayParts = new Map<
+    string,
+    { revision: number; count: number; parts: Array<string | undefined> }
+  >();
   private poseBodySerializations = 0;
   private paintBodySerializations = 0;
   /**
@@ -886,6 +893,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.publishedPoses.clear();
     this.publishedPaint.clear();
     this.paintRevisionStates.clear();
+    this.paintRelayParts.clear();
     this.poseSeq = 0;
     this.paintSeq = 0;
     this.snapshotSeq = 0;
@@ -1088,13 +1096,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       revision: update.revision,
       encodedPaint: update.encodedPaint,
     });
-    this.rawSend({
-      v: PORTALS_PROTOCOL_VERSION,
-      t: "paint",
-      to: this.authoritySeatId,
-      term: this.authorityTerm,
-      paint: { revision: update.revision, encodedSync },
-    });
+    this.sendPaintSync(this.authoritySeatId, update.revision, encodedSync);
   }
 
   sendCameraSample(sample: InspectorCameraSample | null): void {
@@ -1458,7 +1460,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
           envelope.term !== this.authorityTerm
         ) return;
         if (envelope.privateState !== null) {
-          this.setSync(this.sync.publicState, envelope.privateState);
+          this.setSync(this.sync.publicState, this.withPrivateBodies(envelope.privateState));
         }
         for (const event of envelope.events) this.privateSignal.emit(event);
         for (const rejection of envelope.rejections) this.rejectionSignal.emit(rejection);
@@ -1490,36 +1492,35 @@ export class PortalsNetAdapter implements NetworkAdapter {
           return;
         }
         if (fromSeat !== undefined) {
-          const decoded = decodePaintSyncUpdate(envelope.paint.encodedSync);
-          const previous = this.paintRevisionStates.get(fromSeat) ?? null;
-          const next = decoded === null ? null : applyPaintSyncUpdate(previous, decoded);
-          if (next === null) {
-            // A self-contained checkpoint with an invalid layer is still a
-            // paint command, so let the simulation return its normal targeted
-            // invalid_paint rejection instead of disguising it as packet loss.
-            const checkpointBody = invalidCheckpointBody(envelope.paint.encodedSync);
-            if (decoded === null && checkpointBody !== null) {
-              this.applyPaintUpdate(fromSeat, {
-                revision: envelope.paint.revision,
-                encodedPaint: checkpointBody,
-              });
-              return;
-            }
-            // The stream has a gap or malformed delta. Keep the known-good
-            // layer and ask only its owner for a self-contained recovery.
-            this.rawSend({
-              v: PORTALS_PROTOCOL_VERSION,
-              t: "paint_checkpoint_request",
-              to: fromSeat,
-              term: this.authorityTerm,
-            });
-            return;
+          this.applyEncodedPaintSync(fromSeat, envelope.paint.revision, envelope.paint.encodedSync);
+        }
+        return;
+
+      case "paint_part":
+        if (!this.isAuthority() || envelope.to !== this.selfSeatId || envelope.term !== this.authorityTerm) return;
+        if (!this.forgeWindow.tryConsume(fromId, this.clock()) || fromSeat === undefined) return;
+        {
+          const held = this.paintRelayParts.get(fromSeat);
+          const transfer =
+            held !== undefined && held.revision === envelope.revision && held.count === envelope.count
+              ? held
+              : {
+                  revision: envelope.revision,
+                  count: envelope.count,
+                  // `Array(count)` is sparse and `.every()` skips its holes,
+                  // which made the first part look like a complete transfer.
+                  parts: Array<string | undefined>(envelope.count).fill(undefined),
+                };
+          transfer.parts[envelope.index] = envelope.data;
+          this.paintRelayParts.set(fromSeat, transfer);
+          if (transfer.parts.every((part) => part !== undefined)) {
+            this.paintRelayParts.delete(fromSeat);
+            this.applyEncodedPaintSync(
+              fromSeat,
+              transfer.revision,
+              transfer.parts.join(""),
+            );
           }
-          this.paintRevisionStates.set(fromSeat, next);
-          this.applyPaintUpdate(fromSeat, {
-            revision: next.revision,
-            encodedPaint: encodePaintLayer(next.strokes),
-          });
         }
         return;
 
@@ -1531,20 +1532,15 @@ export class PortalsNetAdapter implements NetworkAdapter {
           this.lastPaintUpdate === null ||
           this.authoritySeatId === null
         ) return;
-        this.rawSend({
-          v: PORTALS_PROTOCOL_VERSION,
-          t: "paint",
-          to: this.authoritySeatId,
-          term: this.authorityTerm,
-          paint: {
+        this.sendPaintSync(
+          this.authoritySeatId,
+          this.lastPaintUpdate.revision,
+          encodePaintSyncUpdate({
+            kind: "checkpoint",
             revision: this.lastPaintUpdate.revision,
-            encodedSync: encodePaintSyncUpdate({
-              kind: "checkpoint",
-              revision: this.lastPaintUpdate.revision,
-              encodedPaint: this.lastPaintUpdate.encodedPaint,
-            }),
-          },
-        });
+            encodedPaint: this.lastPaintUpdate.encodedPaint,
+          }),
+        );
         return;
 
       case "eye":
@@ -1880,7 +1876,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
         this.poseBook = poses;
         // The publication this client already holds described these disguises
         // without their geometry; fill it in now that the geometry has landed.
-        if (this.lastSnapshot) this.setSync(this.withBodies(this.lastSnapshot), this.sync.privateState);
+        if (this.lastSnapshot) {
+          this.setSync(
+            this.withBodies(this.lastSnapshot),
+            this.withPrivateBodies(this.sync.privateState),
+          );
+        }
       }
       return;
     }
@@ -1889,7 +1890,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
       const paint = decodePaintBook(state, keys.paint);
       if (paint) {
         this.paintBook = paint;
-        if (this.lastSnapshot) this.setSync(this.withBodies(this.lastSnapshot), this.sync.privateState);
+        if (this.lastSnapshot) {
+          this.setSync(
+            this.withBodies(this.lastSnapshot),
+            this.withPrivateBodies(this.sync.privateState),
+          );
+        }
       }
       return;
     }
@@ -2215,6 +2221,67 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.reportRejection(seatId, rejectionOf("forge_snapshot", result.reason, result.detail));
   }
 
+  /** Sends one paint delta directly or splits a large checkpoint into safe parts. */
+  private sendPaintSync(to: string, revision: number, encodedSync: string): void {
+    if (encodedSync.length <= PAINT_RELAY_PART_CHARS) {
+      this.rawSend({
+        v: PORTALS_PROTOCOL_VERSION,
+        t: "paint",
+        to,
+        term: this.authorityTerm,
+        paint: { revision, encodedSync },
+      });
+      return;
+    }
+    const count = Math.ceil(encodedSync.length / PAINT_RELAY_PART_CHARS);
+    if (count > MAX_PAINT_RELAY_PARTS) {
+      this.sendsDropped += 1;
+      console.warn(`[portals] paint checkpoint requires ${count} relay parts; dropping update`);
+      return;
+    }
+    for (let index = 0; index < count; index += 1) {
+      this.rawSend({
+        v: PORTALS_PROTOCOL_VERSION,
+        t: "paint_part",
+        to,
+        term: this.authorityTerm,
+        revision,
+        index,
+        count,
+        data: encodedSync.slice(
+          index * PAINT_RELAY_PART_CHARS,
+          (index + 1) * PAINT_RELAY_PART_CHARS,
+        ),
+      });
+    }
+  }
+
+  /** Applies a complete direct or reassembled paint update on the authority. */
+  private applyEncodedPaintSync(fromSeat: string, revision: number, encodedSync: string): void {
+    const decoded = decodePaintSyncUpdate(encodedSync);
+    const previous = this.paintRevisionStates.get(fromSeat) ?? null;
+    const next = decoded === null ? null : applyPaintSyncUpdate(previous, decoded);
+    if (next === null) {
+      const checkpointBody = invalidCheckpointBody(encodedSync);
+      if (decoded === null && checkpointBody !== null) {
+        this.applyPaintUpdate(fromSeat, { revision, encodedPaint: checkpointBody });
+        return;
+      }
+      this.rawSend({
+        v: PORTALS_PROTOCOL_VERSION,
+        t: "paint_checkpoint_request",
+        to: fromSeat,
+        term: this.authorityTerm,
+      });
+      return;
+    }
+    this.paintRevisionStates.set(fromSeat, next);
+    this.applyPaintUpdate(fromSeat, {
+      revision: next.revision,
+      encodedPaint: encodePaintLayer(next.strokes),
+    });
+  }
+
   /** The same, for a body-paint layer. */
   private applyPaintUpdate(seatId: string, update: PaintUpdate): void {
     const result = this.applySim("paint update", (sim) =>
@@ -2389,7 +2456,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       const rejections = this.pendingRejections.get(seatId) ?? [];
       this.pendingRejections.delete(seatId);
       const privateState = this.pendingSync.has(seatId)
-        ? (this.sim?.getPrivateStateFor(seatId) ?? null)
+        ? withoutPrivateDisguiseBodies(this.sim?.getPrivateStateFor(seatId) ?? null)
         : null;
       if (pending.length === 0 && privateState === null && rejections.length === 0) {
         this.pendingSync.delete(seatId);
@@ -2596,6 +2663,28 @@ export class PortalsNetAdapter implements NetworkAdapter {
             : (this.poseBook[entry.publicObjectId] ?? ""),
         encodedPaint: entry.encodedPaint ?? this.paintBook[entry.publicObjectId] ?? null,
       })),
+    };
+  }
+
+  /** Restores the local player's private body from the same chunked books. */
+  private withPrivateBodies(state: PrivateMatchState | null): PrivateMatchState | null {
+    if (state === null || state.ownDisguise === null) return state;
+    const objectId = state.ownDisguise.publicObjectId;
+    return {
+      ...state,
+      ownDisguise: {
+        ...state.ownDisguise,
+        encodedPose:
+          state.ownDisguise.encodedPose ||
+          this.poseBook[objectId] ||
+          this.lastForgeSnapshot?.encodedPose ||
+          "",
+        encodedPaint:
+          state.ownDisguise.encodedPaint ??
+          this.paintBook[objectId] ??
+          this.lastPaintUpdate?.encodedPaint ??
+          null,
+      },
     };
   }
 
@@ -3160,6 +3249,25 @@ function mergeSelf(players: PortalsNetPlayer[], self: PortalsNetPlayer): Portals
 function replaceStringMap(target: Map<string, string>, source: Readonly<Record<string, string>>): void {
   target.clear();
   for (const [key, value] of Object.entries(source)) target.set(key, value);
+}
+
+/**
+ * Pose and paint already travel in chunked shared-state books. Repeating them
+ * inside the private relay view can make the tiny `own_disguise_locked` event
+ * appear larger than 8 KB and drop the whole acknowledgement. The private view
+ * only consumes the object's id and lock metadata, so body fields are explicit
+ * placeholders on this transport.
+ */
+export function withoutPrivateDisguiseBodies(state: PrivateMatchState | null): PrivateMatchState | null {
+  if (state === null || state.ownDisguise === null) return state;
+  return {
+    ...state,
+    ownDisguise: {
+      ...state.ownDisguise,
+      encodedPose: "",
+      encodedPaint: null,
+    },
+  };
 }
 
 function invalidCheckpointBody(payload: string): string | null {
