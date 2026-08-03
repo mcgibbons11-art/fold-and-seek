@@ -170,7 +170,7 @@ async function main(): Promise<void> {
 
   api.handGap = body.hand
     .getWorldPosition(new THREE.Vector3())
-    .distanceTo(gun.model.getWorldPosition(new THREE.Vector3()));
+    .distanceTo(gun.gripWorldPosition());
   api.meshes = body.meshes.length;
   if (hud !== null) {
     hud.textContent = [

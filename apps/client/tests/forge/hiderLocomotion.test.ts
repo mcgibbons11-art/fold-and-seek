@@ -195,6 +195,31 @@ describe("running the Mimic during the Forge", () => {
     expect(root.y).toBeLessThan(releasedAt);
   });
 
+  it("publishes the safe climb start when S is pressed while W remains held", () => {
+    const locomotion = new HiderLocomotion(testNavData());
+    const start = MANTLE_TO_TABLE.position;
+    const root = at(start.x + 0.5, 0, start.z);
+
+    locomotion.press("w");
+    holdUntil(
+      locomotion,
+      [],
+      root,
+      Math.PI / 2,
+      () => locomotion.motion.climbState !== null && root.y > 0.05,
+    );
+    expect(root.y).toBeGreaterThan(0.05);
+
+    // W is deliberately still down. Before the fix W+S cancelled movement,
+    // so the internal controller escaped but this visible/published root never
+    // received the safe position and stayed wedged in the corner.
+    locomotion.press("s");
+    expect(locomotion.motion.climbState).toBeNull();
+    expect(locomotion.update(FRAME_SECONDS, Math.PI / 2, root)).toBe(true);
+    expect(root.y).toBeCloseTo(0, 6);
+    expect(locomotion.motion.grounded).toBe(true);
+  });
+
   it("falls off the surface it runs off, and stops when it lands", () => {
     // Standing on the workbench top, running north off the front edge.
     const locomotion = new HiderLocomotion(NAV_DATA);

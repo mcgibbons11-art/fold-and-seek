@@ -70,6 +70,13 @@ export class HiderLocomotion {
   /** True for the one frame the body touched down, cleared by the next update. */
   private landed = false;
 
+  /**
+   * A climb abort can teleport the controller back to safe footing without
+   * producing a movement delta. The Forge root must still receive that pose on
+   * the next update, especially while W+S cancel one another out.
+   */
+  private traversalRecoveryPending = false;
+
   /** Reused rather than rebuilt, because `sample` is read every frame. */
   private readonly liveSample = {
     speedFraction: 0,
@@ -164,7 +171,9 @@ export class HiderLocomotion {
     // Hiders do not need a reverse-climb mode. S is the reliable emergency
     // exit: drop the traversal immediately, then resume normal backward WASD
     // once no climb is active.
-    if (key === "s") this.controller.disengageClimb();
+    if (key === "s" && this.controller.disengageClimb()) {
+      this.traversalRecoveryPending = true;
+    }
     return true;
   }
 
@@ -174,16 +183,30 @@ export class HiderLocomotion {
     // Forward + Space starts a contextual climb. Releasing Space is an explicit
     // stop/top-out gesture even when Forward remains held; waiting for every
     // direction key to come up is what left players hanging at the lip.
-    if (key === JUMP_KEY) this.controller.releaseClimbInput();
-    if (!["w", "a", "s", "d"].some((moveKey) => this.held.has(moveKey as MoveKey))) {
+    if (key === JUMP_KEY) {
+      const wasClimbing = this.controller.climbState !== null;
       this.controller.releaseClimbInput();
+      if (wasClimbing && this.controller.climbState === null) {
+        this.traversalRecoveryPending = true;
+      }
+    }
+    if (!["w", "a", "s", "d"].some((moveKey) => this.held.has(moveKey as MoveKey))) {
+      const wasClimbing = this.controller.climbState !== null;
+      this.controller.releaseClimbInput();
+      if (wasClimbing && this.controller.climbState === null) {
+        this.traversalRecoveryPending = true;
+      }
     }
   }
 
   /** Drops every held key, for a lost focus or a closing Forge. */
   releaseAll(): void {
     this.held.clear();
+    const wasClimbing = this.controller.climbState !== null;
     this.controller.releaseClimbInput();
+    if (wasClimbing && this.controller.climbState === null) {
+      this.traversalRecoveryPending = true;
+    }
   }
 
   /**
@@ -196,6 +219,20 @@ export class HiderLocomotion {
    * it when it is walked into sideways as well as head on.
    */
   update(dtSeconds: number, headingYaw: number, root: MutableVec3): boolean {
+    // S remains an escape for as long as it is held. This also catches a climb
+    // entered after the browser's one keydown edge (or a gamepad transition),
+    // so recovery never depends on key-repeat delivery.
+    if (this.held.has("s") && this.controller.disengageClimb()) {
+      this.traversalRecoveryPending = true;
+    }
+    const recoveredTraversal = this.traversalRecoveryPending;
+    this.traversalRecoveryPending = false;
+    if (recoveredTraversal) {
+      root.x = this.controller.position.x;
+      root.y = this.controller.position.y;
+      root.z = this.controller.position.z;
+    }
+
     const forward = (this.held.has("w") ? 1 : 0) - (this.held.has("s") ? 1 : 0);
     const strafe = (this.held.has("d") ? 1 : 0) - (this.held.has("a") ? 1 : 0);
     const steering = forward !== 0 || strafe !== 0;
@@ -207,8 +244,8 @@ export class HiderLocomotion {
     // landing into a second compression.
     this.landed = false;
 
-    if (dtSeconds <= 0) return false;
-    if (!this.walking && !intent) return false;
+    if (dtSeconds <= 0) return recoveredTraversal;
+    if (!this.walking && !intent) return recoveredTraversal;
 
     if (!this.walking) {
       this.controller.placeAt(root.x, root.y, root.z, headingYaw);
@@ -268,7 +305,7 @@ export class HiderLocomotion {
       Math.abs(achievedX) > MOVED_EPSILON ||
       Math.abs(y - startY) > MOVED_EPSILON ||
       Math.abs(achievedZ) > MOVED_EPSILON;
-    if (!moved) return false;
+    if (!moved && !recoveredTraversal) return false;
 
     root.x = x;
     root.y = y;

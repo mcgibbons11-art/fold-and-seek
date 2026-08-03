@@ -22,14 +22,14 @@ interface GuideStep {
 }
 
 const MIMIC_STEPS: readonly GuideStep[] = [
-  { title: "Move", instruction: "Use WASD to find a hiding angle." },
+  { title: "Move", instruction: "WASD moves · Space hops/climbs · S drops a climb." },
   { title: "Shape", instruction: "Choose a preset or change your disguise." },
   { title: "Paint", instruction: "Press 5, then spray one quick mark." },
   { title: "Lock", instruction: "Press Enter when the disguise is convincing." },
 ];
 
 const INSPECTOR_STEPS: readonly GuideStep[] = [
-  { title: "Take control", instruction: "Click the room to capture the mouse." },
+  { title: "Take control", instruction: "Click the room · WASD moves · Space hops." },
   { title: "Acquire", instruction: "Aim at an object until the reticle responds." },
   { title: "Get close", instruction: "Move until the target is inside warrant range." },
   { title: "Accuse", instruction: "Click to fire. Every shot spends a warrant." },

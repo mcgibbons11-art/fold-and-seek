@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { Quaternion } from "three";
 
 import { LocomotionRig } from "../../src/forge/LocomotionRig";
-import { MixamoMotion } from "../../src/forge/MixamoMotion";
+import {
+  MIMIC_RUN_DELTA_LIMIT_RAD,
+  MixamoMotion,
+} from "../../src/forge/MixamoMotion";
 import type { LocomotionSample } from "../../src/forge/BodyLanguage";
 import { STRIDE_FACTOR } from "../../src/gameplay/footsteps";
 import { WORLD_SCALE } from "../../src/inspector/navData";
@@ -327,6 +331,26 @@ describe("the gait is drawn, never published", () => {
     expect(animated.length).toBeGreaterThan(10);
     expect(animated.some((rotation) => Math.abs(rotation.y) > 0.02)).toBe(true);
     expect(animated.some((rotation) => Math.abs(rotation.z) > 0.02)).toBe(true);
+  });
+
+  it("keeps the run agile without wrenching any forged arrangement", () => {
+    let largestMotion = 0;
+    for (const arrangement of ["upright", "compact", "tripod", "wall_mount", "shelf_bundle"]) {
+      const { pose } = authored(arrangement);
+      const rig = new LocomotionRig();
+      for (let frame = 0; frame < 180; frame += 1) {
+        rig.update(FRAME_SECONDS, RUNNING, RUN_SPEED);
+        const drawn = rig.pose(pose);
+        for (let bone = 1; bone < drawn.localRotations.length; bone += 1) {
+          const authoredInverse = pose.localRotations[bone]!.clone().invert();
+          const motion = drawn.localRotations[bone]!.clone().multiply(authoredInverse);
+          const angle = new Quaternion().angleTo(motion);
+          largestMotion = Math.max(largestMotion, angle);
+          expect(angle).toBeLessThanOrEqual(MIMIC_RUN_DELTA_LIMIT_RAD + 1e-6);
+        }
+      }
+    }
+    expect(largestMotion).toBeGreaterThan(5 * DEG_TO_RAD);
   });
 
   it("hands back the authored pose itself once it has been suppressed", () => {

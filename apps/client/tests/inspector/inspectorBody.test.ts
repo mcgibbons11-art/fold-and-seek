@@ -100,7 +100,7 @@ describe("the Inspector's gun stays in the Inspector's hand", () => {
     step({ x: 0, y: 0, z: 0 }, 0);
 
     const hand = body.hand.getWorldPosition(new THREE.Vector3());
-    const held = gun.model.getWorldPosition(new THREE.Vector3());
+    const held = gun.gripWorldPosition();
     expect(held.distanceTo(hand)).toBeLessThan(1e-9);
   });
 

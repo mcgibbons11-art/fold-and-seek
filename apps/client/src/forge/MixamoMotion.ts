@@ -12,6 +12,10 @@ import {
 const TAU = Math.PI * 2;
 /** The authored fall is 4.4 s; a caught Mimic should collapse in about 1.5 s. */
 export const MIMIC_DEATH_PLAYBACK_RATE = 3;
+/** Keep a human run readable without wrenching an unusually folded disguise. */
+export const MIMIC_RUN_ANIMATION_WEIGHT = 0.62;
+/** Maximum per-joint run correction over the player's forged pose. */
+export const MIMIC_RUN_DELTA_LIMIT_RAD = (38 * Math.PI) / 180;
 
 /** Mixamo actions that can temporarily take control of the Mimic's whole body. */
 export type MimicAction = Extract<MixamoClipName, "taunt" | "hit" | "death">;
@@ -73,6 +77,7 @@ export class MixamoMotion {
   private readonly referenceInverse = new Quaternion();
   private readonly mixed = new Quaternion();
   private readonly delta = new Quaternion();
+  private readonly identity = new Quaternion();
 
   /** True when sampling this layer can make no visible joint change. */
   get neutral(): boolean {
@@ -126,6 +131,7 @@ export class MixamoMotion {
 
     const clips = this.weightedClips();
     if (clips.length === 0) return;
+    const runOnly = clips.length === 1 && clips[0]?.name === "run";
 
     for (let slot = 0; slot < BONE_INDICES.length; slot += 1) {
       let totalWeight = 0;
@@ -148,6 +154,16 @@ export class MixamoMotion {
       // The unused share is identity, so a quiet idle remains a quiet idle and
       // an authored extreme pose is never obliterated by the animation layer.
       this.delta.identity().slerp(this.mixed, Math.min(1, totalWeight));
+      if (runOnly) {
+        const angle = this.identity.angleTo(this.delta);
+        if (angle > MIMIC_RUN_DELTA_LIMIT_RAD) {
+          this.delta.slerpQuaternions(
+            this.identity,
+            this.delta,
+            MIMIC_RUN_DELTA_LIMIT_RAD / angle,
+          );
+        }
+      }
       const bone = BONE_INDICES[slot]!;
       pose.localRotations[bone]!.premultiply(this.delta);
       clampBoneRotation(bone, pose.localRotations[bone]!);
@@ -167,16 +183,21 @@ export class MixamoMotion {
 
     const climb = this.active * this.climbing;
     const jump = this.active * this.airborne * (1 - this.climbing);
-    const run = this.active * this.run * (1 - this.airborne) * (1 - this.climbing);
+    const run =
+      this.active *
+      this.run *
+      (1 - this.airborne) *
+      (1 - this.climbing) *
+      MIMIC_RUN_ANIMATION_WEIGHT;
     return [
-      {
+      ...(run > 0 ? [{
         name: "run",
         weight: run,
         phase: this.stridePhase / TAU,
         normalizedPhase: true,
-      },
-      { name: "jump", weight: jump, phase: this.jumpSeconds },
-      { name: "climb", weight: climb, phase: this.elapsedSeconds },
+      } satisfies WeightedClip] : []),
+      ...(jump > 0 ? [{ name: "jump", weight: jump, phase: this.jumpSeconds } satisfies WeightedClip] : []),
+      ...(climb > 0 ? [{ name: "climb", weight: climb, phase: this.elapsedSeconds } satisfies WeightedClip] : []),
     ];
   }
 

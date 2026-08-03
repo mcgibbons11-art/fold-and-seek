@@ -690,7 +690,7 @@ export class ForgeController {
   // The tool column prints all five keys on ivory caps beside their names, so
   // reciting them here was a third copy of the same list on one screen. The
   // strip opens on the same hint switching to the pose tool would give.
-  private status = "WASD walks, space hops. Drag a handle to pose, drag anywhere else to look.";
+  private status = "Drag a handle to pose. Drag open space to look around.";
   private sampledSwatchId: string | null = null;
   private selectedSlot = -1;
   private selectedSocket: PanelSocketName | null = null;
@@ -3980,14 +3980,14 @@ function forgeKey(event: KeyboardEvent): string {
 }
 
 const TOOL_HINTS: Readonly<Record<ForgeToolMode, string>> = {
-  pose: "WASD walks, space hops. Drag a handle to pose, drag anywhere else to look.",
+  pose: "Drag a handle to pose. Drag open space to look around.",
   shape: "Click a body part, then stretch it with the sliders.",
   panels: "Click a brass stud to fold a panel out, then shape it.",
   material: "Point at the room and press F to sample, then click a part to paint it.",
   // How to paint is on the paint panel, once. This strip carries the thing the
   // panel does not: that the camera and the brush share the left button, so a
   // drag that misses the body looks around instead of painting nothing.
-  paint: "WASD walks. Drag anywhere off your body to look around.",
+  paint: "Spray the body, or drag open space to look around.",
 };
 
 function clamp(value: number, min: number, max: number): number {

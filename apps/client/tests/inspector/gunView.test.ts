@@ -148,7 +148,7 @@ describe("GunView carriage", () => {
 
     expect(model.parent).toBe(socket);
     expect(model.getWorldScale(new Vector3()).distanceTo(new Vector3(1, 1, 1))).toBeLessThan(1e-9);
-    expect(model.position.length()).toBe(0);
+    expect(gun.gripWorldPosition().distanceTo(socket.getWorldPosition(new Vector3()))).toBeLessThan(1e-9);
   });
 
   it("carries the gun to the right of and below the eye, ahead of the body", () => {

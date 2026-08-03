@@ -47,6 +47,8 @@ const BODY_M = WORLD_SCALE.playerHeight;
  * the distance a hider first sees it — and it is a hand's prop again.
  */
 const GUN_LENGTH_M = BODY_M * 0.38;
+/** The point inside the wooden handle that belongs in the Inspector's palm. */
+const GRIP_POINT = new THREE.Vector3(0, -GUN_LENGTH_M * 0.2, GUN_LENGTH_M * 0.1);
 
 /**
  * Where the hand carries it, in the look basis: right of, below, and ahead of
@@ -528,15 +530,16 @@ export class GunView {
    * carrying the transform.
    */
   attachToHand(hand: THREE.Object3D | null): void {
-    this.root.position.set(0, 0, 0);
     this.root.rotation.set(0, 0, 0);
     this.root.scale.set(1, 1, 1);
     if (hand === null) {
+      this.root.position.set(0, 0, 0);
       this.scene.add(this.root);
       this.carry = this.root;
       return;
     }
     hand.add(this.root);
+    this.placeGripOnAttachment();
     this.carry = hand;
   }
 
@@ -550,13 +553,28 @@ export class GunView {
     socket.updateWorldMatrix(true, false);
     socket.getWorldScale(this.socketWorldScale);
     socket.add(this.root);
-    this.root.position.set(0, 0, 0);
     this.root.rotation.set(0, 0, 0);
     this.root.scale.set(
       safeReciprocal(this.socketWorldScale.x),
       safeReciprocal(this.socketWorldScale.y),
       safeReciprocal(this.socketWorldScale.z),
     );
+    this.placeGripOnAttachment();
+  }
+
+  /** Offsets the frame so the modeled wooden handle, not the frame origin, is held. */
+  private placeGripOnAttachment(): void {
+    this.root.position.set(
+      -GRIP_POINT.x * this.root.scale.x,
+      -GRIP_POINT.y * this.root.scale.y,
+      -GRIP_POINT.z * this.root.scale.z,
+    );
+  }
+
+  /** World-space centre of the portion of the handle wrapped by the hand. */
+  gripWorldPosition(output = new THREE.Vector3()): THREE.Vector3 {
+    this.root.updateWorldMatrix(true, false);
+    return output.copy(GRIP_POINT).applyMatrix4(this.root.matrixWorld);
   }
 
   /**
