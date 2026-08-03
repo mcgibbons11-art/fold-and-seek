@@ -176,7 +176,9 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
   // The body hangs off the root, which is already carried to the controller's
   // feet and turned to its heading every frame; the hand it holds the gun in
   // lives in the scene, because the carry is authored against the eye.
-  const body = new InspectorBody(root, deps.scene, deps.castShadow ?? true);
+  const body = new InspectorBody(root, deps.scene, deps.castShadow ?? true, (socket) => {
+    gun.attachToSocket(socket);
+  });
   gun.attachToHand(body.hand);
   const onCameraSample = deps.onCameraSample;
   const samples = new CameraSamplePublisher(

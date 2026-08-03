@@ -8,8 +8,8 @@
   "visualIdentity": {
     "id": "mimic-hider-forge-v2",
     "editableMaster": "../blender/mimic-hider.blend",
-    "editableMasterBytes": 228375,
-    "editableMasterSha256": "26c07e7ab5dcf0f7c23e5fae77b4634c386fed76f6a5e68646cbc5795c296860",
+    "editableMasterBytes": 230883,
+    "editableMasterSha256": "6b7633893c709bb1d6a20f6fc5d5ad934fad5b5932bdb5da45b5a38b602824e4",
     "runtime": "MimicVisual",
     "reason": "The Forge must reshape individual shells, panels, materials and paint. A fixed skinned export cannot replace that runtime contract; MimicVisual is the deformable runtime interpretation of this authored identity."
   },

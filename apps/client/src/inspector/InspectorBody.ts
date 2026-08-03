@@ -228,7 +228,12 @@ export class InspectorBody {
   private readonly wristPoint = new THREE.Vector3();
   private readonly segment = new THREE.Vector3();
 
-  constructor(parent: THREE.Object3D, world: THREE.Object3D, castShadow = true) {
+  constructor(
+    parent: THREE.Object3D,
+    world: THREE.Object3D,
+    castShadow = true,
+    onWeaponSocket?: (socket: THREE.Object3D) => void,
+  ) {
     this.root.name = "inspector-body";
     this.hand.name = "inspector-hand";
     this.shoulderPoint.y = GUN_SHOULDER.y - HIP_Y * H;
@@ -258,11 +263,12 @@ export class InspectorBody {
     this.avatar =
       !AUTHORED_INSPECTOR_ENABLED || import.meta.env.MODE === "test"
         ? null
-        : new InspectorAvatar(this.root, this.hand, (loaded) => {
+        : new InspectorAvatar(this.root, this.hand, (loaded, socket) => {
             // Do not flash the historical primitive character while the GLB is
             // in flight. It is a recovery presentation, shown only when the
             // authored asset has conclusively failed to load.
             this.bob.visible = !loaded;
+            if (socket !== null) onWeaponSocket?.(socket);
           });
     if (this.avatar !== null) this.bob.visible = false;
     this.authoredReady = this.avatar?.load() ?? Promise.resolve(false);

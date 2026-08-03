@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 import bpy
-from mathutils import Quaternion, Vector
+from mathutils import Euler, Matrix, Quaternion, Vector
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -303,6 +303,23 @@ for obj in list(MODEL.objects):
     obj.parent_bone = target
     obj.matrix_world = world
 
+# A real weapon socket, authored in the rig rather than inferred in Three.js.
+# Its origin is the centre of the right palm and its local -Z points forward,
+# which is the warrant gun's native aiming axis. The game finds this exact node,
+# solves it onto the live aim target, and parents the gun beneath it.
+weapon_socket = bpy.data.objects.new("WeaponSocket_R", None)
+weapon_socket.empty_display_type = "ARROWS"
+weapon_socket.empty_display_size = 0.12
+RIG.objects.link(weapon_socket)
+weapon_socket.parent = armature
+weapon_socket.parent_type = "BONE"
+weapon_socket.parent_bone = "RightHand"
+weapon_socket.matrix_world = Matrix.LocRotScale(
+    Vector((-1.00, -0.02, 1.39)),
+    Euler((-math.pi / 2, 0, 0)).to_quaternion(),
+    Vector((1, 1, 1)),
+)
+
 
 # Retarget the authenticated Mixamo performances to the Inspector armature.
 # Each rigid clockwork piece is bone-parented, so no soft-body deformation can
@@ -364,11 +381,17 @@ def retarget_clip(source_path: Path) -> bpy.types.Action:
         scene.frame_set(source_frame)
         target_frame = source_frame - start + 1
         for target_name, source_names in MIXAMO_TARGETS.items():
-            combined = Quaternion()
-            for source_name in source_names:
-                combined = combined @ source_delta(source_armature, source_name)
-            target_rest = arm_data.bones[target_name].matrix_local.to_quaternion()
-            target_basis = target_rest.inverted() @ combined @ target_rest
+            if source_path.stem in {"run", "jump", "climb"} and target_name in GUN_READY_ROTATIONS:
+                # Locomotion owns the body and legs, but never throws the gun
+                # arm overhead or across the torso. That chain begins in the
+                # same restrained ready pose before the runtime IK follows aim.
+                target_basis = GUN_READY_ROTATIONS[target_name].copy()
+            else:
+                combined = Quaternion()
+                for source_name in source_names:
+                    combined = combined @ source_delta(source_armature, source_name)
+                target_rest = arm_data.bones[target_name].matrix_local.to_quaternion()
+                target_basis = target_rest.inverted() @ combined @ target_rest
             target_basis.normalize()
             pose_bone = armature.pose.bones[target_name]
             pose_bone.rotation_quaternion = target_basis
@@ -388,14 +411,6 @@ def retarget_clip(source_path: Path) -> bpy.types.Action:
     bpy.data.actions.remove(source_action)
     print(f"RETARGETED={source_path.name}:{end - start + 1} frames")
     return target_action
-
-
-ANIMATION_ACTIONS = []
-for clip_name in ("idle", "run", "jump", "climb", "hit", "death"):
-    source_path = MIXAMO_DIR / f"{clip_name}.fbx"
-    if not source_path.exists():
-        raise FileNotFoundError(source_path)
-    ANIMATION_ACTIONS.append(retarget_clip(source_path))
 
 
 def build_gun_ready_action() -> bpy.types.Action:
@@ -463,7 +478,25 @@ gun_ready = build_gun_ready_action()
 gun_fire = gun_ready.copy()
 gun_fire.name = "rifle-fire"
 gun_fire.use_fake_user = True
-ANIMATION_ACTIONS.extend((gun_ready, gun_fire))
+
+# Sample the clean authored chain once and use it as the upper-body layer for
+# locomotion. This removes the source clip's raised-arm/crossed-body silhouette
+# while retaining every lower-body Mixamo key.
+armature.animation_data.action = gun_ready
+scene.frame_set(1)
+bpy.context.view_layer.update()
+GUN_READY_ROTATIONS = {
+    name: armature.pose.bones[name].matrix_basis.to_quaternion().copy()
+    for name in ("RightShoulder", "RightArm", "RightForeArm", "RightHand")
+}
+armature.animation_data.action = None
+
+ANIMATION_ACTIONS = [gun_ready, gun_fire]
+for clip_name in ("idle", "run", "jump", "climb", "hit", "death"):
+    source_path = MIXAMO_DIR / f"{clip_name}.fbx"
+    if not source_path.exists():
+        raise FileNotFoundError(source_path)
+    ANIMATION_ACTIONS.append(retarget_clip(source_path))
 
 scene.frame_start = 1
 scene.frame_end = max(int(action.frame_range[1]) for action in ANIMATION_ACTIONS)
@@ -520,6 +553,7 @@ bpy.ops.export_scene.fbx(filepath=str(SOURCE_DIR / "inspector-mixamo-source.fbx"
 # Game GLB includes the authored armature and material-rich model, not preview objects.
 bpy.ops.object.select_all(action="DESELECT")
 armature.select_set(True)
+weapon_socket.select_set(True)
 for obj in MODEL.objects:
     obj.select_set(True)
 bpy.context.view_layer.objects.active = armature

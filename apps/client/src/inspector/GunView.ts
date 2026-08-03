@@ -189,6 +189,10 @@ interface Effect {
   elapsedMs: number;
 }
 
+function safeReciprocal(value: number): number {
+  return Math.abs(value) < 1e-8 ? 1 : 1 / value;
+}
+
 /** Everything the gun needs to know about the frame it is being held in. */
 export interface GunFrame {
   /** The Inspector's eye, which is where the arm comes from. */
@@ -235,6 +239,7 @@ export class GunView {
   private readonly scratchTo = new THREE.Vector3();
   /** Kept apart from the pair above, which are both live during a shot. */
   private readonly scratchWorld = new THREE.Vector3();
+  private readonly socketWorldScale = new THREE.Vector3();
   private readonly scratchQuaternion = new THREE.Quaternion();
   private readonly flashAxisRotation = new THREE.Quaternion().setFromAxisAngle(
     new THREE.Vector3(1, 0, 0),
@@ -525,6 +530,7 @@ export class GunView {
   attachToHand(hand: THREE.Object3D | null): void {
     this.root.position.set(0, 0, 0);
     this.root.rotation.set(0, 0, 0);
+    this.root.scale.set(1, 1, 1);
     if (hand === null) {
       this.scene.add(this.root);
       this.carry = this.root;
@@ -532,6 +538,25 @@ export class GunView {
     }
     hand.add(this.root);
     this.carry = hand;
+  }
+
+  /**
+   * Locks the visible weapon to the socket exported beneath the detective's
+   * RightHand bone. The separate carry remains the world-space IK target: it
+   * decides where the gun should aim, while the skeleton and this parent link
+   * make it physically impossible for the weapon to leave the hand.
+   */
+  attachToSocket(socket: THREE.Object3D): void {
+    socket.updateWorldMatrix(true, false);
+    socket.getWorldScale(this.socketWorldScale);
+    socket.add(this.root);
+    this.root.position.set(0, 0, 0);
+    this.root.rotation.set(0, 0, 0);
+    this.root.scale.set(
+      safeReciprocal(this.socketWorldScale.x),
+      safeReciprocal(this.socketWorldScale.y),
+      safeReciprocal(this.socketWorldScale.z),
+    );
   }
 
   /**

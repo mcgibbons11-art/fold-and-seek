@@ -133,6 +133,24 @@ describe("GunView firing", () => {
 });
 
 describe("GunView carriage", () => {
+  it("parents the weapon to a scaled rig socket without shrinking it", () => {
+    const { gun, scene, model } = harness();
+    const scaledRig = new Group();
+    scaledRig.scale.setScalar(0.2);
+    const socket = new Group();
+    socket.name = "WeaponSocket_R";
+    scaledRig.add(socket);
+    scene.add(scaledRig);
+    scene.updateMatrixWorld(true);
+
+    gun.attachToSocket(socket);
+    scene.updateMatrixWorld(true);
+
+    expect(model.parent).toBe(socket);
+    expect(model.getWorldScale(new Vector3()).distanceTo(new Vector3(1, 1, 1))).toBeLessThan(1e-9);
+    expect(model.position.length()).toBe(0);
+  });
+
   it("carries the gun to the right of and below the eye, ahead of the body", () => {
     const { gun, model } = harness();
     settle(gun);

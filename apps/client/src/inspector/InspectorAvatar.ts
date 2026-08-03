@@ -5,7 +5,7 @@ import type { InspectorBodyFrame } from "./InspectorBody";
 import { WORLD_SCALE } from "./navData";
 
 export const INSPECTOR_ASSET_SHA256 =
-  "426c2d856051bf3b45c3e018121f994dc40ceacf8d0691693f5a389dcfcff991";
+  "f7f2d030cbfb105d1b19912d1784b993419d0d5b7a2f4b3344bf9e893552c9f5";
 export const INSPECTOR_ASSET_URL =
   `assets/characters/inspector-curator.glb?v=${INSPECTOR_ASSET_SHA256.slice(0, 16)}`;
 /** Blender master is just over two metres from boot sole to head loop. */
@@ -14,8 +14,9 @@ const CROSS_FADE_SECONDS = 0.1;
 const FIRE_FADE_SECONDS = 0.045;
 const HIT_FADE_SECONDS = 0.065;
 /** Maximum correction away from the authored pose for each solved joint. */
-const ARM_IK_LIMIT_RAD = 0.9;
-const FOREARM_IK_LIMIT_RAD = 1.35;
+const ARM_IK_LIMIT_RAD = 1.45;
+const FOREARM_IK_LIMIT_RAD = 1.8;
+export const INSPECTOR_WEAPON_SOCKET_NAME = "WeaponSocket_R";
 
 type BaseAction = "rifle-idle" | "run" | "jump" | "climb";
 type InspectorAction = BaseAction | "rifle-fire" | "hit" | "death";
@@ -44,7 +45,7 @@ export function inspectorActionForFrame(frame: InspectorBodyFrame): BaseAction {
 export class InspectorAvatar {
   private readonly parent: THREE.Object3D;
   private readonly gunHand: THREE.Object3D;
-  private readonly onSettled: (loaded: boolean) => void;
+  private readonly onSettled: (loaded: boolean, weaponSocket: THREE.Object3D | null) => void;
   private readonly loader = new GLTFLoader();
   private readonly actions = new Map<string, THREE.AnimationAction>();
   private readonly geometries = new Set<THREE.BufferGeometry>();
@@ -59,6 +60,7 @@ export class InspectorAvatar {
   private rightArm: THREE.Bone | null = null;
   private rightForeArm: THREE.Bone | null = null;
   private rightHand: THREE.Bone | null = null;
+  private weaponSocket: THREE.Object3D | null = null;
   private disposed = false;
   private castShadow = true;
 
@@ -76,8 +78,14 @@ export class InspectorAvatar {
   private readonly correction = new THREE.Quaternion();
   private readonly armAuthoredRotation = new THREE.Quaternion();
   private readonly foreArmAuthoredRotation = new THREE.Quaternion();
+  private readonly targetRotation = new THREE.Quaternion();
+  private readonly socketRotation = new THREE.Quaternion();
 
-  constructor(parent: THREE.Object3D, gunHand: THREE.Object3D, onSettled: (loaded: boolean) => void) {
+  constructor(
+    parent: THREE.Object3D,
+    gunHand: THREE.Object3D,
+    onSettled: (loaded: boolean, weaponSocket: THREE.Object3D | null) => void,
+  ) {
     this.parent = parent;
     this.gunHand = gunHand;
     this.onSettled = onSettled;
@@ -103,6 +111,7 @@ export class InspectorAvatar {
       this.mixer = new THREE.AnimationMixer(model);
 
       model.traverse((object) => {
+        if (object.name === INSPECTOR_WEAPON_SOCKET_NAME) this.weaponSocket = object;
         if (object instanceof THREE.Bone) {
           if (object.name === "RightArm") this.rightArm = object;
           if (object.name === "RightForeArm") this.rightForeArm = object;
@@ -131,14 +140,17 @@ export class InspectorAvatar {
       ]) {
         if (!this.actions.has(required)) throw new Error(`missing ${required} action`);
       }
+      if (this.weaponSocket === null) {
+        throw new Error(`missing ${INSPECTOR_WEAPON_SOCKET_NAME} hand socket`);
+      }
 
       this.play("rifle-idle", 0);
-      this.onSettled(true);
+      this.onSettled(true, this.weaponSocket);
       return true;
     } catch (error) {
       if (!this.disposed) console.warn("[inspector] authored avatar unavailable; using fallback", error);
       this.disposeModel();
-      this.onSettled(false);
+      this.onSettled(false, null);
       return false;
     }
   }
@@ -239,20 +251,27 @@ export class InspectorAvatar {
     const arm = this.rightArm;
     const foreArm = this.rightForeArm;
     const hand = this.rightHand;
-    if (model === null || arm === null || foreArm === null || hand === null) return;
+    const socket = this.weaponSocket;
+    if (model === null || arm === null || foreArm === null || hand === null || socket === null) return;
     this.gunHand.getWorldPosition(this.target);
+    this.gunHand.getWorldQuaternion(this.targetRotation);
     this.armAuthoredRotation.copy(arm.quaternion);
     this.foreArmAuthoredRotation.copy(foreArm.quaternion);
 
-    for (let pass = 0; pass < 3; pass += 1) {
-      this.rotateJointToward(foreArm, hand, this.target, this.foreArmAuthoredRotation);
-      this.rotateJointToward(arm, hand, this.target, this.armAuthoredRotation);
+    // Position and orientation are solved together. Using the authored socket
+    // as the effector means the grip, rather than the wrist bone's origin, is
+    // what lands on the weapon. The final hand rotation makes the gun's local
+    // -Z agree with the camera aim instead of merely putting it near the palm.
+    for (let pass = 0; pass < 5; pass += 1) {
+      this.rotateJointToward(foreArm, socket, this.target, this.foreArmAuthoredRotation);
+      this.rotateJointToward(arm, socket, this.target, this.armAuthoredRotation);
+      this.rotateHandSocketToward(hand, socket, this.targetRotation);
     }
   }
 
   private rotateJointToward(
     joint: THREE.Bone,
-    effector: THREE.Bone,
+    effector: THREE.Object3D,
     target: THREE.Vector3,
     authoredRotation: THREE.Quaternion,
   ): void {
@@ -297,6 +316,26 @@ export class InspectorAvatar {
     joint.updateWorldMatrix(false, true);
   }
 
+  private rotateHandSocketToward(
+    hand: THREE.Bone,
+    socket: THREE.Object3D,
+    target: THREE.Quaternion,
+  ): void {
+    socket.updateWorldMatrix(true, false);
+    socket.getWorldQuaternion(this.socketRotation);
+    this.worldDelta.copy(target).multiply(this.socketRotation.invert()).normalize();
+    const parent = hand.parent;
+    if (parent === null) return;
+    parent.getWorldQuaternion(this.parentWorld);
+    this.parentWorldInverse.copy(this.parentWorld).invert();
+    this.localDelta
+      .copy(this.parentWorldInverse)
+      .multiply(this.worldDelta)
+      .multiply(this.parentWorld);
+    hand.quaternion.premultiply(this.localDelta).normalize();
+    hand.updateWorldMatrix(false, true);
+  }
+
   private disposeModel(): void {
     this.mixer?.stopAllAction();
     if (this.model !== null) this.model.removeFromParent();
@@ -313,6 +352,7 @@ export class InspectorAvatar {
     this.rightArm = null;
     this.rightForeArm = null;
     this.rightHand = null;
+    this.weaponSocket = null;
     this.lastFrame = null;
   }
 }

@@ -4,7 +4,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { INSPECTOR_ASSET_SHA256 } from "../../src/inspector/InspectorAvatar";
+import {
+  INSPECTOR_ASSET_SHA256,
+  INSPECTOR_WEAPON_SOCKET_NAME,
+} from "../../src/inspector/InspectorAvatar";
 
 interface GltfAccessor {
   bufferView: number;
@@ -77,6 +80,7 @@ describe("authored Inspector GLB contract", () => {
 
     const names = new Set(json.nodes.map((node) => node.name));
     for (const bone of ["RightArm", "RightForeArm", "RightHand"]) expect(names.has(bone), bone).toBe(true);
+    expect(names.has(INSPECTOR_WEAPON_SOCKET_NAME), INSPECTOR_WEAPON_SOCKET_NAME).toBe(true);
     const clips = new Set(json.animations.map((animation) => animation.name));
     for (const clip of ["rifle-idle", "run", "jump", "climb", "rifle-fire", "hit", "death"]) {
       expect(clips.has(clip), clip).toBe(true);

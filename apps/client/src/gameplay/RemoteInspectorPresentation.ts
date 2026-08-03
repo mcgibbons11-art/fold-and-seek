@@ -59,8 +59,10 @@ export class RemoteInspectorPresentation {
   ) {
     this.root.name = `remote-inspector-${seatId}`;
     scene.add(this.root);
-    this.body = new InspectorBody(this.root, scene, castShadow);
     this.gun = new GunView(scene);
+    this.body = new InspectorBody(this.root, scene, castShadow, (socket) => {
+      this.gun.attachToSocket(socket);
+    });
     this.gun.attachToHand(this.body.hand);
   }
 

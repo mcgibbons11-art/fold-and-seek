@@ -14,7 +14,13 @@ interface InputRecord {
 interface MixamoManifest {
   version: number;
   license: { status: string };
-  visualIdentity: { id: string; runtime: string; editableMasterSha256: string };
+  visualIdentity: {
+    id: string;
+    runtime: string;
+    editableMaster: string;
+    editableMasterBytes: number;
+    editableMasterSha256: string;
+  };
   inputs: InputRecord[];
 }
 
@@ -44,6 +50,15 @@ describe("Mixamo bake provenance", () => {
       "taunt.fbx",
     ]);
     expect(new Set(manifest.inputs.map((entry) => entry.sha256)).size).toBe(manifest.inputs.length);
+  });
+
+  it("ships the editable Blender master that defines the Hider rig identity", () => {
+    const master = resolve(dirname(MANIFEST_PATH), manifest.visualIdentity.editableMaster);
+    expect(existsSync(master)).toBe(true);
+    expect(statSync(master).size).toBe(manifest.visualIdentity.editableMasterBytes);
+    expect(createHash("sha256").update(readFileSync(master)).digest("hex")).toBe(
+      manifest.visualIdentity.editableMasterSha256,
+    );
   });
 
   it("matches any quarantined local inputs byte-for-byte without requiring them in CI", () => {

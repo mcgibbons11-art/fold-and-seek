@@ -102,7 +102,9 @@ async function main(): Promise<void> {
   const root = new THREE.Group();
   scene.add(root);
   const gun = new GunView(scene);
-  const body = new InspectorBody(root, scene, settings.dynamicShadows);
+  const body = new InspectorBody(root, scene, settings.dynamicShadows, (socket) => {
+    gun.attachToSocket(socket);
+  });
   gun.attachToHand(body.hand);
   await body.authoredReady;
 
