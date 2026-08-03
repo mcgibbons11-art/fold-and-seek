@@ -168,7 +168,7 @@ const roomCode = z.string().min(1).max(16);
  */
 export const NetEnvelopeSchema = z.discriminatedUnion("t", [
   /** Command from a non-authoritative client, addressed to the current host. */
-  z.strictObject({
+  z.object({
     v: version,
     t: z.literal("cmd"),
     r: roomCode,
@@ -176,7 +176,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     cmd: MatchCommandSchema,
   }),
   /** Public event batch from the host. */
-  z.strictObject({
+  z.object({
     v: version,
     t: z.literal("ev"),
     r: roomCode,
@@ -197,7 +197,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * Public state never rides along: it travels as the chunked state snapshot,
    * which is the only path that can exceed one 8 KB message.
    */
-  z.strictObject({
+  z.object({
     v: version,
     t: z.literal("pev"),
     r: roomCode,
@@ -216,7 +216,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * per drag (§27.2). The host keeps it so a Mimic who never sends a lock still
    * locks into their most recent valid pose at the Forge deadline (§5.8).
    */
-  z.strictObject({
+  z.object({
     v: version,
     t: z.literal("snap"),
     r: roomCode,
@@ -229,7 +229,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * independently and change at different rates, so sending either one would
    * otherwise have to carry the other unchanged.
    */
-  z.strictObject({
+  z.object({
     v: version,
     t: z.literal("paint"),
     r: roomCode,
@@ -251,15 +251,43 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * Null when the sender stops being an Inspector, so the host forgets an eye
    * rather than keeping the last one it heard.
    */
-  z.strictObject({
+  z.object({
     v: version,
     t: z.literal("eye"),
     r: roomCode,
     to: connectionId,
     eye: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).nullable(),
   }),
+  /** Sparse movement samples broadcast so every peer can draw the Inspector. */
+  z.object({
+    v: version,
+    t: z.literal("cam"),
+    r: roomCode,
+    sample: z
+      .object({
+        atMs: z.number().finite().min(0),
+        x: z.number().finite(),
+        y: z.number().finite(),
+        z: z.number().finite(),
+        yaw: z.number().finite(),
+        pitch: z.number().finite(),
+      })
+      .nullable(),
+  }),
   /** A client asking the host for a fresh sync after a join or a reconnect. */
-  z.strictObject({ v: version, t: z.literal("resync"), r: roomCode }),
+  z.object({ v: version, t: z.literal("resync"), r: roomCode }),
+  /**
+   * Redundant room-directory publication.
+   *
+   * Shared state remains the durable source read by late joiners, but the live
+   * Portals relay has not consistently emitted a state callback to the writer
+   * (and older editor hosts have missed it for peers as well). A tiny broadcast
+   * makes opening a room immediately visible without relying on state-event
+   * echo semantics. `ad` is validated by RoomDirectory, where the slot table
+   * lives; keeping it unknown here also avoids a protocol/registry import
+   * cycle.
+   */
+  z.object({ v: version, t: z.literal("ad"), r: roomCode, ad: z.unknown() }),
   /**
    * A client taking a seat in a room.
    *
@@ -269,7 +297,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * people browsing and the people playing next door. The host of the named room
    * answers by seating the sender, or by refusing it a place.
    */
-  z.strictObject({
+  z.object({
     v: version,
     t: z.literal("enter"),
     r: roomCode,
@@ -281,7 +309,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * seat outright rather than holding it through the reconnect grace, because
    * the player is still here and has chosen not to be in this room.
    */
-  z.strictObject({ v: version, t: z.literal("exit"), r: roomCode }),
+  z.object({ v: version, t: z.literal("exit"), r: roomCode }),
   /**
    * A new host asking every Mimic to re-send its working Forge pose.
    *
@@ -291,7 +319,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * them again: each client re-sends what it last gave the transport, so no
    * player's work is lost and nothing extra is written to room state.
    */
-  z.strictObject({ v: version, t: z.literal("reforge"), r: roomCode }),
+  z.object({ v: version, t: z.literal("reforge"), r: roomCode }),
   /**
    * The host refusing one client a seat.
    *
@@ -300,7 +328,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * addressing by seat would tell both tabs they had been refused; only the
    * connection that arrived second may be turned away.
    */
-  z.strictObject({
+  z.object({
     v: version,
     t: z.literal("refused"),
     r: roomCode,
@@ -367,7 +395,36 @@ export function jsonByteLength(value: unknown): number {
 }
 
 export function parseEnvelope(value: unknown): NetEnvelope | null {
-  const result = NetEnvelopeSchema.safeParse(value);
+  let candidate = value;
+
+  // Portals currently uses structured-clone delivery, while older/editor host
+  // builds have handed the iframe either serialized JSON or a postMessage-like
+  // `{ data }` wrapper. Normalize only the carrier here and validate the same
+  // game envelope afterwards.
+  if (typeof candidate === "string") {
+    try {
+      candidate = JSON.parse(candidate) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (
+    candidate !== null &&
+    typeof candidate === "object" &&
+    !("t" in candidate) &&
+    "data" in candidate
+  ) {
+    candidate = (candidate as { readonly data: unknown }).data;
+    if (typeof candidate === "string") {
+      try {
+        candidate = JSON.parse(candidate) as unknown;
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  const result = NetEnvelopeSchema.safeParse(candidate);
   return result.success ? result.data : null;
 }
 

@@ -22,9 +22,8 @@ import { box, openNavData, surface, testSettings, SHOP_FLOOR } from "../inspecto
  * The jump (CLAUDE.md override 6, a reversal of the rule the rest of this
  * movement code was written under). Two claims are load-bearing and both are
  * measured against the map rather than asserted from the design intent: a hop
- * clears an obstacle a walk cannot, and a hop reaches nothing in the Curiosity
- * Shop that can be stood on, because the authored climb links are still the
- * only way up onto furniture.
+ * clears an obstacle a walk cannot, while Forward + Jump at a solid face asks
+ * the contextual climbing path to take over.
  */
 
 const FRAME_SECONDS = 1 / 60;
@@ -203,7 +202,7 @@ describe("the hop", () => {
     expect(JUMP_HEIGHT_M).toBeGreaterThan(WORLD_SCALE.stepHeight * 2);
   });
 
-  it("cannot mount the steel rack's bottom board, which is that lowest ledge", () => {
+  it("turns a held Forward + Jump at the steel rack into a contextual climb", () => {
     const board = WALKABLE_SURFACES.find((entry) => entry.id === "shelving_board_1");
     if (board === undefined) throw new Error("the map no longer has shelving_board_1");
 
@@ -214,10 +213,20 @@ describe("the hop", () => {
       0,
       board.bounds.max.z + WORLD_SCALE.playerRadius * 2,
     );
-    const { apexY } = runKeys(locomotion, ["w", " "], 4, root, Math.PI);
+    locomotion.press("w");
+    locomotion.press(" ");
+    let apexY = root.y;
+    for (let frame = 0; frame < 4 / FRAME_SECONDS; frame += 1) {
+      locomotion.update(FRAME_SECONDS, Math.PI, root);
+      apexY = Math.max(apexY, root.y);
+      if (root.y >= board.bounds.max.y && locomotion.motion.climbState === null) break;
+    }
+    locomotion.releaseAll();
 
-    expect(apexY).toBeLessThan(board.bounds.max.y);
-    expect(root.y).toBe(0);
+    expect(apexY).toBeGreaterThan(board.bounds.max.y);
+    // The rack's frame is a taller solid than its first published board. The
+    // contextual route takes the actual solid top, not the lower nav shelf.
+    expect(root.y).toBeCloseTo(apexY, 5);
   });
 
   it("does not launch a second time in mid-air", () => {
@@ -260,12 +269,23 @@ describe("hopping while the hunt's creep cap is on", () => {
     const locomotion = creeper();
     const root = at(0, 0, 0);
     const start = { ...root };
-    runKeys(locomotion, ["w", " "], 2, root);
+    locomotion.press("w");
+    locomotion.press(" ");
+    let elapsed = 0;
+    for (let frame = 0; frame < 2 / FRAME_SECONDS; frame += 1) {
+      locomotion.update(FRAME_SECONDS, FACING_NORTH, root);
+      elapsed += FRAME_SECONDS;
+    }
+    locomotion.releaseAll();
+    while (locomotion.airborne && elapsed < 4) {
+      locomotion.update(FRAME_SECONDS, FACING_NORTH, root);
+      elapsed += FRAME_SECONDS;
+    }
     // Two seconds of holding both keys. The authority measures the straight
     // line between published poses, and both are taken on the ground, so what
     // matters is that the horizontal is capped and the height came back.
     expect(root.y).toBe(0);
-    expect(Math.hypot(root.x - start.x, root.z - start.z)).toBeLessThanOrEqual(CREEP_SPEED * 2 + 1e-6);
+    expect(Math.hypot(root.x - start.x, root.z - start.z)).toBeLessThanOrEqual(CREEP_SPEED * elapsed + 1e-6);
   });
 
   it("reports itself airborne so the round holds the pose until it lands", () => {

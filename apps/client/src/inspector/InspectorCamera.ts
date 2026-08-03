@@ -50,8 +50,8 @@ export const DEFAULT_AIM_FOV_DEG = 48;
  * `WORLD_SCALE.playerHeight` of 0.35 m the boom is 44 cm, which keeps the shop
  * towering overhead instead of filling the frame.
  */
-const BOOM_PER_BODY_HEIGHT = 1.25;
-const SHOULDER_PER_BODY_HEIGHT = 0.195;
+const BOOM_PER_BODY_HEIGHT = 1.6;
+const SHOULDER_PER_BODY_HEIGHT = 0.3;
 const MIN_BOOM_PER_BODY_HEIGHT = 0.26;
 const SKIN_PER_BODY_HEIGHT = 0.069;
 const BOB_PER_BODY_HEIGHT = 0.0126;

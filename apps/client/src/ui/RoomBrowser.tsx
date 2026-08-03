@@ -1,35 +1,24 @@
 import { MatchPhase } from "@foldseek/shared";
-import { useState, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 
 import { MAX_CONCURRENT_ROOMS, type RoomListing } from "../networking/roomRegistry";
 import {
   BRASS_LIT,
   CREAM,
+  FONT_DISPLAY,
   FONT_UI,
   PRESS_CLASS,
   RULE,
+  SCREEN_WASH,
   buttonStyle,
   disabledButtonStyle,
   labelStyle,
   ornamentRuleStyle,
+  plate,
   primaryButtonStyle,
 } from "./rounds/theme";
 
-/**
- * The rooms in this Portals session, and the three ways into one.
- *
- * A session carries a small fixed number of rooms rather than a directory of
- * them (networking/roomRegistry.ts), so this is a short list on the title card
- * rather than a screen of its own: every room the session can hold is visible at
- * once, and the panel says so when both slots are taken instead of offering a
- * CREATE that would be refused.
- */
-
-/**
- * What a room is doing, in one word a player can scan down a column. The
- * round's own phase headlines are written to be read one at a time in the middle
- * of a match ("THE ROOM CONFESSES"), which is the wrong register for a list.
- */
+/** Compact activity copy for the room list and selected-room briefing. */
 function roomStatus(phase: MatchPhase): string {
   switch (phase) {
     case MatchPhase.Lobby:
@@ -51,23 +40,60 @@ function roomStatus(phase: MatchPhase): string {
   }
 }
 
-const panelStyle: CSSProperties = {
-  marginTop: 18,
-  paddingTop: 4,
+const screenStyle: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  display: "grid",
+  gridTemplateRows: "82px minmax(0, 1fr) 50px",
+  background: [
+    "linear-gradient(90deg, rgba(8, 6, 4, .94), rgba(13, 9, 5, .68) 55%, rgba(7, 5, 3, .88))",
+    SCREEN_WASH,
+  ].join(", "),
+  color: CREAM,
+  font: `13px/1.5 ${FONT_UI}`,
+  pointerEvents: "auto",
   textAlign: "left",
+  zIndex: 20,
+};
+
+const headerStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 20,
+  padding: "16px 26px",
+  borderBottom: RULE,
+  background: "linear-gradient(180deg, rgba(20, 15, 10, 0.96), rgba(15, 11, 7, 0.86))",
+};
+
+const columnsStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(280px, 0.9fr) minmax(380px, 1.35fr) minmax(270px, 0.82fr)",
+  gap: 14,
+  minHeight: 0,
+  padding: 14,
+  overflowX: "auto",
+};
+
+const columnStyle: CSSProperties = {
+  ...plate(),
+  minWidth: 0,
+  minHeight: 0,
+  borderRadius: 10,
+  padding: 16,
+  overflowY: "auto",
 };
 
 const rowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 10,
-  padding: "9px 2px",
+  padding: "11px 8px",
   borderTop: RULE,
+  cursor: "pointer",
 };
 
 const nameStyle: CSSProperties = {
-  flex: 1,
-  minWidth: 0,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
@@ -95,12 +121,12 @@ const smallButtonStyle: CSSProperties = {
 };
 
 const inputStyle: CSSProperties = {
-  flex: 1,
-  minWidth: 0,
-  background: "rgba(10, 8, 5, 0.55)",
+  width: "100%",
+  boxSizing: "border-box",
+  background: "rgba(10, 8, 5, 0.62)",
   border: "1px solid rgba(176, 138, 74, 0.38)",
   borderRadius: 7,
-  padding: "8px 10px",
+  padding: "9px 10px",
   color: CREAM,
   font: `13px/1.3 ${FONT_UI}`,
   pointerEvents: "auto",
@@ -108,13 +134,14 @@ const inputStyle: CSSProperties = {
 
 export interface RoomBrowserProps {
   readonly rooms: readonly RoomListing[];
-  /** The room this client is already in, so its row reads as the one to return to. */
   readonly currentCode?: string | null;
   readonly onJoin: (code: string) => void;
   readonly onCreate: (name: string) => void;
   readonly onQuickJoin: () => void;
-  /** Set while a room is being opened, so nothing is pressed twice. */
   readonly busy?: boolean;
+  readonly notice?: string | null;
+  /** Returns to the title without dropping the shared directory session. */
+  readonly onBack?: () => void;
 }
 
 export function RoomBrowser({
@@ -124,133 +151,273 @@ export function RoomBrowser({
   onCreate,
   onQuickJoin,
   busy = false,
+  notice = null,
+  onBack,
 }: RoomBrowserProps): ReactElement {
   const [name, setName] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [selectedCode, setSelectedCode] = useState<string | null>(rooms[0]?.code ?? null);
+
+  useEffect(() => {
+    if (rooms.length === 0) {
+      setSelectedCode(null);
+    } else if (!rooms.some((room) => room.code === selectedCode)) {
+      setSelectedCode(rooms[0]?.code ?? null);
+    }
+  }, [rooms, selectedCode]);
 
   const full = rooms.length >= MAX_CONCURRENT_ROOMS;
   const anyJoinable = rooms.some((room) => room.joinable);
+  const selected = rooms.find((room) => room.code === selectedCode) ?? rooms[0] ?? null;
 
   return (
-    <div style={panelStyle}>
-      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-        <div style={{ ...labelStyle, opacity: 0.7 }}>Rooms</div>
-        <div style={{ ...labelStyle, opacity: 0.4 }}>
-          {rooms.length} of {MAX_CONCURRENT_ROOMS}
-        </div>
-      </div>
-      <div style={{ ...ornamentRuleStyle("100%"), margin: "8px 0 2px" }} aria-hidden />
-
-      {rooms.length === 0 ? (
-        <p style={{ margin: "10px 0 0", fontSize: 12, lineHeight: 1.6, opacity: 0.7 }}>
-          Nobody has opened a room yet. Open one and the others in this session will see it.
-        </p>
-      ) : (
-        <ul style={{ listStyle: "none", margin: "2px 0 0", padding: 0 }}>
-          {rooms.map((room) => {
-            const mine = room.code === currentCode;
-            const heads = Math.max(0, room.players - room.bots);
-            return (
-              <li key={room.code} style={rowStyle}>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={nameStyle}>{room.name}</div>
-                  <div style={metaStyle}>
-                    {room.code} · {roomStatus(room.phase)}
-                    {room.bots > 0 ? ` · ${room.bots} bot${room.bots === 1 ? "" : "s"}` : ""}
-                    {room.seekers > 1 ? " · 2 inspectors" : ""}
-                  </div>
-                </div>
-                <div style={countStyle}>
-                  {heads}/{room.maxPlayers}
-                </div>
-                <button
-                  type="button"
-                  className={PRESS_CLASS}
-                  style={
-                    busy || (!room.joinable && !mine)
-                      ? disabledButtonStyle(smallButtonStyle)
-                      : smallButtonStyle
-                  }
-                  disabled={busy || (!room.joinable && !mine)}
-                  onClick={() => {
-                    onJoin(room.code);
-                  }}
-                >
-                  {mine ? "Return" : room.joinable ? "Join" : "Full"}
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-
-      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          style={
-            busy || !anyJoinable
-              ? disabledButtonStyle({ ...primaryButtonStyle, flex: 1 })
-              : { ...primaryButtonStyle, flex: 1 }
-          }
-          disabled={busy || !anyJoinable}
-          onClick={onQuickJoin}
-        >
-          Quick join
-        </button>
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          style={busy || full ? disabledButtonStyle(smallButtonStyle) : smallButtonStyle}
-          disabled={busy || full}
-          onClick={() => {
-            setCreating((open) => !open);
-          }}
-          aria-expanded={creating}
-        >
-          New room
-        </button>
-      </div>
-
-      {full ? (
-        <p style={{ ...labelStyle, opacity: 0.5, marginTop: 10, letterSpacing: "0.08em" }}>
-          This session holds {MAX_CONCURRENT_ROOMS} rooms at once. Join one, or wait for a room to
-          empty.
-        </p>
-      ) : null}
-
-      {creating && !full ? (
-        <form
-          style={{ display: "flex", gap: 8, marginTop: 10 }}
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (busy) return;
-            onCreate(name);
-            setName("");
-            setCreating(false);
-          }}
-        >
-          <input
-            style={inputStyle}
-            value={name}
-            maxLength={24}
-            placeholder="Name your room"
-            aria-label="Room name"
-            autoFocus
-            onChange={(event) => {
-              setName(event.target.value);
+    <div style={screenStyle} className="fs-matchmaking-screen" aria-label="Matchmaking lobby">
+      <header style={headerStyle} className="fs-matchmaking-header">
+        <div>
+          <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.85 }}>
+            Online · Matchmaking
+          </div>
+          <div
+            style={{
+              marginTop: 3,
+              font: `600 23px/1 ${FONT_DISPLAY}`,
+              letterSpacing: "0.14em",
+              textTransform: "uppercase",
             }}
-          />
-          <button
-            type="submit"
-            className={PRESS_CLASS}
-            style={busy ? disabledButtonStyle(smallButtonStyle) : smallButtonStyle}
-            disabled={busy}
           >
-            Open
+            The Curiosity Shop
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ ...labelStyle, opacity: 0.55 }}>
+            {rooms.length} of {MAX_CONCURRENT_ROOMS} rooms live
+          </div>
+          {onBack === undefined ? null : (
+            <button type="button" className={PRESS_CLASS} style={smallButtonStyle} onClick={onBack}>
+              Return to title
+            </button>
+          )}
+        </div>
+      </header>
+
+      <main style={columnsStyle} className="fs-matchmaking-columns">
+        <section style={columnStyle} aria-label="Open rooms">
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+            <h2 style={{ margin: 0, font: `600 18px/1.2 ${FONT_DISPLAY}` }}>Open rooms</h2>
+            <span style={metaStyle}>{rooms.length} found</span>
+          </div>
+          <div style={{ ...ornamentRuleStyle("100%"), margin: "10px 0 4px" }} aria-hidden />
+          {rooms.length === 0 ? (
+            <p style={{ margin: "14px 2px", fontSize: 12, lineHeight: 1.7, opacity: 0.7 }}>
+              Nobody has opened a room yet. Open one and everyone in this Portals session will see it here.
+            </p>
+          ) : (
+            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {rooms.map((room) => {
+                const mine = room.code === currentCode;
+                const humans = Math.max(0, room.players - room.bots);
+                const selectedRow = room.code === selected?.code;
+                return (
+                  <li
+                    key={room.code}
+                    style={{
+                      ...rowStyle,
+                      background: selectedRow ? "rgba(176, 138, 74, 0.14)" : "transparent",
+                      borderLeft: selectedRow ? `3px solid ${BRASS_LIT}` : "3px solid transparent",
+                    }}
+                    onClick={() => {
+                      setSelectedCode(room.code);
+                    }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={nameStyle}>{room.name}</div>
+                      <div style={metaStyle}>
+                        {room.code} · {roomStatus(room.phase)}
+                      </div>
+                    </div>
+                    <div style={countStyle}>
+                      {humans}/{room.maxPlayers}
+                    </div>
+                    <button
+                      type="button"
+                      className={PRESS_CLASS}
+                      style={
+                        busy || (!room.joinable && !mine)
+                          ? disabledButtonStyle(smallButtonStyle)
+                          : smallButtonStyle
+                      }
+                      disabled={busy || (!room.joinable && !mine)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onJoin(room.code);
+                      }}
+                    >
+                      {mine ? "Return" : room.joinable ? "Join" : "Full"}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </section>
+
+        <section
+          style={{
+            ...columnStyle,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            background:
+              "radial-gradient(100% 70% at 50% 36%, rgba(114, 78, 34, 0.28), rgba(18, 13, 8, 0.92)), linear-gradient(178deg, rgba(41, 30, 19, 0.9), rgba(13, 10, 7, 0.94))",
+          }}
+          aria-label="Selected room"
+        >
+          {selected === null ? (
+            <div style={{ margin: "auto", textAlign: "center", maxWidth: 330 }}>
+              <div style={{ ...labelStyle, color: BRASS_LIT }}>Waiting for a room</div>
+              <h2 style={{ font: `600 28px/1.15 ${FONT_DISPLAY}`, margin: "10px 0" }}>
+                Be the first host
+              </h2>
+              <p style={{ margin: 0, opacity: 0.72 }}>
+                Name a room on the right. Its listing is shared immediately with the other players.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <div style={{ ...labelStyle, color: BRASS_LIT }}>
+                  Selected room · {selected.code}
+                </div>
+                <h2 style={{ font: `600 34px/1.1 ${FONT_DISPLAY}`, margin: "12px 0 8px" }}>
+                  {selected.name}
+                </h2>
+                <p style={{ margin: 0, opacity: 0.72 }}>
+                  {roomStatus(selected.phase)} · {selected.seekers} Inspector
+                  {selected.seekers === 1 ? "" : "s"} · {selected.bots} bot
+                  {selected.bots === 1 ? "" : "s"}
+                </p>
+              </div>
+              <div style={{ margin: "auto 0", padding: "28px 0" }}>
+                <div style={{ ...labelStyle, marginBottom: 9 }}>Lobby occupancy</div>
+                <div style={{ display: "flex", gap: 5 }}>
+                  {Array.from({ length: selected.maxPlayers }, (_, index) => (
+                    <span
+                      key={index}
+                      aria-hidden
+                      style={{
+                        height: 7,
+                        flex: 1,
+                        maxWidth: 28,
+                        borderRadius: 2,
+                        background:
+                          index < selected.players ? BRASS_LIT : "rgba(232, 221, 205, 0.12)",
+                      }}
+                    />
+                  ))}
+                </div>
+                <div style={{ ...metaStyle, marginTop: 8 }}>
+                  {selected.players} of {selected.maxPlayers} seats occupied
+                </div>
+              </div>
+              <button
+                type="button"
+                className={PRESS_CLASS}
+                style={
+                  busy || !selected.joinable
+                    ? disabledButtonStyle({ ...primaryButtonStyle, width: "100%" })
+                    : { ...primaryButtonStyle, width: "100%", padding: "12px 18px" }
+                }
+                disabled={busy || !selected.joinable}
+                onClick={() => {
+                  onJoin(selected.code);
+                }}
+              >
+                {busy ? "Opening…" : selected.joinable ? "Join selected room" : "Room full"}
+              </button>
+            </>
+          )}
+        </section>
+
+        <section style={columnStyle} aria-label="Matchmaking actions">
+          <h2 style={{ margin: 0, font: `600 18px/1.2 ${FONT_DISPLAY}` }}>Matchmaking</h2>
+          <div style={{ ...ornamentRuleStyle("100%"), margin: "10px 0 14px" }} aria-hidden />
+          <button
+            type="button"
+            className={PRESS_CLASS}
+            style={
+              busy || !anyJoinable
+                ? disabledButtonStyle({ ...primaryButtonStyle, width: "100%" })
+                : { ...primaryButtonStyle, width: "100%" }
+            }
+            disabled={busy || !anyJoinable}
+            onClick={onQuickJoin}
+          >
+            Quick join
           </button>
-        </form>
-      ) : null}
+
+          <form
+            style={{ marginTop: 22, paddingTop: 16, borderTop: RULE }}
+            onSubmit={(event) => {
+              event.preventDefault();
+              if (busy || full) return;
+              onCreate(name);
+              setName("");
+            }}
+          >
+            <div style={{ ...labelStyle, marginBottom: 8 }}>Host a room</div>
+            <input
+              style={inputStyle}
+              value={name}
+              maxLength={24}
+              placeholder="Name your room"
+              aria-label="Room name"
+              onChange={(event) => {
+                setName(event.target.value);
+              }}
+            />
+            <button
+              type="submit"
+              className={PRESS_CLASS}
+              style={
+                busy || full
+                  ? disabledButtonStyle({ ...buttonStyle, width: "100%", marginTop: 9 })
+                  : { ...buttonStyle, width: "100%", marginTop: 9 }
+              }
+              disabled={busy || full}
+            >
+              New room
+            </button>
+          </form>
+
+          {notice === null ? null : (
+            <p
+              role="alert"
+              style={{ margin: "16px 0 0", color: "#e6a08e", fontSize: 12, lineHeight: 1.5 }}
+            >
+              {notice}
+            </p>
+          )}
+          {full ? (
+            <p style={{ ...labelStyle, opacity: 0.6, marginTop: 16, letterSpacing: "0.08em" }}>
+              This session holds {MAX_CONCURRENT_ROOMS} rooms at once. Join one or wait for a slot.
+            </p>
+          ) : null}
+        </section>
+      </main>
+
+      <footer
+        className="fs-matchmaking-footer"
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "0 26px",
+          borderTop: RULE,
+          background: "rgba(12, 9, 6, 0.9)",
+        }}
+      >
+        <span style={metaStyle}>Rooms update live across this Portals session</span>
+        <span style={{ ...labelStyle, color: BRASS_LIT }}>Fold & Seek Online</span>
+      </footer>
     </div>
   );
 }

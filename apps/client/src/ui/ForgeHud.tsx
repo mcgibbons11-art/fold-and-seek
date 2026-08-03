@@ -11,6 +11,8 @@ import { swatchById } from "../mimic/visual/materialSwatches";
 import { PaintPanel } from "./paint/PaintPanel";
 import {
   FORGE_TOOL_MODES,
+  FORGE_QUICK_PANELS,
+  FORGE_QUICK_SHAPES,
   FORGE_UI_ATTRIBUTE,
   type ForgeController,
   type ForgeHudState,
@@ -121,7 +123,7 @@ const FORGE_LAYOUT = {
   topRow: 74,
   /** The tool column and the undo column, which share a width. */
   leftColumnWidth: 132,
-  /** The Preview and lock panels on the right, which share a width. */
+  /** The compact lock/menu panel on the right. */
   rightStackWidth: 176,
   /**
    * How far the top of the Preview panel sits above the bottom of the viewport.
@@ -130,13 +132,13 @@ const FORGE_LAYOUT = {
    * Preview panel's own 155 — a heading, three stacked camera buttons at 24 with
    * 5 between them, the anchors line, and the panel's own chrome.
    */
-  rightStackTopFromBottom: 287,
+  rightStackTopFromBottom: 156,
   /**
    * How far the top of the bottom row — the status strip and the undo column —
    * sits above the bottom of the viewport. Both are anchored 16 from the bottom
    * and the undo column is the taller of the two at 102.
    */
-  bottomRowFromBottom: 118,
+  bottomRowFromBottom: 156,
   /** Breathing room between two panels that would otherwise touch. */
   gutter: 12,
   /** The status strip stays this narrow even when there is room for more. */
@@ -336,6 +338,7 @@ export function ForgeHud({
   showHeader = true,
 }: ForgeHudProps): ReactElement {
   const [state, setState] = useState<ForgeHudState>(() => controller.snapshot());
+  const [optionsOpen, setOptionsOpen] = useState(false);
 
   useEffect(() => controller.subscribe(setState), [controller]);
 
@@ -461,81 +464,72 @@ export function ForgeHud({
         {state.status}
       </div>
 
-      <div
-        {...hudProps}
-        style={{
-          ...panelStyle,
-          bottom: FORGE_LAYOUT.edge,
-          left: FORGE_LAYOUT.edge,
-          width: FORGE_LAYOUT.leftColumnWidth,
-        }}
-      >
-        <button
-          type="button"
-          style={{ ...buttonStyle, opacity: state.canUndo ? 1 : 0.4 }}
-          onClick={() => {
-            controller.undo();
+      {optionsOpen ? (
+        <div
+          {...hudProps}
+          role="dialog"
+          aria-label="Forge options"
+          style={{
+            ...panelStyle,
+            top: "50%",
+            left: "50%",
+            width: "min(380px, calc(100vw - 48px))",
+            maxHeight: "calc(100vh - 48px)",
+            overflowY: "auto",
+            transform: "translate(-50%, -50%)",
+            boxSizing: "border-box",
+            boxShadow: "0 22px 70px rgba(0, 0, 0, 0.62)",
+            zIndex: 12,
           }}
         >
-          ⟲ Undo{state.undoLabel === null ? "" : ` ${state.undoLabel}`}
-        </button>
-        <button
-          type="button"
-          style={{ ...buttonStyle, opacity: state.canRedo ? 1 : 0.4, marginBottom: 0 }}
-          onClick={() => {
-            controller.redo();
-          }}
-        >
-          ⟳ Redo
-        </button>
-      </div>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+            <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, margin: 0 }}>Forge options</div>
+            <button type="button" style={{ ...buttonStyle, width: "auto", margin: 0 }} onClick={() => setOptionsOpen(false)}>
+              Close
+            </button>
+          </div>
 
-      <div
-        {...hudProps}
-        style={{
-          ...panelStyle,
-          bottom: 132,
-          right: FORGE_LAYOUT.edge,
-          width: FORGE_LAYOUT.rightStackWidth,
-        }}
-      >
-        <div style={{ ...labelStyle, color: BRASS_LIT, marginBottom: 6 }}>Preview</div>
-        {/* Stacked rather than in a row: three of these across 176 px is what
-            reduced "Silhouette" to "Sil", and an abbreviation nobody can expand
-            is a control the player has to press to find out about. */}
-        <div style={{ display: "flex", flexDirection: "column", gap: 5, marginBottom: 8 }}>
-          {PREVIEW_BUTTONS.map((preview) => (
-            <PreviewButton
-              key={preview.id}
-              label={preview.label}
-              title={preview.title}
-              active={
-                preview.id === "silhouette"
-                  ? state.silhouette
-                  : state.preview === preview.id
-              }
-              onPress={() => {
-                if (preview.id === "silhouette") {
-                  controller.setSilhouette(!state.silhouette);
-                  return;
-                }
-                controller.setPreview(state.preview === preview.id ? "none" : preview.id);
-              }}
-            />
-          ))}
+          <div style={{ ...labelStyle, color: BRASS_LIT, marginBottom: 6 }}>History</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 14 }}>
+            <button
+              type="button"
+              style={{ ...buttonStyle, margin: 0, opacity: state.canUndo ? 1 : 0.4 }}
+              onClick={() => controller.undo()}
+            >
+              ⟲ Undo{state.undoLabel === null ? "" : ` ${state.undoLabel}`}
+            </button>
+            <button
+              type="button"
+              style={{ ...buttonStyle, margin: 0, opacity: state.canRedo ? 1 : 0.4 }}
+              onClick={() => controller.redo()}
+            >
+              ⟳ Redo
+            </button>
+          </div>
+
+          <div style={{ ...labelStyle, color: BRASS_LIT, marginBottom: 6 }}>Preview</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6, marginBottom: 12 }}>
+            {PREVIEW_BUTTONS.map((preview) => (
+              <PreviewButton
+                key={preview.id}
+                label={preview.label}
+                title={preview.title}
+                active={preview.id === "silhouette" ? state.silhouette : state.preview === preview.id}
+                onPress={() => {
+                  if (preview.id === "silhouette") controller.setSilhouette(!state.silhouette);
+                  else controller.setPreview(state.preview === preview.id ? "none" : preview.id);
+                }}
+              />
+            ))}
+          </div>
+          <div style={{ fontSize: 11, opacity: 0.7 }}>
+            {state.anchoredBones.length === 0 ? "No contact anchors" : `${state.anchoredBones.length} anchored`}
+            {state.unsatisfiedAnchors.length > 0 ? (
+              <span style={{ color: "#e0785f" }}> · {state.unsatisfiedAnchors.join(", ")} out of reach</span>
+            ) : null}
+          </div>
         </div>
-        <div style={{ fontSize: 11, opacity: 0.7 }}>
-          {state.anchoredBones.length === 0
-            ? "No contact anchors"
-            : `${state.anchoredBones.length} anchored`}
-          {state.unsatisfiedAnchors.length > 0 ? (
-            <span style={{ color: "#e0785f" }}>
-              {" "}
-              · {state.unsatisfiedAnchors.join(", ")} out of reach
-            </span>
-          ) : null}
-        </div>
-      </div>
+      ) : null}
 
       <div
         {...hudProps}
@@ -559,6 +553,13 @@ export function ForgeHud({
         >
           <Keycap>{state.locked ? "Esc" : "Enter"}</Keycap>
           {state.locked ? "Unlock" : "Lock disguise"}
+        </button>
+        <button
+          type="button"
+          style={buttonStyle}
+          onClick={() => setOptionsOpen((open) => !open)}
+        >
+          Forge options
         </button>
         <button
           type="button"
@@ -722,7 +723,29 @@ function ShapePanel({ controller, state, onCommit }: ContextPanelProps): ReactEl
   }
   return (
     <Section title={segment.bone.replace(/_/g, " ")}>
-      {FORM_SLIDERS.map((slider) => (
+      <div style={{ opacity: 0.65, marginBottom: 8 }}>
+        Pick a silhouette, then tune it. Mirror repeats the change immediately.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5, marginBottom: 12 }}>
+        {FORGE_QUICK_SHAPES.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            style={{ ...buttonStyle, textAlign: "center", padding: "6px 4px", margin: 0 }}
+            onClick={() => controller.applySegmentFormPreset(preset.values, preset.profileId)}
+          >
+            {preset.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          style={{ ...buttonStyle, textAlign: "center", padding: "6px 4px", margin: 0 }}
+          onClick={() => controller.resetSelectedSegmentForm()}
+        >
+          Reset
+        </button>
+      </div>
+      {FORM_SLIDERS.filter((slider) => ["length", "width", "depth"].includes(slider.key)).map((slider) => (
         <Slider
           key={slider.key}
           label={slider.label}
@@ -737,23 +760,35 @@ function ShapePanel({ controller, state, onCommit }: ContextPanelProps): ReactEl
           onCommit={onCommit}
         />
       ))}
-      <span style={labelStyle}>
-        <span>Profile</span>
-      </span>
-      <select
-        style={selectStyle}
-        value={segment.form.profileId}
-        onChange={(event) => {
-          controller.setSegmentProfile(event.target.value as SegmentProfileId);
-          controller.commitEdits();
-        }}
-      >
-        {SEGMENT_PROFILE_IDS.map((id) => (
-          <option key={id} value={id} style={{ color: "#14100c" }}>
-            {id.replace(/_/g, " ")}
-          </option>
+      <details style={{ borderTop: EDGE, paddingTop: 8 }}>
+        <summary style={{ cursor: "pointer", color: BRASS_LIT, marginBottom: 8 }}>Surface shaping</summary>
+        {FORM_SLIDERS.filter((slider) => !["length", "width", "depth"].includes(slider.key)).map((slider) => (
+          <Slider
+            key={slider.key}
+            label={slider.label}
+            min={slider.min}
+            max={1}
+            step={0.01}
+            value={segment.form[slider.key]}
+            remountKey={`${segment.slot}:${slider.key}:${state.formEpoch}`}
+            onInput={(value) => controller.setSegmentFormValue(slider.key, value)}
+            onCommit={onCommit}
+          />
         ))}
-      </select>
+        <span style={labelStyle}><span>Profile</span></span>
+        <select
+          style={selectStyle}
+          value={segment.form.profileId}
+          onChange={(event) => {
+            controller.setSegmentProfile(event.target.value as SegmentProfileId);
+            controller.commitEdits();
+          }}
+        >
+          {SEGMENT_PROFILE_IDS.map((id) => (
+            <option key={id} value={id} style={{ color: "#14100c" }}>{id.replace(/_/g, " ")}</option>
+          ))}
+        </select>
+      </details>
     </Section>
   );
 }
@@ -786,7 +821,22 @@ function PanelPanel({ controller, state, onCommit }: ContextPanelProps): ReactEl
   const panel = selection.panel;
   return (
     <Section title={selection.socketId.replace("panel_socket_", "panel ")}>
-      {PANEL_SLIDERS.map((slider) => (
+      <div style={{ opacity: 0.65, marginBottom: 8 }}>
+        Pick a panel shape, then drag its glowing tip in the world to place it.
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginBottom: 12 }}>
+        {FORGE_QUICK_PANELS.map((preset) => (
+          <button
+            key={preset.label}
+            type="button"
+            style={{ ...buttonStyle, textAlign: "center", margin: 0 }}
+            onClick={() => controller.applyPanelPreset(preset.values, preset.profileId)}
+          >
+            {preset.label}
+          </button>
+        ))}
+      </div>
+      {PANEL_SLIDERS.filter((slider) => ["deployed", "width", "height"].includes(slider.key)).map((slider) => (
         <Slider
           key={slider.key}
           label={slider.label}
@@ -801,23 +851,35 @@ function PanelPanel({ controller, state, onCommit }: ContextPanelProps): ReactEl
           onCommit={onCommit}
         />
       ))}
-      <span style={labelStyle}>
-        <span>Profile</span>
-      </span>
-      <select
-        style={selectStyle}
-        value={panel.profileId}
-        onChange={(event) => {
-          controller.setPanelProfile(event.target.value as PanelProfileId);
-          controller.commitEdits();
-        }}
-      >
-        {PANEL_PROFILE_IDS.map((id) => (
-          <option key={id} value={id} style={{ color: "#14100c" }}>
-            {id.replace(/_/g, " ")}
-          </option>
+      <details style={{ borderTop: EDGE, paddingTop: 8, marginBottom: 8 }}>
+        <summary style={{ cursor: "pointer", color: BRASS_LIT, marginBottom: 8 }}>Hinge and profile</summary>
+        {PANEL_SLIDERS.filter((slider) => ["hingeAngle", "extension"].includes(slider.key)).map((slider) => (
+          <Slider
+            key={slider.key}
+            label={slider.label}
+            min={slider.min}
+            max={slider.max}
+            step={slider.step}
+            value={panel[slider.key]}
+            remountKey={`${selection.socketId}:${slider.key}:${state.formEpoch}`}
+            onInput={(value) => controller.setPanelValue(slider.key, value)}
+            onCommit={onCommit}
+          />
         ))}
-      </select>
+        <span style={labelStyle}><span>Profile</span></span>
+        <select
+          style={selectStyle}
+          value={panel.profileId}
+          onChange={(event) => {
+            controller.setPanelProfile(event.target.value as PanelProfileId);
+            controller.commitEdits();
+          }}
+        >
+          {PANEL_PROFILE_IDS.map((id) => (
+            <option key={id} value={id} style={{ color: "#14100c" }}>{id.replace(/_/g, " ")}</option>
+          ))}
+        </select>
+      </details>
       <button
         type="button"
         style={{ ...buttonStyle, marginBottom: 0 }}

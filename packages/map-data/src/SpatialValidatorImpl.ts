@@ -24,6 +24,7 @@ export type SpatialRejectionReason =
   | "out_of_range"
   | "no_line_of_sight"
   | "outside_playable_area"
+  | "forbidden_area"
   | "inside_blocked_geometry";
 
 export interface SpatialValidatorDeps {
@@ -31,6 +32,8 @@ export interface SpatialValidatorDeps {
   readonly floors: readonly WalkableSurface[];
   /** Map blockers: walls, furniture, blocked volumes (§26.5). */
   readonly blockers: readonly AABB[];
+  /** Volumes a Mimic root may never occupy even though an Inspector may walk there. */
+  readonly forbiddenOccupancy?: readonly AABB[];
   /** `accusationDistance` from the match settings. */
   readonly accusationDistance: number;
   /** `inspectorFocusDistance` from the match settings. */
@@ -113,6 +116,16 @@ export class SpatialValidatorImpl implements SpatialValidator {
       break;
     }
     if (!overFloor) return refuse("outside_playable_area");
+
+    for (const area of this.deps.forbiddenOccupancy ?? []) {
+      if (
+        x >= area.min.x && x <= area.max.x &&
+        y >= area.min.y && y <= area.max.y &&
+        z >= area.min.z && z <= area.max.z
+      ) {
+        return refuse("forbidden_area");
+      }
+    }
 
     for (const blocker of this.deps.blockers) {
       if (

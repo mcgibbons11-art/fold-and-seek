@@ -17,39 +17,36 @@ export const PLAYER_HEIGHT_M = 0.35;
  * v² / (g · L), where L is leg length. A 1.75 m person with a 0.9 m leg breaks
  * from a walk into a run near 2.1 m/s, which is a Froude number of about 0.5.
  * The same Froude number over a 0.35 m body, whose leg is roughly half its
- * standing height, gives sqrt(0.5 · 9.81 · 0.175) = 0.93 m/s, or 2.6 body
- * lengths a second. A small creature covers more of its own lengths per second
- * than a person does, which is why this is 2.6 and not the human figure of 1.2.
+ * standing height, gives sqrt(0.5 · 9.81 · 0.175) = 0.93 m/s. The game goes a
+ * little above that at 3.4 body lengths per second (1.19 m/s): enough to make
+ * short aisle changes immediate without turning the search into a sprint.
  *
  * The result also sits in the right relation to the climb speeds the map is
- * authored against, `WORLD_SCALE.mantleSpeed` 0.55 m/s and `ladderSpeed`
- * 0.35 m/s: walking is a little under twice a vault. The previous 2.8 m/s was
- * five times a vault, so an Inspector crossed the floor faster than they could
- * ever climb the stool in front of them.
+ * authored against, `WORLD_SCALE.mantleSpeed` 0.84 m/s and `ladderSpeed`
+ * 0.54 m/s: walking is about one and a half times a vault, so taking the shelf
+ * route no longer feels like the controls have changed speed classes.
  */
-const INSPECTOR_BODY_LENGTHS_PER_SECOND = 2.6;
+const INSPECTOR_BODY_LENGTHS_PER_SECOND = 3.4;
 
 /**
- * Hider creep speed, in body lengths per second. Half a body length a second is
- * where a disguise still reads as furniture that moved while nobody was
- * looking rather than as an object walking away, and it is under a fifth of the
+ * Hider creep speed, in body lengths per second. Seven tenths of a body length
+ * a second still reads as furniture shifting while nobody was looking rather
+ * than as an object walking away, and it is just over a fifth of the
  * Inspector's walk, so creeping can never outrun a search. Over the full hunt a
  * patient hider can still relocate the length of the shop.
  */
-const HIDER_CREEP_BODY_LENGTHS_PER_SECOND = 0.5;
+const HIDER_CREEP_BODY_LENGTHS_PER_SECOND = 0.7;
 
 /**
  * Hider running speed during the Forge, in body lengths per second.
  *
- * `INSPECTOR_BODY_LENGTHS_PER_SECOND` is the Froude number at which a walker
- * breaks into a run, so 2.6 is the top of a walk rather than a run. A Mimic
- * crossing the shop to find somewhere to hide is running, and it carries no gun
- * and is searching for nothing, so it goes a little faster. Three body lengths a
- * second is 1.05 m/s against the Inspector's 0.91: quick enough that covering
- * the fifteen metre shop during the fold is comfortable, close enough that an
- * Inspector who catches a Mimic still on its feet can run it down.
+ * A Mimic crossing the shop to find somewhere to hide is running, carries no
+ * gun, and is searching for nothing, so it goes a little faster than the
+ * Inspector. At 4.2 body lengths per second it covers 1.47 m/s against the
+ * Inspector's 1.19: quick enough that the fold phase is spent shaping instead
+ * of commuting across the shop, still close enough to read as the same body.
  */
-const HIDER_FORGE_BODY_LENGTHS_PER_SECOND = 3;
+const HIDER_FORGE_BODY_LENGTHS_PER_SECOND = 4.2;
 
 /**
  * How fast a Mimic runs while the Forge is open, in metres per second.

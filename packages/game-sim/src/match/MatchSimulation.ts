@@ -1253,6 +1253,21 @@ export class MatchSimulation {
   }
 
   /**
+   * Whether a compact authority snapshot can rebuild every pose from the
+   * separately published locked-pose book.
+   *
+   * During Forge (and its lock grace) a Mimic can have a valid working pose
+   * that is not public yet. The transport should hold its previous snapshot in
+   * that state instead of repeatedly attempting an omission that is known to
+   * be unsafe and filling the console with expected exceptions.
+   */
+  canOmitSnapshotPoses(): boolean {
+    return ![...this.players.values()].some(
+      (player) => player.disguise === null && player.lastValidPose !== null,
+    );
+  }
+
+  /**
    * Where the authority believes every uncaught disguise is standing.
    *
    * A `SpatialValidator` has to answer `objectBounds` for a disguise as well as

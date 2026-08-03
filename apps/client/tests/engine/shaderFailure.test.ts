@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { QUALITY_TIER_ORDER, stepQualityTier, type QualityTier } from "../../src/rendering/quality";
-import { ShaderFailurePolicy, type ShaderFailureResponse } from "../../src/rendering/RendererManager";
+import {
+  GraphicsRecoveryPolicy,
+  ShaderFailurePolicy,
+  type ShaderFailureResponse,
+} from "../../src/rendering/RendererManager";
 
 /**
  * The failure this encodes, measured on a frozen production build on an Intel
@@ -131,5 +135,31 @@ describe("ShaderFailurePolicy", () => {
     expect(policy.record(5_000, true)).toBe("demote");
     expect(policy.record(9_000, false)).toBe("ignore");
     expect(policy.record(13_000, false)).toBe("fault");
+  });
+});
+
+describe("GraphicsRecoveryPolicy", () => {
+  it("rebuilds twice before falling back to the recovery notice", () => {
+    const policy = new GraphicsRecoveryPolicy();
+
+    expect(policy.requestRebuild()).toBe("rebuild");
+    expect(policy.requestRebuild()).toBe("rebuild");
+    expect(policy.requestRebuild()).toBe("fallback");
+    expect(policy.attemptsUsed).toBe(2);
+    expect(policy.exhausted).toBe(true);
+  });
+
+  it("restores the budget after a renderer stays healthy", () => {
+    const policy = new GraphicsRecoveryPolicy();
+    expect(policy.requestRebuild()).toBe("rebuild");
+
+    policy.markStable();
+
+    expect(policy.attemptsUsed).toBe(0);
+    expect(policy.requestRebuild()).toBe("rebuild");
+  });
+
+  it("refuses a nonsensical empty recovery budget", () => {
+    expect(() => new GraphicsRecoveryPolicy(0)).toThrow(RangeError);
   });
 });

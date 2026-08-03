@@ -7,7 +7,9 @@ import {
   BRASS_LIT,
   CREAM,
   FONT_UI,
+  PRESS_CLASS,
   SCREEN_WASH,
+  buttonStyle,
   headlineStyle,
   labelStyle,
   ornamentRuleStyle,
@@ -55,9 +57,11 @@ const trackStyle: CSSProperties = {
 
 export interface LoadingScreenProps {
   readonly progress: RoundLoadProgress;
+  /** Stops the pending join/build and returns to the room browser or menu. */
+  readonly onCancel?: () => void;
 }
 
-export function LoadingScreen({ progress }: LoadingScreenProps): ReactElement {
+export function LoadingScreen({ progress, onCancel }: LoadingScreenProps): ReactElement {
   const percent = Math.round(Math.min(Math.max(progress.fraction, 0), 1) * 100);
   return (
     <div style={backdropStyle} role="status" aria-live="polite">
@@ -92,6 +96,16 @@ export function LoadingScreen({ progress }: LoadingScreenProps): ReactElement {
             are said in the room's words instead. */}
         {loadingLabel(progress.label)}
       </div>
+      {onCancel === undefined ? null : (
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={{ ...buttonStyle, marginTop: 6 }}
+          onClick={onCancel}
+        >
+          Return to menu
+        </button>
+      )}
     </div>
   );
 }

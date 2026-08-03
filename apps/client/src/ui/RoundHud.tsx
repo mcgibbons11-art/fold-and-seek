@@ -1,10 +1,13 @@
-import { MatchPhase, type ResultVoteCategory } from "@foldseek/shared";
+import type { MatchSettingsPatch } from "@foldseek/game-sim";
+import { MatchPhase, type MatchSettings, type ResultVoteCategory } from "@foldseek/shared";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 
 import type { RoundDirector } from "../gameplay/RoundDirector";
 import type { RoundSession } from "../gameplay/RoundSession";
 import type { RoundViewState } from "../gameplay/roundView";
+import type { QualityTier } from "../rendering/quality";
 import { ForgeHud } from "./ForgeHud";
+import { GameMenu } from "./GameMenu";
 import {
   BaselineHud,
   ForgePhaseHud,
@@ -50,16 +53,21 @@ const MISSED_FINDS_PHASES: ReadonlySet<MatchPhase> = new Set([
   MatchPhase.Reveal,
 ]);
 
-/** The loopback round is not a room anyone can be invited to. */
-const LOCAL_ROOM_CODE = "";
-
 export interface RoundHudProps {
   readonly director: RoundDirector;
   readonly session: RoundSession;
   readonly onLeave: () => void;
+  readonly qualityTier: QualityTier;
+  readonly onQualityTierChange: (tier: QualityTier) => void;
 }
 
-export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactElement {
+export function RoundHud({
+  director,
+  session,
+  onLeave,
+  qualityTier,
+  onQualityTierChange,
+}: RoundHudProps): ReactElement {
   const state = useSyncExternalStore(
     useCallback((listener: () => void) => director.subscribe(listener), [director]),
     useCallback(() => director.getState(), [director]),
@@ -71,6 +79,10 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
 
   const onReady = useCallback((ready: boolean) => session.actions.ready(ready), [session]);
   const onStart = useCallback(() => session.actions.startMatch(), [session]);
+  const onSettings = useCallback(
+    (settings: MatchSettingsPatch) => session.actions.setSettings(settings),
+    [session],
+  );
   const onTaunt = useCallback(() => session.actions.taunt(), [session]);
   const onVote = useCallback(
     (category: ResultVoteCategory, targetPublicObjectId: string) =>
@@ -80,6 +92,11 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
   const onRematch = useCallback((yes: boolean) => session.actions.voteRematch(yes), [session]);
   const onAddBot = useCallback(() => session.actions.addBot(), [session]);
   const onRemoveBot = useCallback(() => session.actions.removeBot(), [session]);
+  const onCopyRoomCode = useCallback(() => {
+    if (session.roomCode !== "" && navigator.clipboard !== undefined) {
+      void navigator.clipboard.writeText(session.roomCode);
+    }
+  }, [session]);
 
   const [boardOpen, setBoardOpen] = useState(false);
   const onToggleBoard = useCallback(() => {
@@ -122,15 +139,23 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
 
   if (INSPECTION_PHASES.has(state.phase)) {
     return (
-      <HuntHud
-        state={state}
-        gun={engine.gun}
-        forge={engine.forge}
-        pointerLocked={engine.pointerLocked}
-        boardOpen={boardOpen}
-        onToggleBoard={onToggleBoard}
-        onTaunt={onTaunt}
-      />
+      <>
+        <HuntHud
+          state={state}
+          gun={engine.gun}
+          forge={engine.forge}
+          pointerLocked={engine.pointerLocked}
+          boardOpen={boardOpen}
+          onToggleBoard={onToggleBoard}
+          onTaunt={onTaunt}
+        />
+        <GameMenu
+          qualityTier={qualityTier}
+          onQualityTierChange={onQualityTierChange}
+          onLeave={onLeave}
+          role={state.self.role}
+        />
+      </>
     );
   }
 
@@ -148,6 +173,10 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
           ),
         onReady,
         onStart,
+        roomCode: session.roomCode,
+        onCopyRoomCode,
+        settings: session.matchSettings,
+        onSettings,
         onVote,
         onRematch,
         onAddBot,
@@ -165,6 +194,12 @@ export function RoundHud({ director, session, onLeave }: RoundHudProps): ReactEl
             ),
         }}
       />
+      <GameMenu
+        qualityTier={qualityTier}
+        onQualityTierChange={onQualityTierChange}
+        onLeave={onLeave}
+        role={state.self.role}
+      />
     </>
   );
 }
@@ -173,6 +208,10 @@ interface PhaseHandlers {
   readonly forgeTools: ReactElement | null;
   readonly onReady: (ready: boolean) => void;
   readonly onStart: () => void;
+  readonly roomCode: string;
+  readonly onCopyRoomCode: () => void;
+  readonly settings: MatchSettings;
+  readonly onSettings: (settings: MatchSettingsPatch) => void;
   readonly onVote: (category: ResultVoteCategory, targetPublicObjectId: string) => void;
   readonly onRematch: (yes: boolean) => void;
   readonly onAddBot: () => void;
@@ -186,9 +225,12 @@ function phaseHud(state: RoundViewState, handlers: PhaseHandlers): ReactElement 
       return (
         <LobbyHud
           state={state}
-          roomCode={LOCAL_ROOM_CODE}
+          roomCode={handlers.roomCode}
+          onCopyRoomCode={handlers.roomCode === "" ? undefined : handlers.onCopyRoomCode}
           onReady={handlers.onReady}
           onStart={handlers.onStart}
+          settings={handlers.settings}
+          onSettingsChange={handlers.onSettings}
           onAddBot={handlers.onAddBot}
           onRemoveBot={handlers.onRemoveBot}
         />

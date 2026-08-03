@@ -118,5 +118,5 @@ export const PROP_BUILDERS: Readonly<Record<PropVariant, PropBuilder>> = {
   indicator_light: buildIndicatorLight,
 };
 
-export { buildArchitecture, OFFICE_DOOR_NAME } from "./architecture";
+export { buildArchitecture, OFFICE_DOOR_NAME, OFFICE_STAFF_BARRIER_NAME } from "./architecture";
 export type { PropBuilder, PropContext } from "./context";

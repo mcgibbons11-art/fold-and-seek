@@ -442,9 +442,11 @@ describe("host migration snapshot", () => {
     forging.toForge();
     const mimicId = forging.mimicIds()[0] as string;
     expect(forging.sim.recordForgeSnapshot(mimicId, testPose(3, 2), 2).accepted).toBe(true);
+    expect(forging.sim.canOmitSnapshotPoses()).toBe(false);
     expect(() => forging.sim.snapshot({ poses: "omit" })).toThrow(/unlocked pose/);
 
     const harness = midRoundHarness(983);
+    expect(harness.sim.canOmitSnapshotPoses()).toBe(true);
     const omitted = harness.sim.snapshot({ poses: "omit" });
     expect(() => MatchSimulation.restore(omitted)).toThrow(/could not be supplied/);
     expect(() => MatchSimulation.restore(omitted, { poses: [] })).toThrow(/could not be supplied/);

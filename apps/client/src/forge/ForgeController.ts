@@ -58,7 +58,9 @@ import {
   type PanelSocketName,
 } from "../mimic/rig";
 import {
+  clampSegmentForm,
   cloneSegmentForm,
+  createDefaultSegmentForm,
   isSegmentProfileId,
   type SegmentFormState,
   type SegmentProfileId,
@@ -71,11 +73,14 @@ import {
   type MaterialSwatch,
 } from "../mimic/visual/materialSwatches";
 import { createPaintTool, type PaintTool } from "../paint/createPaintTool";
+import { MAX_BRUSH_RADIUS, MIN_BRUSH_RADIUS } from "../paint/PaintBrushController";
+import { mirroredPaintTarget } from "../paint/paintTargets";
 import type { QualitySettings } from "../rendering/quality";
 import { AudioPlayer } from "./AudioPlayer";
 import {
   assignmentSlots,
   BODY_SLOT_ID,
+  mirroredSlotId,
   resolvedSwatchFor,
   validateAssignment,
 } from "./materialAssignment";
@@ -150,7 +155,54 @@ export type SegmentFormNumericKey =
   | "roundness"
   | "twist";
 
+const SEGMENT_FORM_NUMERIC_KEYS: readonly SegmentFormNumericKey[] = [
+  "length",
+  "width",
+  "depth",
+  "flatten",
+  "taper",
+  "roundness",
+  "twist",
+];
+
 export type PanelNumericKey = "deployed" | "hingeAngle" | "extension" | "width" | "height";
+
+const PANEL_NUMERIC_KEYS: readonly PanelNumericKey[] = [
+  "deployed",
+  "hingeAngle",
+  "extension",
+  "width",
+  "height",
+];
+
+/** High-impact silhouettes shared by the Forge buttons and Shift+number hotkeys. */
+export const FORGE_QUICK_SHAPES: readonly {
+  readonly label: string;
+  readonly values: Partial<Record<SegmentFormNumericKey, number>>;
+  readonly profileId: SegmentProfileId;
+}[] = [
+  { label: "Slim", values: { width: 0.18, depth: 0.18, flatten: 0.15, taper: -0.18 }, profileId: "capsule" },
+  { label: "Broad", values: { width: 0.88, depth: 0.68, flatten: 0, taper: 0.08 }, profileId: "rounded_box" },
+  { label: "Flat", values: { width: 0.78, depth: 0.2, flatten: 0.9, taper: 0 }, profileId: "flat_panel" },
+  { label: "Long", values: { length: 0.9, width: 0.38, depth: 0.38, taper: -0.12 }, profileId: "tapered_block" },
+  { label: "Round", values: { width: 0.62, depth: 0.62, flatten: 0, roundness: 1, taper: 0 }, profileId: "cylinder" },
+];
+
+/** Fast panel identities shared by the Forge buttons and Shift+number hotkeys. */
+export const FORGE_QUICK_PANELS: readonly {
+  readonly label: string;
+  readonly values: Partial<Record<PanelNumericKey, number>>;
+  readonly profileId: PanelProfileId;
+}[] = [
+  { label: "Shield", values: { deployed: 1, width: 0.9, height: 0.78, extension: 0.08, hingeAngle: 0 }, profileId: "rounded_rect" },
+  { label: "Blade", values: { deployed: 1, width: 0.18, height: 0.9, extension: 0.25, hingeAngle: 0 }, profileId: "triangle" },
+  { label: "Wing", values: { deployed: 1, width: 0.82, height: 0.42, extension: 0.52, hingeAngle: 55 }, profileId: "triangle" },
+  { label: "Tile", values: { deployed: 0.72, width: 0.68, height: 0.68, extension: 0, hingeAngle: 0 }, profileId: "rectangle" },
+];
+
+/** The creature snaps toward travel during Forge, but only quietly pivots while hiding. */
+const FORGE_TURN_RATE_RAD_PER_SECOND = 8.5;
+const CREEP_TURN_RATE_RAD_PER_SECOND = 1.15;
 
 /** Preview cameras of bible §7.6. `inspector` is held, the rest toggle. */
 export type ForgePreviewMode = "none" | "inspector" | "doorway";
@@ -686,11 +738,15 @@ export class ForgeController {
   private segmentEdit: SegmentEdit | null = null;
   private panelEditBefore: PanelState | null = null;
   private panelEditSocket: PanelSocketName | null = null;
+  private panelMirrorEditBefore: PanelState | null = null;
+  private panelMirrorEditSocket: PanelSocketName | null = null;
 
   private readonly dragPlane = new THREE.Plane();
   private readonly dragOffset = new THREE.Vector3();
   private readonly scratchVector = new THREE.Vector3();
   private readonly scratchQuaternion = new THREE.Quaternion();
+  private readonly mirrorScratch = new THREE.Vector3();
+  private readonly mirrorRotation = new THREE.Quaternion();
   private readonly scratchProbeOrigin = new THREE.Vector3();
   private readonly contactParentInverse = new THREE.Quaternion();
   private readonly contactLocal = new THREE.Quaternion();
@@ -780,6 +836,11 @@ export class ForgeController {
         this.emit();
       },
       ownsPointerEvent: (event) => this.ownsPointerEvent(event),
+      expandStroke: (stroke) => {
+        if (!this.mirror) return [stroke];
+        const target = mirroredPaintTarget(stroke.segmentId);
+        return target === null ? [stroke] : [stroke, { ...stroke, segmentId: target }];
+      },
     });
 
     this.syncOrbitTarget();
@@ -789,7 +850,7 @@ export class ForgeController {
     this.updateCamera();
     this.applyQuality(options.quality);
     this.captureTargets();
-    this.refreshAll();
+    this.refreshAll(true);
     this.attachInput();
   }
 
@@ -1001,6 +1062,8 @@ export class ForgeController {
     }
     if (this.walkBefore === null) this.beginWalk();
 
+    this.turnAuthoredPoseTowardTravel(dtMs / 1_000);
+
     const x = clamp(this.walkPosition.x, this.workspace.minX, this.workspace.maxX);
     const z = clamp(this.walkPosition.z, this.workspace.minZ, this.workspace.maxZ);
     // The play volume's floor bound is a guard for the pointer, which can shove
@@ -1035,6 +1098,41 @@ export class ForgeController {
     // Re-solves and re-captures the disguise, which is what advances the
     // revision the round publishes.
     this.solveAndRefresh();
+  }
+
+  /**
+   * Turns the authored disguise and its world-space IK targets together. The
+   * gait can lean and step cosmetically, but yaw must travel on the wire or
+   * every peer sees the creature moon-walk sideways.
+   */
+  private turnAuthoredPoseTowardTravel(dtSeconds: number): void {
+    const locomotion = this.locomotion;
+    if (locomotion === null || dtSeconds <= 0 || locomotion.sample.speedFraction <= 0) return;
+
+    this.scratchForward.set(0, 0, -1).applyQuaternion(this.pose.rootRotation);
+    this.scratchForward.y = 0;
+    if (this.scratchForward.lengthSq() < 1e-8) return;
+    this.scratchForward.normalize();
+
+    const currentYaw = Math.atan2(-this.scratchForward.x, -this.scratchForward.z);
+    const wantedYaw = locomotion.sample.travelYaw;
+    const rate = this.creepSpeed === null
+      ? FORGE_TURN_RATE_RAD_PER_SECOND
+      : CREEP_TURN_RATE_RAD_PER_SECOND;
+    const limit = rate * dtSeconds;
+    const delta = clamp(shortestAngle(wantedYaw - currentYaw), -limit, limit);
+    if (Math.abs(delta) < 1e-6) return;
+
+    this.scratchQuaternion.setFromAxisAngle(this.postureAxis.set(0, 1, 0), delta);
+    this.pose.rootRotation.premultiply(this.scratchQuaternion).normalize();
+    const root = this.pose.rootPosition;
+    for (const target of this.targets.values()) {
+      this.scratchVector
+        .set(target.x - root.x, target.y - root.y, target.z - root.z)
+        .applyQuaternion(this.scratchQuaternion)
+        .add(root);
+      target.set(this.scratchVector.x, this.scratchVector.y, this.scratchVector.z);
+    }
   }
 
   /**
@@ -1389,6 +1487,10 @@ export class ForgeController {
 
   setMirror(mirror: boolean): void {
     this.mirror = mirror;
+    this.status = mirror
+      ? "Mirror on: limb posing, shaping, panels, materials, and paint repeat on the other side."
+      : "Mirror off.";
+    this.audio.play("ui_click");
     this.emit();
   }
 
@@ -1465,6 +1567,34 @@ export class ForgeController {
     this.finishSegmentValueChange(form);
   }
 
+  /** Applies a whole silhouette idea in one solve and one undo entry. */
+  applySegmentFormPreset(
+    values: Partial<Record<SegmentFormNumericKey, number>>,
+    profileId?: SegmentProfileId,
+  ): void {
+    const form = this.beginSegmentEdit();
+    if (form === null) return;
+    for (const key of SEGMENT_FORM_NUMERIC_KEYS) {
+      const value = values[key];
+      if (value !== undefined && Number.isFinite(value)) form[key] = value;
+    }
+    if (profileId !== undefined && isSegmentProfileId(profileId)) form.profileId = profileId;
+    clampSegmentForm(form);
+    this.finishSegmentValueChange(form);
+    this.formEpoch += 1;
+    this.commitEdits();
+  }
+
+  resetSelectedSegmentForm(): void {
+    const bone = SEGMENT_BONES[this.selectedSlot];
+    const form = this.beginSegmentEdit();
+    if (bone === undefined || form === null) return;
+    Object.assign(form, createDefaultSegmentForm(bone));
+    this.finishSegmentValueChange(form);
+    this.formEpoch += 1;
+    this.commitEdits();
+  }
+
   /** Opens a coalescing edit on the selected segment and returns its live form. */
   private beginSegmentEdit(): SegmentFormState | null {
     const slot = this.selectedSlot;
@@ -1535,9 +1665,31 @@ export class ForgeController {
     if (socket !== null) {
       this.panelEditBefore = null;
       this.panelEditSocket = null;
+      const mirrorBefore = this.panelMirrorEditBefore;
+      const mirrorSocket = this.panelMirrorEditSocket;
+      this.panelMirrorEditBefore = null;
+      this.panelMirrorEditSocket = null;
       const after = this.findPanel(socket);
+      const mirrorAfter = mirrorSocket === null ? null : this.findPanel(mirrorSocket);
+      const issuedAt = performance.now();
+      const edits: ForgeCommand[] = [];
       if (after !== null && (panelBefore === null || !samePanel(panelBefore, after))) {
-        this.commands.push(createPanelCommand(socket, panelBefore, after, performance.now()), this.state);
+        edits.push(createPanelCommand(socket, panelBefore, after, issuedAt));
+      }
+      if (
+        mirrorSocket !== null &&
+        mirrorAfter !== null &&
+        (mirrorBefore === null || !samePanel(mirrorBefore, mirrorAfter))
+      ) {
+        edits.push(createPanelCommand(mirrorSocket, mirrorBefore, mirrorAfter, issuedAt));
+      }
+      if (edits.length > 0) {
+        this.commands.push(
+          edits.length === 1
+            ? edits[0]!
+            : createCompositeCommand("adjust mirrored panels", edits, issuedAt),
+          this.state,
+        );
         this.emit();
       }
     }
@@ -1551,7 +1703,18 @@ export class ForgeController {
     }
     const panel = createDefaultPanelState(socketId);
     panel.deployed = 0.6;
-    this.commands.push(createPanelCommand(socketId, null, panel, performance.now()), this.state);
+    const issuedAt = performance.now();
+    const commands = [createPanelCommand(socketId, null, panel, issuedAt)];
+    const opposite = this.mirror ? mirroredSlotId(socketId) : null;
+    if (opposite !== null && isPanelSocketName(opposite) && this.findPanel(opposite) === null) {
+      const mirrored = clonePanelState(panel);
+      mirrored.socketId = opposite;
+      commands.push(createPanelCommand(opposite, null, mirrored, issuedAt));
+    }
+    this.commands.push(
+      commands.length === 1 ? commands[0]! : createCompositeCommand("deploy mirrored panels", commands, issuedAt),
+      this.state,
+    );
     this.selectPanelSocket(socketId);
     this.audio.play("panel_snap");
     this.status = `Deployed a panel on ${socketId.replace("panel_socket_", "socket ")}.`;
@@ -1564,7 +1727,17 @@ export class ForgeController {
     if (this.locked || existing === null) {
       return;
     }
-    this.commands.push(createPanelCommand(socketId, existing, null, performance.now()), this.state);
+    const issuedAt = performance.now();
+    const commands = [createPanelCommand(socketId, existing, null, issuedAt)];
+    const opposite = this.mirror ? mirroredSlotId(socketId) : null;
+    const mirrored = opposite === null ? null : this.findPanel(opposite);
+    if (opposite !== null && mirrored !== null) {
+      commands.push(createPanelCommand(opposite, mirrored, null, issuedAt));
+    }
+    this.commands.push(
+      commands.length === 1 ? commands[0]! : createCompositeCommand("stow mirrored panels", commands, issuedAt),
+      this.state,
+    );
     this.audio.play("ui_click");
     this.refreshAll();
     this.emit();
@@ -1588,6 +1761,23 @@ export class ForgeController {
     this.finishPanelValueChange(panel);
   }
 
+  /** Applies a complete panel silhouette without making the player tune five controls. */
+  applyPanelPreset(
+    values: Partial<Record<PanelNumericKey, number>>,
+    profileId?: PanelProfileId,
+  ): void {
+    const panel = this.beginPanelEdit();
+    if (panel === null) return;
+    for (const key of PANEL_NUMERIC_KEYS) {
+      const value = values[key];
+      if (value !== undefined && Number.isFinite(value)) panel[key] = value;
+    }
+    if (profileId !== undefined) panel.profileId = profileId;
+    this.finishPanelValueChange(panel);
+    this.formEpoch += 1;
+    this.commitEdits();
+  }
+
   private beginPanelEdit(): PanelState | null {
     const socket = this.selectedSocket;
     if (socket === null || this.locked) {
@@ -1601,12 +1791,28 @@ export class ForgeController {
       this.commitEdits();
       this.panelEditBefore = clonePanelState(panel);
       this.panelEditSocket = socket;
+      const opposite = this.mirror ? mirroredSlotId(socket) : null;
+      this.panelMirrorEditSocket =
+        opposite !== null && isPanelSocketName(opposite) ? opposite : null;
+      const mirrored =
+        this.panelMirrorEditSocket === null ? null : this.findPanel(this.panelMirrorEditSocket);
+      this.panelMirrorEditBefore = mirrored === null ? null : clonePanelState(mirrored);
     }
     return panel;
   }
 
   private finishPanelValueChange(panel: PanelState): void {
     clampPanelState(panel);
+    const mirrorSocket = this.panelMirrorEditSocket;
+    if (mirrorSocket !== null) {
+      let mirrored = this.findPanel(mirrorSocket);
+      if (mirrored === null) {
+        mirrored = createDefaultPanelState(mirrorSocket);
+        this.state.panels.push(mirrored);
+      }
+      copyPanelForm(panel, mirrored);
+      clampPanelState(mirrored);
+    }
     this.refreshAll();
     this.audio.playThrottled("servo_move", SERVO_INTERVAL_MS, 0.08);
   }
@@ -1845,14 +2051,22 @@ export class ForgeController {
     applyDisguiseStateToPose(this.state, this.pose);
     this.pinned.clear();
     this.captureTargets();
-    this.refreshAll();
+    this.refreshAll(true);
     this.emit();
   }
 
-  private refreshAll(): void {
+  /**
+   * Refreshes the live disguise after an edit. Material assignments are only
+   * reapplied for a whole-state reload: doing that during every pose or form
+   * change replaces the paint binder's material clones and makes it rebuild
+   * the entire painted body on the following frame.
+   */
+  private refreshAll(reapplyMaterials = false): void {
     this.mimic.applyForms(this.pose);
     this.mimic.applyPanels(this.state.panels);
-    this.mimic.applyMaterials(this.state.materials);
+    if (reapplyMaterials) {
+      this.mimic.applyMaterials(this.state.materials);
+    }
     this.applyPoseToVisual();
     this.layoutHandles();
     this.layoutAnchorMarkers();
@@ -2900,6 +3114,34 @@ export class ForgeController {
       return;
     }
 
+    // Shift+number changes the selected thing, while an unmodified number
+    // changes tools. This makes one hand enough to move from a body part to a
+    // strong silhouette without crossing the screen to the context panel.
+    if (event.shiftKey && /^[1-5]$/.test(key)) {
+      const index = Number(key) - 1;
+      if (this.mode === "shape") {
+        const preset = FORGE_QUICK_SHAPES[index];
+        if (preset !== undefined) this.applySegmentFormPreset(preset.values, preset.profileId);
+      } else if (this.mode === "panels") {
+        const preset = FORGE_QUICK_PANELS[index];
+        if (preset !== undefined) this.applyPanelPreset(preset.values, preset.profileId);
+      } else if (this.mode === "pose") {
+        const arrangement = STARTER_ARRANGEMENT_IDS[index];
+        if (arrangement !== undefined) this.applyArrangement(arrangement);
+      }
+      event.preventDefault();
+      return;
+    }
+
+    if (key === "tab") {
+      const current = FORGE_TOOL_MODES.indexOf(this.mode);
+      const step = event.shiftKey ? -1 : 1;
+      const next = (current + step + FORGE_TOOL_MODES.length) % FORGE_TOOL_MODES.length;
+      this.setToolMode(FORGE_TOOL_MODES[next]!);
+      event.preventDefault();
+      return;
+    }
+
     // The walk keys are held rather than pressed, so they are taken before the
     // switch: the browser repeats a held key and every repeat would otherwise
     // fall through to the default and be handed back to the page.
@@ -2944,6 +3186,24 @@ export class ForgeController {
       case "m":
         this.setMirror(!this.mirror);
         break;
+      case "x":
+        if (this.mode !== "paint" || this.locked) return;
+        this.paintTool.setEraser(!this.paintTool.getState().eraser);
+        break;
+      case "-":
+      case "_":
+        if (this.mode !== "paint" || this.locked) return;
+        this.paintTool.setBrushSize(
+          Math.max(MIN_BRUSH_RADIUS, this.paintTool.getState().brushSize - 0.025),
+        );
+        break;
+      case "=":
+      case "+":
+        if (this.mode !== "paint" || this.locked) return;
+        this.paintTool.setBrushSize(
+          Math.min(MAX_BRUSH_RADIUS, this.paintTool.getState().brushSize + 0.025),
+        );
+        break;
       case "[":
         this.cycleArrangement(-1);
         break;
@@ -2978,6 +3238,8 @@ export class ForgeController {
         this.draggedHandle = handle;
         this.setHandleOpacity(handle, HANDLE_OPACITY_DRAG);
         this.pinned.add(handle.def.target);
+        const mirroredTarget = this.mirror ? mirroredIkTarget(handle.def.target) : null;
+        if (mirroredTarget !== null) this.pinned.add(mirroredTarget);
         this.poseEditBefore = capturePoseSnapshot(this.state);
         const world = this.pose.worldPositions[handle.boneIndex];
         if (world !== undefined) {
@@ -3179,6 +3441,7 @@ export class ForgeController {
     const rootY = this.pose.rootPosition.y;
     const rootZ = this.pose.rootPosition.z;
     this.updateSnapCandidate(handle, target);
+    this.mirrorDraggedTarget(handle.def.target, target);
     this.solveAndRefresh();
     // Charged after the solve rather than before it, because an anchor pass can
     // walk the root further than the pointer asked for. Every drag pays, not
@@ -3221,6 +3484,30 @@ export class ForgeController {
       this.status = `Snapping ${handle.def.label} to ${candidate.object.name}. Release to seal it.`;
       this.emit();
     }
+  }
+
+  /** Keeps a paired hand or foot at the reflected world-space target. */
+  private mirrorDraggedTarget(name: IkTargetName, target: CoreVector3): void {
+    if (!this.mirror) return;
+    const opposite = mirroredIkTarget(name);
+    if (opposite === null) return;
+    const mirrored = this.targets.get(opposite);
+    if (mirrored === undefined) return;
+
+    const root = this.pose.rootPosition;
+    const rotation = this.pose.rootRotation;
+    this.mirrorRotation.set(rotation.x, rotation.y, rotation.z, rotation.w).invert();
+    this.mirrorScratch
+      .set(target.x - root.x, target.y - root.y, target.z - root.z)
+      .applyQuaternion(this.mirrorRotation);
+    this.mirrorScratch.x *= -1;
+    this.mirrorRotation.set(rotation.x, rotation.y, rotation.z, rotation.w);
+    this.mirrorScratch.applyQuaternion(this.mirrorRotation);
+    mirrored.set(
+      root.x + this.mirrorScratch.x,
+      root.y + this.mirrorScratch.y,
+      root.z + this.mirrorScratch.z,
+    );
   }
 
   private updatePointerNdc(event: PointerEvent): void {
@@ -3378,6 +3665,15 @@ function clamp(value: number, min: number, max: number): number {
   return value < min ? min : value > max ? max : value;
 }
 
+/** Heading difference taken the short way around ±π. */
+function shortestAngle(radians: number): number {
+  const twoPi = Math.PI * 2;
+  let wrapped = radians % twoPi;
+  if (wrapped > Math.PI) wrapped -= twoPi;
+  if (wrapped < -Math.PI) wrapped += twoPi;
+  return wrapped;
+}
+
 function sameForm(a: SegmentFormState, b: SegmentFormState): boolean {
   return (
     a.length === b.length &&
@@ -3413,4 +3709,29 @@ function mirroredSegmentSlot(slot: number): number {
       : null;
   if (mirrored === null) return -1;
   return SEGMENT_BONES.findIndex((name) => name === mirrored);
+}
+
+function mirroredIkTarget(target: IkTargetName): IkTargetName | null {
+  switch (target) {
+    case "hand_L":
+      return "hand_R";
+    case "hand_R":
+      return "hand_L";
+    case "foot_L":
+      return "foot_R";
+    case "foot_R":
+      return "foot_L";
+    default:
+      return null;
+  }
+}
+
+/** Copies the visible form while preserving the opposite socket's identity. */
+function copyPanelForm(source: PanelState, target: PanelState): void {
+  target.deployed = source.deployed;
+  target.hingeAngle = source.hingeAngle;
+  target.extension = source.extension;
+  target.width = source.width;
+  target.height = source.height;
+  target.profileId = source.profileId;
 }

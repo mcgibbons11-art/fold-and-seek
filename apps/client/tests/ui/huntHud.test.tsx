@@ -23,7 +23,6 @@ import { HUD_REGIONS, rectsOverlap, regionRect, type HudRegion } from "../../src
  */
 
 declare global {
-  // eslint-disable-next-line no-var
   var IS_REACT_ACT_ENVIRONMENT: boolean;
 }
 
@@ -215,6 +214,14 @@ function textOf(region: HudRegion): string {
   return container.querySelector(`[data-hud-region="${region}"]`)?.textContent ?? "";
 }
 
+function openActions(): void {
+  const disclosure = container.querySelector<HTMLButtonElement>(
+    '[data-hud-region="rightRail"] button[aria-expanded]',
+  );
+  expect(disclosure).not.toBeNull();
+  act(() => disclosure?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+}
+
 describe("hunt HUD region ownership", () => {
   it("claims each region at most once for a hider", () => {
     render(
@@ -249,17 +256,14 @@ describe("hunt HUD region ownership", () => {
     expect(new Set(claimed).size).toBe(claimed.length);
   });
 
-  it("draws all eight of a hider's chips, and shrinks them at 720p to do it", () => {
-    // The measured defect: at 1280x720 the roomy rail overran its region by
-    // 54 px, which cut the taunt chip off the top and the board off the bottom.
-    // The arithmetic is checked in `hudLayout.test.ts`; what is checked here is
-    // that the component acts on it and that no chip is dropped to make it fit.
+  it("keeps all eight hider actions behind one disclosure and fits them when opened", () => {
     const restore = { width: window.innerWidth, height: window.innerHeight };
     for (const viewport of VIEWPORTS) {
       Object.defineProperty(window, "innerWidth", { value: viewport.width, configurable: true });
       Object.defineProperty(window, "innerHeight", { value: viewport.height, configurable: true });
       render(
         <HuntHud
+          key={viewport.name}
           state={huntState({ role: "mimic", tauntAllowed: false })}
           gun={GUN}
           forge={stubForge("pose")}
@@ -274,6 +278,8 @@ describe("hunt HUD region ownership", () => {
       act(() => {
         window.dispatchEvent(new Event("resize"));
       });
+      expect(container.querySelector("[data-rail-size]"), `${viewport.name} starts clean`).toBeNull();
+      openActions();
       const rail = container.querySelector("[data-rail-size]");
       expect(rail, viewport.name).not.toBeNull();
       expect(rail?.children).toHaveLength(8);
@@ -472,7 +478,7 @@ function expectDisjoint(regions: readonly HudRegion[], width: number, height: nu
 }
 
 describe("hunt HUD grammar", () => {
-  it("gives a hider the four anchors the original has", () => {
+  it("gives a hider only the persistent anchors needed during play", () => {
     render(
       <HuntHud
         state={huntState({ role: "mimic" })}
@@ -487,7 +493,6 @@ describe("hunt HUD grammar", () => {
     const claimed = claimedRegions();
     expect(claimed).toContain("topCenter");
     expect(claimed).toContain("rightRail");
-    expect(claimed).toContain("bottomCenter");
     expect(claimed).toContain("bottomRight");
     expect(claimed).toContain("leftColumn");
     // The reticle belongs to whoever is holding the gun.
@@ -530,6 +535,8 @@ describe("hunt HUD grammar", () => {
         onTaunt={() => undefined}
       />,
     );
+    expect(textOf("rightRail")).toBe("Actions ▸");
+    openActions();
     const rail = container.querySelector('[data-hud-region="rightRail"]');
     const chips = [...(rail?.querySelectorAll("button, [aria-label] > div > div") ?? [])];
     expect(chips.length).toBeGreaterThan(0);
@@ -554,6 +561,7 @@ describe("hunt HUD grammar", () => {
         onTaunt={() => undefined}
       />,
     );
+    openActions();
     expect(textOf("rightRail")).toContain("Taunt");
     expect(textOf("bottomCenter")).not.toContain("Taunt");
   });
@@ -572,9 +580,10 @@ describe("hunt HUD grammar", () => {
     );
     expect(claimedRegions()).toContain("center");
     expect(textOf("rightRail")).not.toContain("Taunt");
+    openActions();
     expect(textOf("rightRail")).toContain("Fire a warrant");
     expect(textOf("leftColumn")).toContain("WARRANT ROUNDS");
-    expect(textOf("bottomCenter")).toContain("Walk");
+    expect(claimedRegions()).not.toContain("bottomCenter");
   });
 
   it("replaces an Inspector's control strip with the pointer-lock prompt until the room is theirs", () => {

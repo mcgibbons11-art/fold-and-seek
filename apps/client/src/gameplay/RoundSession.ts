@@ -19,7 +19,11 @@ import { MIMIC_NAV_DATA, NAV_DATA } from "../world/maps/nav";
 import { OFFICE_DOOR_NAME } from "../world/maps/props";
 import { CURIOSITY_SHOP_OBJECTS } from "../world/maps/registry";
 import { encodeDisguiseState } from "../mimic/poseWire";
-import type { NetworkAdapter, Unsubscribe } from "../networking/NetworkAdapter";
+import type {
+  InspectorCameraSample,
+  NetworkAdapter,
+  Unsubscribe,
+} from "../networking/NetworkAdapter";
 import { Signal } from "../networking/signal";
 import type { QualitySettings } from "../rendering/quality";
 import type { InspectorGunView } from "../ui/rounds/InspectorHud";
@@ -40,6 +44,7 @@ import {
 } from "./huntCues";
 import { RoundActions } from "./RoundActions";
 import type { RoundDirector } from "./RoundDirector";
+import { RemoteInspectorPresentation } from "./RemoteInspectorPresentation";
 import type { RoundSpatialBridge } from "./roundSpatial";
 import type { RoundViewState } from "./roundView";
 
@@ -216,6 +221,8 @@ export class RoundSession {
   private forgeSubscription: Unsubscribe | null = null;
   private forgeLocked = false;
   private inspector: InspectorSystem | null = null;
+  /** Full-body presentations for other human Inspectors in a two-seeker room. */
+  private readonly remoteInspectors = new Map<string, RemoteInspectorPresentation>();
   private focus: FocusMetadata | null = null;
   private pointerLocked = false;
   private inspectablesRevision = -1;
@@ -280,6 +287,10 @@ export class RoundSession {
         }
       }),
     );
+    const unsubscribeCamera = options.adapter.onCameraSample?.((seatId, sample) => {
+      this.receiveInspectorCamera(seatId, sample);
+    });
+    if (unsubscribeCamera !== undefined) this.subscriptions.push(unsubscribeCamera);
     this.options.canvas.addEventListener("click", this.onCanvasClick);
     this.options.canvas.addEventListener("pointerdown", this.onSurveyPointerDown);
     this.options.canvas.addEventListener("pointermove", this.onSurveyPointerMove);
@@ -305,6 +316,16 @@ export class RoundSession {
     return this.changed.subscribe(listener);
   }
 
+  /** Current authority-published room options for lobby controls. */
+  get matchSettings(): MatchSettings {
+    return this.settings();
+  }
+
+  /** Shareable code for the room lobby; local and dedicated sessions omit it. */
+  get roomCode(): string {
+    return this.options.adapter.getRoomCode?.() ?? "";
+  }
+
   update(dtMs: number, nowMs: number): void {
     const state = this.state();
     // The host can widen or narrow the room's reach in the lobby, and the
@@ -328,6 +349,7 @@ export class RoundSession {
     // After the sync, which puts every body back where its pose says it stands.
     this.theatre.update(dtMs);
     this.reactions.update(dtMs);
+    this.updateRemoteInspectors(dtMs, state);
 
     switch (this.mode) {
       case "forge":
@@ -449,6 +471,8 @@ export class RoundSession {
     this.subscriptions.length = 0;
     this.closeForge();
     this.closeInspector();
+    for (const remote of this.remoteInspectors.values()) remote.dispose();
+    this.remoteInspectors.clear();
     this.theatre.dispose();
     this.reactions.dispose();
     this.ambience.dispose();
@@ -735,6 +759,9 @@ export class RoundSession {
       onPointerLockChange: (locked) => {
         this.pointerLocked = locked;
       },
+      onCameraSample: (sample) => {
+        this.options.adapter.sendCameraSample?.(sample);
+      },
       // A round that never becomes an accusation is heard here and nowhere
       // else. The report of a real shot is played from the weapon's own state
       // in `stepGun`, so this is only the trigger clicking on nothing: no
@@ -759,6 +786,7 @@ export class RoundSession {
   }
 
   private closeInspector(): void {
+    this.options.adapter.sendCameraSample?.(null);
     const selfId = this.options.adapter.getSelfId();
     if (selfId !== null) this.options.spatial.setInspectorEye(selfId, null);
     this.inspector?.dispose();
@@ -766,6 +794,37 @@ export class RoundSession {
     this.focus = null;
     this.pointerLocked = false;
     this.inspectablesRevision = -1;
+  }
+
+  /** Creates, updates, or retires one peer's visual-only Inspector body. */
+  private receiveInspectorCamera(
+    seatId: string,
+    sample: InspectorCameraSample | null,
+  ): void {
+    if (seatId === this.options.adapter.getSelfId()) return;
+    if (sample === null) {
+      this.remoteInspectors.get(seatId)?.dispose();
+      this.remoteInspectors.delete(seatId);
+      return;
+    }
+    let remote = this.remoteInspectors.get(seatId);
+    if (remote === undefined) {
+      remote = new RemoteInspectorPresentation(
+        this.options.scene,
+        seatId,
+        this.options.quality.dynamicShadows,
+      );
+      this.remoteInspectors.set(seatId, remote);
+    }
+    remote.push(sample);
+  }
+
+  private updateRemoteInspectors(dtMs: number, state: RoundViewState): void {
+    const visible = INSPECTION_PHASES.has(state.phase);
+    for (const remote of this.remoteInspectors.values()) {
+      remote.setVisible(visible);
+      remote.update(dtMs);
+    }
   }
 
   private driveInspector(dtMs: number, nowMs: number, state: RoundViewState): void {

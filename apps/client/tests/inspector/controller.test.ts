@@ -222,6 +222,17 @@ describe("InspectorController falling", () => {
 });
 
 describe("InspectorController climbing", () => {
+  it("climbs an unlinked solid face when Forward and Jump are held", () => {
+    const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.78, 0);
+    walk(controller, 1, { forward: 1, jump: true });
+
+    expect(controller.climbState?.link.to).toBe("solid_top_0");
+    expect(controller.climbState?.link.kind).toBe("ladder");
+    walkUntil(controller, { forward: 1 }, (current) => current.climbState === null);
+    expect(controller.position.y).toBeCloseTo(WALL.max.y, 6);
+    expect(controller.surfaceId).toBe("solid_top_0");
+  });
+
   it("mantles from the floor onto the table and reports progress on the way", () => {
     const controller = spawned(testNavData(), YAW_TOWARD_TABLE, -0.9, 0);
     walk(controller, 1, { forward: 1 });

@@ -49,6 +49,8 @@ export interface PaintToolDeps {
   /** False for a pointer event the HUD owns. */
   readonly ownsPointerEvent?: (event: PointerEvent) => boolean;
   readonly atlasSize?: number;
+  /** Expands one circular dab, for example onto a mirrored body target. */
+  readonly expandStroke?: (stroke: PaintStroke) => readonly PaintStroke[];
 }
 
 export interface PaintTool {
@@ -127,6 +129,7 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
     raycaster: deps.raycaster,
     getMimicMeshes: deps.getMimicMeshes,
     layer,
+    ...(deps.expandStroke === undefined ? {} : { expandStroke: deps.expandStroke }),
     ...(deps.ownsPointerEvent === undefined ? {} : { ownsPointerEvent: deps.ownsPointerEvent }),
     interceptPointerDown: (pointer) => {
       if (!store.getState().eyedropperArmed) return false;

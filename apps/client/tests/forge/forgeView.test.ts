@@ -250,6 +250,25 @@ describe("the workspace camera", () => {
 });
 
 describe("the pose handles", () => {
+  it("moves the opposite limb immediately while Mirror is on", () => {
+    const before = createPoseState();
+    applyDisguiseStateToPose(harness.controller.disguise, before);
+    const beforeLeft = before.worldPositions[boneIndex("hand_L")]!.clone();
+    const beforeRight = before.worldPositions[boneIndex("hand_R")]!.clone();
+
+    harness.controller.setMirror(true);
+    harness.layout();
+    const grip = harness.screenPointOf("hand_L");
+    harness.pointer("pointerdown", grip);
+    harness.pointer("pointermove", { ...grip, clientX: grip.clientX + 34, clientY: grip.clientY - 12 });
+    harness.pointer("pointerup", { ...grip, clientX: grip.clientX + 34, clientY: grip.clientY - 12 });
+
+    const after = createPoseState();
+    applyDisguiseStateToPose(harness.controller.disguise, after);
+    expect(after.worldPositions[boneIndex("hand_L")]!.distanceTo(beforeLeft)).toBeGreaterThan(0.002);
+    expect(after.worldPositions[boneIndex("hand_R")]!.distanceTo(beforeRight)).toBeGreaterThan(0.002);
+  });
+
   it("draws a grip far smaller than the body it is attached to", () => {
     const ring = harness.radiusOf("forge_handle_ring_head");
     const grip = harness.radiusOf("forge_handle_grip_head");
@@ -431,7 +450,7 @@ describe("walking a body that has already been posed", () => {
 
     expect(walker.controller.snapshot().canUndo).toBe(true);
     const before = walker.controller.disguise;
-    const posedHead = headOffsetFromRoot(walker);
+    const posedHead = headOffsetInRootSpace(walker);
 
     walker.key("keydown", "w");
     for (let frame = 0; frame < 60; frame += 1) walker.controller.update(1000 / 60);
@@ -448,7 +467,7 @@ describe("walking a body that has already been posed", () => {
 
     // And the pose the player authored is still the pose it is wearing: the
     // head stands in the same place relative to the body it belongs to.
-    const walkedHead = headOffsetFromRoot(walker);
+    const walkedHead = headOffsetInRootSpace(walker);
     expect(walkedHead.distanceTo(posedHead)).toBeLessThan(PLAYER_HEIGHT_M / 100);
   });
 });
@@ -458,14 +477,17 @@ describe("walking a body that has already been posed", () => {
  * corrupts: the target is a world position, so a body that walked away from one
  * has its neck solved back toward where it was standing.
  */
-function headOffsetFromRoot(harnessed: Harness): THREE.Vector3 {
+function headOffsetInRootSpace(harnessed: Harness): THREE.Vector3 {
   const state = harnessed.controller.disguise;
   const pose = createPoseState();
   applyDisguiseStateToPose(state, pose);
   const head = pose.worldPositions[boneIndex("head")];
   if (head === undefined) throw new Error("no head bone");
   const [x = 0, y = 0, z = 0] = state.root.position;
-  return new THREE.Vector3(head.x - x, head.y - y, head.z - z);
+  const [qx = 0, qy = 0, qz = 0, qw = 1] = state.root.rotation;
+  return new THREE.Vector3(head.x - x, head.y - y, head.z - z).applyQuaternion(
+    new THREE.Quaternion(qx, qy, qz, qw).invert(),
+  );
 }
 
 /**

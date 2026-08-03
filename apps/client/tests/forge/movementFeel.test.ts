@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BodyLanguage } from "../../src/forge/BodyLanguage";
 import { DisguiseTheatre } from "../../src/gameplay/disguiseTheatre";
 import { ForgeController } from "../../src/forge/ForgeController";
-import { HiderLocomotion } from "../../src/forge/HiderLocomotion";
 import { encodeDisguiseState } from "../../src/mimic/poseWire";
 import { humanMimicSpawn } from "../../src/gameplay/botDisguises";
 import { FootstepDriver, type MotionSample } from "../../src/gameplay/footsteps";
@@ -19,7 +18,7 @@ import {
   JUMP_BUFFER_SECONDS,
 } from "../../src/inspector/CharacterController";
 import { InspectorController } from "../../src/inspector/InspectorController";
-import { WORLD_SCALE, type MutableVec3 } from "../../src/inspector/navData";
+import { WORLD_SCALE } from "../../src/inspector/navData";
 import { qualitySettingsFor } from "../../src/rendering/quality";
 import { NAV_DATA } from "../../src/world/maps/nav";
 import { SHOP_FORGE_WORKSPACE } from "../../src/world/ShopWorld";
@@ -48,10 +47,6 @@ function walker(): InspectorController {
   const controller = new InspectorController(openNavData(), testSettings());
   controller.teleportTo({ position: { x: 0, y: 0, z: 0 }, yaw: FACING_NORTH });
   return controller;
-}
-
-function at(x: number, y: number, z: number): MutableVec3 {
-  return { x, y, z };
 }
 
 describe("getting up to speed and back down", () => {
@@ -482,12 +477,12 @@ describe("body language never reaches the wire", () => {
     const moving = running.controller.disguise;
     const parked = still.controller.disguise;
     expect(moving.root.position).not.toEqual(parked.root.position);
-    // Everything except where the body is standing is byte-identical, and the
-    // root it publishes is the authored one rather than the leaning one.
+    // The stride and lean stay cosmetic, while travel facing is authored and
+    // published so peers do not see a body moon-walk sideways.
     expect(moving.bones).toEqual(parked.bones);
     expect(moving.segments).toEqual(parked.segments);
     expect(moving.panels).toEqual(parked.panels);
-    expect(moving.root.rotation).toEqual(parked.root.rotation);
+    expect(moving.root.rotation).not.toEqual(parked.root.rotation);
   });
 
   it("swings the drawn legs while it walks, and publishes none of it", () => {

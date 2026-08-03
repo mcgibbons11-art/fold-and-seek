@@ -153,6 +153,7 @@ export class RoundSpatialBridge implements SpatialValidator {
     return new SpatialValidatorImpl({
       floors: NAV_DATA.floors,
       blockers: NAV_DATA.blockers,
+      forbiddenOccupancy: [NAV_DATA.securityOffice],
       accusationDistance: this.accusationDistance,
       focusDistance: this.focusDistance,
       inspectorEye: (inspectorId) => this.eyes.get(inspectorId) ?? null,

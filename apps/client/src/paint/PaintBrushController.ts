@@ -9,10 +9,9 @@ import { normalizeTargetUv, paintTargetOfObject } from "./paintTargets";
  * arrives with the UV that `writeSegmentShell` wrote, so a stamp lands where the
  * player pointed without any projection of our own.
  *
- * Samples are emitted on movement rather than on every pointer event. The wire
- * carries a bounded stroke log, so a drag that emitted a stamp per frame would
- * spend the whole budget in a few seconds; spacing the samples and letting the
- * layer interpolate between them draws the same line from a tenth of the log.
+ * Samples are spaced in screen coordinates so quick cursor motion cannot leave
+ * gaps. Each sample remains an independent circular dab rather than a UV-space
+ * streak, which keeps the spray under the cursor across shell seams.
  */
 
 export interface PaintBrushOptions {
@@ -35,14 +34,16 @@ export interface PaintBrushOptions {
   readonly interceptPointerDown?: (pointer: THREE.Vector2, event: PointerEvent) => boolean;
   /** False for a press the HUD owns. Defaults to presses landing on the canvas. */
   readonly ownsPointerEvent?: (event: PointerEvent) => boolean;
+  /** Expands one cursor dab, used by the Forge's live symmetry mode. */
+  readonly expandStroke?: (stroke: PaintStroke) => readonly PaintStroke[];
 }
 
-/** Pointer travel, as a fraction of the brush radius, between two samples. */
-const SAMPLE_SPACING = 0.5;
+/** Maximum screen travel between raycasts while spraying. */
+const SCREEN_SAMPLE_SPACING_PX = 5;
 
-export const MIN_BRUSH_RADIUS = 0.015;
-export const MAX_BRUSH_RADIUS = 0.35;
-export const DEFAULT_BRUSH_RADIUS = 0.06;
+export const MIN_BRUSH_RADIUS = 0.025;
+export const MAX_BRUSH_RADIUS = 0.45;
+export const DEFAULT_BRUSH_RADIUS = 0.12;
 
 export class PaintBrushController {
   private readonly options: PaintBrushOptions;
@@ -59,12 +60,14 @@ export class PaintBrushController {
   private active = false;
   private detach: (() => void) | null = null;
   private pointerId = -1;
-  private strokeTarget = -1;
-  private lastU = 0;
-  private lastV = 0;
+  private lastClientX = 0;
+  private lastClientY = 0;
+  private readonly cursor: HTMLDivElement | null;
 
   constructor(options: PaintBrushOptions) {
     this.options = options;
+    this.cursor = this.createCursor();
+    this.resizeCursor();
   }
 
   get isPainting(): boolean {
@@ -81,6 +84,7 @@ export class PaintBrushController {
 
   setBrushSize(radius: number): void {
     this.radius = Math.min(MAX_BRUSH_RADIUS, Math.max(MIN_BRUSH_RADIUS, radius));
+    this.resizeCursor();
   }
 
   getBrushSize(): number {
@@ -139,23 +143,18 @@ export class PaintBrushController {
       event.preventDefault();
       this.pointerId = event.pointerId;
       this.options.canvas.setPointerCapture(event.pointerId);
-      this.strokeTarget = hit.target;
+      this.lastClientX = event.clientX;
+      this.lastClientY = event.clientY;
       this.options.onStrokeStart?.();
       this.emit(hit.target, hit.u, hit.v, false);
     };
 
     const onPointerMove = (event: PointerEvent): void => {
       if (event.pointerId !== this.pointerId) return;
-      this.updatePointer(event);
-      const hit = this.pick();
-      if (hit === null) return;
-
-      // Crossing onto another part starts a fresh line: joining a stamp on the
-      // forearm to one on the thigh would draw a stripe across neither.
-      const continued = hit.target === this.strokeTarget;
-      if (continued && !this.movedFarEnough(hit.u, hit.v)) return;
-      this.strokeTarget = hit.target;
-      this.emit(hit.target, hit.u, hit.v, continued);
+      const coalesced =
+        typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [];
+      const samples = coalesced.length > 0 ? coalesced : [event];
+      for (const sample of samples) this.sprayTo(sample.clientX, sample.clientY);
     };
 
     const onPointerUp = (event: PointerEvent): void => {
@@ -164,17 +163,27 @@ export class PaintBrushController {
         this.options.canvas.releasePointerCapture(event.pointerId);
       }
       this.pointerId = -1;
-      this.strokeTarget = -1;
       this.options.onStrokeEnd?.();
+    };
+
+    const onHover = (event: PointerEvent): void => {
+      this.positionCursor(event.clientX, event.clientY);
+    };
+    const onLeave = (): void => {
+      if (this.pointerId < 0) this.hideCursor();
     };
 
     const canvas = this.options.canvas;
     canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onHover);
+    canvas.addEventListener("pointerleave", onLeave);
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerup", onPointerUp);
     window.addEventListener("pointercancel", onPointerUp);
     this.detach = () => {
       canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onHover);
+      canvas.removeEventListener("pointerleave", onLeave);
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
       window.removeEventListener("pointercancel", onPointerUp);
@@ -189,7 +198,7 @@ export class PaintBrushController {
       this.options.canvas.releasePointerCapture(this.pointerId);
     }
     this.pointerId = -1;
-    this.strokeTarget = -1;
+    this.hideCursor();
     this.detach?.();
     this.detach = null;
     // Leaving paint mode mid-drag still ends the drag, so the gesture reaches
@@ -199,6 +208,7 @@ export class PaintBrushController {
 
   dispose(): void {
     this.deactivate();
+    this.cursor?.remove();
   }
 
   /** Paints one stamp at a screen point, for a caller driving this by hand. */
@@ -225,6 +235,7 @@ export class PaintBrushController {
 
   private updatePointer(event: PointerEvent): void {
     this.setPointerFromClient(event.clientX, event.clientY);
+    this.positionCursor(event.clientX, event.clientY);
   }
 
   private setPointerFromClient(clientX: number, clientY: number): void {
@@ -247,9 +258,25 @@ export class PaintBrushController {
     return null;
   }
 
-  private movedFarEnough(u: number, v: number): boolean {
-    const distance = Math.hypot(u - this.lastU, v - this.lastV);
-    return distance >= this.radius * SAMPLE_SPACING;
+  /**
+   * Raycasts along the actual screen path and lays independent circular dabs.
+   * UV interpolation made a short cursor move become a long streak whenever it
+   * crossed a shell seam or a stretched chart; screen-space resampling follows
+   * what the player pointed at instead.
+   */
+  private sprayTo(clientX: number, clientY: number): void {
+    const dx = clientX - this.lastClientX;
+    const dy = clientY - this.lastClientY;
+    const steps = Math.max(1, Math.ceil(Math.hypot(dx, dy) / SCREEN_SAMPLE_SPACING_PX));
+    for (let step = 1; step <= steps; step += 1) {
+      const t = step / steps;
+      this.setPointerFromClient(this.lastClientX + dx * t, this.lastClientY + dy * t);
+      const hit = this.pick();
+      if (hit !== null) this.emit(hit.target, hit.u, hit.v, false);
+    }
+    this.lastClientX = clientX;
+    this.lastClientY = clientY;
+    this.positionCursor(clientX, clientY);
   }
 
   private emit(target: number, u: number, v: number, continued: boolean): PaintStroke {
@@ -265,10 +292,47 @@ export class PaintBrushController {
       kind: this.eraser ? "eraser" : "brush",
       continued,
     };
-    this.lastU = u;
-    this.lastV = v;
-    this.options.layer.applyStroke(stroke);
+    const expanded = this.options.expandStroke?.(stroke) ?? [stroke];
+    for (const dab of expanded) this.options.layer.applyStroke(dab);
     this.options.onStroke?.(stroke);
     return stroke;
+  }
+
+  private createCursor(): HTMLDivElement | null {
+    if (typeof document === "undefined") return null;
+    const cursor = document.createElement("div");
+    cursor.dataset["paintCursor"] = "true";
+    Object.assign(cursor.style, {
+      position: "fixed",
+      left: "0",
+      top: "0",
+      border: "1px solid rgba(255, 244, 218, 0.95)",
+      borderRadius: "50%",
+      boxShadow: "0 0 0 1px rgba(16, 10, 5, 0.75), inset 0 0 8px rgba(255, 190, 107, 0.22)",
+      transform: "translate(-50%, -50%)",
+      pointerEvents: "none",
+      zIndex: "200",
+      display: "none",
+    });
+    document.body.append(cursor);
+    return cursor;
+  }
+
+  private resizeCursor(): void {
+    if (this.cursor === null) return;
+    const diameter = Math.round(12 + (this.radius / MAX_BRUSH_RADIUS) * 76);
+    this.cursor.style.width = `${diameter}px`;
+    this.cursor.style.height = `${diameter}px`;
+  }
+
+  private positionCursor(clientX: number, clientY: number): void {
+    if (this.cursor === null || !this.active) return;
+    this.cursor.style.left = `${clientX}px`;
+    this.cursor.style.top = `${clientY}px`;
+    this.cursor.style.display = "block";
+  }
+
+  private hideCursor(): void {
+    if (this.cursor !== null) this.cursor.style.display = "none";
   }
 }

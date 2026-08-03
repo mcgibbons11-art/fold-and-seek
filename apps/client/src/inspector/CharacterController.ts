@@ -73,6 +73,11 @@ const MIN_CLIMB_SECONDS = 0.25;
 const MANTLE_RISE_FRACTION = 0.6;
 const MANTLE_TRAVEL_START = 0.35;
 
+/** Solids up to roughly two body lengths read as a vault; taller faces are climbed. */
+const PROCEDURAL_MANTLE_RISE = INSPECTOR_HEIGHT_M * 2.2;
+/** Pulls the arrival point far enough onto a top face that the capsule is not left on its lip. */
+const SOLID_TOP_INSET = INSPECTOR_RADIUS_M * 0.8;
+
 /**
  * How long the body takes to reach its speed cap from a standstill, and to come
  * back to rest from the cap. A 0.35 m creature has very little mass to shift, so
@@ -84,20 +89,20 @@ const MANTLE_TRAVEL_START = 0.35;
  * same time to reach. The acceleration itself is `cap / seconds`, so a creep
  * ramps as gently as it moves.
  */
-export const GROUND_ACCELERATION_SECONDS = 0.18;
-export const GROUND_STOP_SECONDS = 0.09;
+export const GROUND_ACCELERATION_SECONDS = 0.1;
+export const GROUND_STOP_SECONDS = 0.06;
 
 /**
  * Share of the ground acceleration a body has while it is off the ground. Feet
  * on nothing steer far less than feet on boards, but not so much less that a hop
- * over a kerb becomes a commitment made at takeoff: at 0.6 a body that hits an
+ * over a kerb becomes a commitment made at takeoff: at 0.8 a body that hits an
  * obstacle and hops from a standstill still crosses it.
  *
  * There is no air braking at all. Releasing the keys in mid-air holds whatever
  * momentum the body left the ground with, which is what makes a hop an arc
  * rather than a thing that stops in the air.
  */
-export const AIR_CONTROL_SCALE = 0.6;
+export const AIR_CONTROL_SCALE = 0.8;
 
 /**
  * Gravity is scaled through the two halves of an arc: lighter going up, heavier
@@ -330,8 +335,26 @@ export class CharacterController {
     const startZ = this.position.z;
     this.moveHorizontally(dtSeconds, input);
     if (this.surfaceLocked) {
+      // Hiding Mimics keep the surface lock that prevents accidental falls,
+      // but an explicit forward+jump still takes any solid face. Its climb is
+      // slowed to the creep cap below, so the eventual landing remains legal.
+      const startedSolidClimb =
+        this.grounded && input.forward > 0 && input.jump && this.tryStartSolidClimbForHeading();
+      if (startedSolidClimb) {
+        this.consumeJump();
+        return;
+      }
       this.resolveHop(dtSeconds);
     } else {
+      // Forward + Jump against an actual solid is the contextual climb gesture.
+      // It is checked before launching the hop; normal walking into that same
+      // face still stops or slides exactly as ordinary collision requires.
+      const startedSolidClimb =
+        this.grounded && input.forward > 0 && input.jump && this.tryStartSolidClimbForHeading();
+      if (startedSolidClimb) {
+        this.consumeJump();
+        return;
+      }
       if (this.wantsJump()) {
         this.verticalVelocity = JUMP_SPEED;
         this.grounded = false;
@@ -653,47 +676,135 @@ export class CharacterController {
     if (this.climbLatch !== null && (input.forward <= 0 || this.leftLink(this.climbLatch, activationSq))) {
       this.climbLatch = null;
     }
-    if (input.forward <= 0 || this.surfaceId === null) return;
+    if (input.forward <= 0) return;
 
     const headingX = -Math.sin(this.yaw);
     const headingZ = -Math.cos(this.yaw);
 
-    for (const link of this.navData.climbLinks) {
-      if (link === this.climbLatch) continue;
-      const ascending = link.from === this.surfaceId;
-      if (!ascending && link.to !== this.surfaceId) continue;
+    if (this.surfaceId !== null) {
+      for (const link of this.navData.climbLinks) {
+        if (link === this.climbLatch) continue;
+        const ascending = link.from === this.surfaceId;
+        if (!ascending && link.to !== this.surfaceId) continue;
 
-      const start = ascending ? link.position : link.target;
-      const end = ascending ? link.target : link.position;
-      const toStartX = start.x - this.position.x;
-      const toStartZ = start.z - this.position.z;
-      if (toStartX * toStartX + toStartZ * toStartZ > activationSq) continue;
+        const start = ascending ? link.position : link.target;
+        const end = ascending ? link.target : link.position;
+        const toStartX = start.x - this.position.x;
+        const toStartZ = start.z - this.position.z;
+        if (toStartX * toStartX + toStartZ * toStartZ > activationSq) continue;
 
-      const spanX = end.x - start.x;
-      const spanZ = end.z - start.z;
-      const spanSq = spanX * spanX + spanZ * spanZ;
-      const vertical = spanSq < MIN_AXIS_FRACTION;
-      if (!vertical && headingX * spanX + headingZ * spanZ <= 0) continue;
+        const spanX = end.x - start.x;
+        const spanZ = end.z - start.z;
+        const spanSq = spanX * spanX + spanZ * spanZ;
+        const vertical = spanSq < MIN_AXIS_FRACTION;
+        if (!vertical && headingX * spanX + headingZ * spanZ <= 0) continue;
 
-      const rise = end.y - start.y;
-      const distance = Math.sqrt(spanSq + rise * rise);
-      const speed = link.kind === "ladder" ? WORLD_SCALE.ladderSpeed : WORLD_SCALE.mantleSpeed;
-      this.climb = {
-        link,
-        ascending,
-        progress: 0,
-        durationSeconds: Math.max(MIN_CLIMB_SECONDS, distance / speed),
-        startX: this.position.x,
-        startY: this.position.y,
-        startZ: this.position.z,
-        endX: end.x,
-        endY: end.y,
-        endZ: end.z,
-      };
-      this.speed = 0;
-      this.lastResolution = "idle";
-      return;
+        this.beginClimb(link, ascending, end);
+        return;
+      }
     }
+
+  }
+
+  private tryStartSolidClimbForHeading(): boolean {
+    const activation = WORLD_SCALE.climbActivationRadius + INSPECTOR_RADIUS_M;
+    return this.tryStartSolidClimb(
+      -Math.sin(this.yaw),
+      -Math.cos(this.yaw),
+      activation * activation,
+    );
+  }
+
+  /**
+   * Turns the face of any blocker into a contextual climb. Authored links still
+   * win where the map supplies one; this fallback is what makes an unlisted
+   * crate, cabinet, or wall respond when the player runs directly into it.
+   */
+  private tryStartSolidClimb(headingX: number, headingZ: number, activationSq: number): boolean {
+    let bestIndex = -1;
+    let bestDistanceSq = activationSq;
+    let bestFaceX = 0;
+    let bestFaceZ = 0;
+
+    for (let index = 0; index < this.navData.blockers.length; index += 1) {
+      const blocker = this.navData.blockers[index];
+      if (blocker === undefined) continue;
+      const rise = blocker.max.y - this.position.y;
+      if (rise <= INSPECTOR_STEP_HEIGHT_M || blocker.min.y > this.position.y + INSPECTOR_HEIGHT_M) {
+        continue;
+      }
+
+      const faceX = clamp(this.position.x, blocker.min.x, blocker.max.x);
+      const faceZ = clamp(this.position.z, blocker.min.z, blocker.max.z);
+      const dx = faceX - this.position.x;
+      const dz = faceZ - this.position.z;
+      const distanceSq = dx * dx + dz * dz;
+      // A zero distance means the feet are over this solid (usually standing
+      // on it), not approaching one of its faces.
+      if (distanceSq < MIN_AXIS_FRACTION || distanceSq > bestDistanceSq) continue;
+      const distance = Math.sqrt(distanceSq);
+      if ((headingX * dx + headingZ * dz) / distance < 0.45) continue;
+
+      bestIndex = index;
+      bestDistanceSq = distanceSq;
+      bestFaceX = faceX;
+      bestFaceZ = faceZ;
+    }
+
+    if (bestIndex < 0) return false;
+    const blocker = this.navData.blockers[bestIndex];
+    if (blocker === undefined) return false;
+    const width = blocker.max.x - blocker.min.x;
+    const depth = blocker.max.z - blocker.min.z;
+    const insetX = Math.min(SOLID_TOP_INSET, width * 0.5);
+    const insetZ = Math.min(SOLID_TOP_INSET, depth * 0.5);
+    const targetX = clamp(bestFaceX + headingX * SOLID_TOP_INSET, blocker.min.x + insetX, blocker.max.x - insetX);
+    const targetZ = clamp(bestFaceZ + headingZ * SOLID_TOP_INSET, blocker.min.z + insetZ, blocker.max.z - insetZ);
+    const rise = blocker.max.y - this.position.y;
+    const link: ClimbLink = {
+      from: this.surfaceId ?? `solid_start_${bestIndex}`,
+      to: `solid_top_${bestIndex}`,
+      kind: rise <= PROCEDURAL_MANTLE_RISE ? "mantle" : "ladder",
+      position: { x: this.position.x, y: this.position.y, z: this.position.z },
+      target: { x: targetX, y: blocker.max.y, z: targetZ },
+    };
+    this.beginClimb(link, true, link.target);
+    return true;
+  }
+
+  private beginClimb(link: ClimbLink, ascending: boolean, end: Vec3Like): void {
+    const dx = end.x - this.position.x;
+    const dy = end.y - this.position.y;
+    const dz = end.z - this.position.z;
+    const distance = Math.sqrt(dx * dx + dy * dy + dz * dz);
+    let speed = link.kind === "ladder" ? WORLD_SCALE.ladderSpeed : WORLD_SCALE.mantleSpeed;
+    if (this.surfaceLocked) {
+      speed = Math.min(
+        speed,
+        this.speedFor({
+          forward: 1,
+          strafe: 0,
+          lookYawDelta: 0,
+          lookPitchDelta: 0,
+          brisk: false,
+          jump: true,
+        }),
+      );
+    }
+    this.climb = {
+      link,
+      ascending,
+      progress: 0,
+      durationSeconds: Math.max(MIN_CLIMB_SECONDS, distance / speed),
+      startX: this.position.x,
+      startY: this.position.y,
+      startZ: this.position.z,
+      endX: end.x,
+      endY: end.y,
+      endZ: end.z,
+    };
+    this.speed = 0;
+    this.lastResolution = "idle";
   }
 
   /**

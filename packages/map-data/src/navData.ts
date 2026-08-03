@@ -63,11 +63,11 @@ export const WORLD_SCALE = {
   terminalFallSpeed: 6,
   /**
    * Along-path speeds for the two climb kinds, in body lengths per second. A
-   * vault is a little over one and a half body lengths a second and a ladder
-   * exactly one, both well under the walk in `DEFAULT_MATCH_SETTINGS`.
+   * vault runs at 2.4 and a ladder at 1.55, both below the walk in
+   * `DEFAULT_MATCH_SETTINGS` but quick enough to keep traversal responsive.
    */
-  mantleSpeed: PLAYER_HEIGHT_M * 1.6,
-  ladderSpeed: PLAYER_HEIGHT_M * 1.0,
+  mantleSpeed: PLAYER_HEIGHT_M * 2.4,
+  ladderSpeed: PLAYER_HEIGHT_M * 1.55,
   /** How near a link's endpoint the player must be to start climbing. */
   climbActivationRadius: PLAYER_HEIGHT_M * 0.43,
 } as const;

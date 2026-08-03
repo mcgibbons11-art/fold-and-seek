@@ -373,6 +373,24 @@ class RoomSession {
 }
 
 describe("rooms over one channel", () => {
+  it("lists a new room for creator and peers when state callbacks are missing", async () => {
+    vi.useFakeTimers();
+    const session = new RoomSession();
+    session.relay.deliverStateEvents = false;
+    const ada = await session.browse("a", "Ada");
+    const bex = await session.browse("b", "Bex");
+
+    const opened = ada.adapter.createRoom("The Attic");
+    if (!opened.ok) throw new Error(opened.reason);
+
+    expect(ada.adapter.listRooms().map((room) => room.code)).toEqual([opened.code]);
+    expect(bex.adapter.listRooms().map((room) => room.code)).toEqual([opened.code]);
+    expect(session.relay.stateSnapshot()[ROOM_SLOTS[0]?.adKey as string]).toBeDefined();
+    expect(session.relay.violations).toEqual([]);
+
+    session.dispose();
+  });
+
   it("leaves a client in no room until it picks one", async () => {
     vi.useFakeTimers();
     const session = new RoomSession();
@@ -414,6 +432,31 @@ describe("rooms over one channel", () => {
     expect(ada.adapter.listRooms()[0]?.players).toBe(2);
     expect(session.relay.violations).toEqual([]);
 
+    session.dispose();
+  });
+
+  it("relays sparse Inspector camera samples to other players in the room", async () => {
+    vi.useFakeTimers();
+    const session = new RoomSession();
+    const ada = await session.browse("a", "Ada");
+    const bex = await session.browse("b", "Bex");
+    const opened = ada.adapter.createRoom("The Attic");
+    if (!opened.ok) throw new Error(opened.reason);
+    bex.adapter.enterRoom(opened.code);
+    session.advance(2);
+
+    const received: Array<{ seatId: string; x: number | null }> = [];
+    bex.adapter.onCameraSample((seatId, sample) => {
+      received.push({ seatId, x: sample?.x ?? null });
+    });
+    ada.adapter.sendCameraSample({ atMs: 100, x: 1.25, y: 0.3, z: -2, yaw: 0.4, pitch: 0.1 });
+    ada.adapter.sendCameraSample(null);
+
+    expect(received).toEqual([
+      { seatId: ada.adapter.getSelfId(), x: 1.25 },
+      { seatId: ada.adapter.getSelfId(), x: null },
+    ]);
+    expect(session.relay.violations).toEqual([]);
     session.dispose();
   });
 

@@ -1,5 +1,14 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
+
+/**
+ * Dropbox intermittently locks `apps/client/dist/assets` while Vite is trying
+ * to empty it. Verification output is disposable, so keep the default build in
+ * the OS scratch area; hosted builds pass an explicit `--outDir portals`.
+ */
+const verificationOutDir = resolve(tmpdir(), "foldseek-client-build");
 
 // base: "./" is required for the Portals hosted-game bundle: Portals serves the
 // processed build from a nested path and injects ./_portals/sdk.js, so every
@@ -14,6 +23,8 @@ export default defineConfig({
     alias: [{ find: /^three$/, replacement: "three/webgpu" }],
   },
   build: {
+    outDir: verificationOutDir,
+    emptyOutDir: true,
     target: "es2022",
     chunkSizeWarningLimit: 4096,
     assetsInlineLimit: 0

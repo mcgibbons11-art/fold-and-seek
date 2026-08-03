@@ -373,6 +373,17 @@ export class InspectorBody {
     for (const mesh of this.meshList) mesh.castShadow = enabled;
   }
 
+  /**
+   * Hides both halves of the presentation. The articulated body hangs from the
+   * caller's root, but the gun hand deliberately lives in world space; changing
+   * only one would leave a disembodied warrant gun when a remote Inspector is
+   * outside a phase in which their telemetry may be shown.
+   */
+  setVisible(visible: boolean): void {
+    this.root.visible = visible;
+    this.hand.visible = visible;
+  }
+
   dispose(): void {
     this.root.removeFromParent();
     this.hand.removeFromParent();

@@ -1,5 +1,5 @@
-import type { MatchCommand, ResultVoteCategory } from "@foldseek/game-sim";
-import { TAUNT_IDS, type TauntId } from "@foldseek/shared";
+import type { MatchCommand, MatchSettingsPatch, ResultVoteCategory } from "@foldseek/game-sim";
+import { MatchPhase, TAUNT_IDS, type TauntId } from "@foldseek/shared";
 
 import type { NetworkAdapter } from "../networking/NetworkAdapter";
 import type { RoundDirector } from "./RoundDirector";
@@ -44,6 +44,15 @@ export class RoundActions {
 
   startMatch(): ActionOutcome {
     return this.send("startMatch", { type: "start_match" });
+  }
+
+  /** Lobby-only room options. The authority repeats both checks. */
+  setSettings(settings: MatchSettingsPatch): ActionOutcome {
+    const state = this.director.getState();
+    if (!state.self.isHost) return refused("not_host");
+    if (state.phase !== MatchPhase.Lobby) return refused("wrong_phase");
+    this.adapter.sendCommand({ type: "set_settings", settings });
+    return SENT;
   }
 
   /**

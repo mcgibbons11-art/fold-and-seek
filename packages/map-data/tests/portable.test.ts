@@ -63,6 +63,7 @@ describe("map-data answers the questions an authority asks", () => {
   const validator = new SpatialValidatorImpl({
     floors: NAV_DATA.floors,
     blockers: NAV_DATA.blockers,
+    forbiddenOccupancy: [NAV_DATA.securityOffice],
     accusationDistance: DEFAULT_MATCH_SETTINGS.accusationDistance,
     focusDistance: DEFAULT_MATCH_SETTINGS.inspectorFocusDistance,
     inspectorEye: () => null,
@@ -108,6 +109,16 @@ describe("map-data answers the questions an authority asks", () => {
     expect(validator.canOccupy("probe", [0, -4, 0])).toEqual({
       ok: false,
       reason: "outside_playable_area",
+    });
+  });
+
+  it("keeps Mimic roots out of the Security Office", () => {
+    const office = NAV_DATA.securityOffice;
+    const x = (office.min.x + office.max.x) * 0.5;
+    const z = (office.min.z + office.max.z) * 0.5;
+    expect(validator.canOccupy("mimic", [x, office.min.y, z])).toEqual({
+      ok: false,
+      reason: "forbidden_area",
     });
   });
 });

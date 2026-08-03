@@ -12,7 +12,6 @@ import { LoadingScreen } from "../../src/ui/LoadingScreen";
  */
 
 declare global {
-  // eslint-disable-next-line no-var
   var IS_REACT_ACT_ENVIRONMENT: boolean;
 }
 
@@ -85,5 +84,28 @@ describe("LoadingScreen", () => {
     const status = container.querySelector('[role="status"]');
     expect(status).not.toBeNull();
     expect(status?.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("can abandon a slow opening and return to the menu", () => {
+    let cancelled = false;
+    act(() => {
+      root.render(
+        <LoadingScreen
+          progress={{ label: "the walls", fraction: 0.4 }}
+          onCancel={() => {
+            cancelled = true;
+          }}
+        />,
+      );
+    });
+
+    const button = [...container.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === "Return to menu",
+    );
+    expect(button).not.toBeUndefined();
+    act(() => {
+      button?.click();
+    });
+    expect(cancelled).toBe(true);
   });
 });

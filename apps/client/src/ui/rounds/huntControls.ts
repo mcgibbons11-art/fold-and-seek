@@ -199,7 +199,7 @@ export function boardRailAction(open: boolean): RailAction {
 export const CORE_CONTROL_HINTS: readonly ControlHint[] = [
   { id: "walk", keys: ["W", "A", "S", "D"], label: "Move" },
   { id: "camera", keys: ["Hold LMB"], label: "Look around" },
-  { id: "jump", keys: ["Space"], label: "Jump" },
+  { id: "jump", keys: ["Space"], label: "Jump · hold forward at a solid to climb" },
 ];
 
 /**
@@ -218,7 +218,7 @@ export const INSPECTOR_ROLE_HINTS: readonly ControlHint[] = [
   { id: "camera", keys: ["Mouse"], label: "Look around" },
   { id: "fire", keys: ["LMB"], label: "Fire a warrant" },
   { id: "aim", keys: ["RMB"], label: "Aim" },
-  { id: "jump", keys: ["Space"], label: "Hop" },
+  { id: "jump", keys: ["Space"], label: "Hop · hold forward at a solid to climb" },
 ];
 
 /** Which set a role card prints. Everyone but the Inspector takes the core set. */
@@ -239,7 +239,7 @@ export function roleCardHints(role: "mimic" | "inspector" | "spectator"): readon
  */
 export const HIDER_CONTROL_HINTS: readonly ControlHint[] = [
   { id: "walk", keys: ["W", "A", "S", "D"], label: "Creep" },
-  { id: "jump", keys: ["Space"], label: "Hop" },
+  { id: "jump", keys: ["Space"], label: "Hop · hold forward at a solid to climb" },
   { id: "camera", keys: ["LMB"], label: "Look around" },
   { id: "drag", keys: ["LMB"], label: "On a handle: pose" },
   { id: "undo", keys: ["Ctrl", "Z"], label: "Undo" },

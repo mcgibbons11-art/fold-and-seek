@@ -84,6 +84,45 @@ export class ShaderFailurePolicy {
   }
 }
 
+export type GraphicsRecoveryResponse = "rebuild" | "fallback";
+
+/**
+ * Budgets complete renderer rebuilds after a device loss. A new renderer owns
+ * a new backend, pipeline, programs, and scene resources; trying to revive the
+ * old manager would leave three's internal lost-device flag set forever.
+ *
+ * The count is consecutive rather than lifetime. Once a rebuilt renderer has
+ * drawn stably for a while the budget is restored, so a later unrelated driver
+ * reset is still recoverable.
+ */
+export class GraphicsRecoveryPolicy {
+  private attempts = 0;
+
+  constructor(private readonly maxAttempts = 2) {
+    if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+      throw new RangeError("graphics recovery needs at least one rebuild attempt");
+    }
+  }
+
+  requestRebuild(): GraphicsRecoveryResponse {
+    if (this.attempts >= this.maxAttempts) return "fallback";
+    this.attempts += 1;
+    return "rebuild";
+  }
+
+  markStable(): void {
+    this.attempts = 0;
+  }
+
+  get attemptsUsed(): number {
+    return this.attempts;
+  }
+
+  get exhausted(): boolean {
+    return this.attempts >= this.maxAttempts;
+  }
+}
+
 function readString(source: Record<string, unknown>, key: string): string | null {
   const value = source[key];
   return typeof value === "string" && value.length > 0 ? value : null;

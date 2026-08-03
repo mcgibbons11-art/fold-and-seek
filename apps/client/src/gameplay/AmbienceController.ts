@@ -420,9 +420,12 @@ class ElementBedVoice implements BedVoice {
 
     const leadElement = this.elements[this.leading];
     const trailElement = this.elements[1 - this.leading];
-    if (leadElement !== undefined) leadElement.volume = this.gain * this.seam;
+    // The two copies contain the same noise-like material. Their perceived
+    // energy adds in power, so square-root gains avoid the 3 dB hollow point a
+    // linear seam creates halfway through every loop.
+    if (leadElement !== undefined) leadElement.volume = this.gain * Math.sqrt(this.seam);
     if (trailElement !== undefined) {
-      trailElement.volume = trailElement.paused ? 0 : this.gain * (1 - this.seam);
+      trailElement.volume = trailElement.paused ? 0 : this.gain * Math.sqrt(1 - this.seam);
     }
   }
 

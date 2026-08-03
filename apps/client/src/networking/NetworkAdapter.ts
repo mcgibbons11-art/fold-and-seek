@@ -38,6 +38,16 @@ export interface CommandRejection {
  */
 export type EyePosition = readonly [number, number, number];
 
+/** Sparse world-space Inspector telemetry used to present a remote hunter. */
+export interface InspectorCameraSample {
+  readonly atMs: number;
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+  readonly yaw: number;
+  readonly pitch: number;
+}
+
 /** The latest legal pose a Mimic has authored, and the revision it belongs to. */
 export interface ForgeSnapshot {
   readonly encodedPose: string;
@@ -147,6 +157,8 @@ export interface NetworkAdapter {
   readonly mode: NetworkMode;
   /** Bot seats, on the transports that can hold them. */
   readonly bots?: BotSeatControls;
+  /** Human-facing lobby code when this transport has a shared room directory. */
+  getRoomCode?(): string | null;
 
   /** Acquires the transport (SDK handshake, client construction). Idempotent. */
   connect(): Promise<void>;
@@ -171,6 +183,8 @@ export interface NetworkAdapter {
    * pose is: one whole stroke log per call, never one call per brush stamp.
    */
   sendPaintUpdate(update: PaintUpdate): void;
+  /** Optional on transports that can share live Inspector presentation. */
+  sendCameraSample?(sample: InspectorCameraSample | null): void;
 
   getSelfId(): string | null;
   getConnection(): ConnectionState;
@@ -184,6 +198,9 @@ export interface NetworkAdapter {
   onRoster(listener: (roster: readonly RosterEntry[]) => void): Unsubscribe;
   onStatus(listener: (state: ConnectionState) => void): Unsubscribe;
   onSync(listener: (sync: MatchSync) => void): Unsubscribe;
+  onCameraSample?(
+    listener: (seatId: string, sample: InspectorCameraSample | null) => void,
+  ): Unsubscribe;
 }
 
 export const EMPTY_SYNC: MatchSync = { publicState: null, privateState: null };

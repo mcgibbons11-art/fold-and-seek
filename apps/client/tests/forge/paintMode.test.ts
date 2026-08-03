@@ -271,6 +271,9 @@ describe("paint in the forge history", () => {
       [x + 28, y + 18],
     ]);
     expect(harness.controller.paint.layer.strokeCount).toBeGreaterThan(before);
+    // The revised spray is a trail of cursor-centred circles. It never asks the
+    // atlas to bridge two UV points, which was the source of long seam streaks.
+    expect(harness.controller.paint.layer.strokeLog.every((stroke) => !stroke.continued)).toBe(true);
   }
 
   it("offers an undo for the drag rather than for the pose before it", () => {

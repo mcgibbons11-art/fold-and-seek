@@ -15,8 +15,9 @@ import { INSPECTION_PHASES, RoundSession } from "../gameplay/RoundSession";
 import type { RoundDirector } from "../gameplay/RoundDirector";
 import type { RoundSpatialBridge } from "../gameplay/roundSpatial";
 import type { NetworkAdapter } from "../networking/NetworkAdapter";
-import { ShopWorld } from "../world/ShopWorld";
+import { SHOP_FORGE_WORKSPACE, ShopWorld } from "../world/ShopWorld";
 import { TestRoom } from "../world/TestRoom";
+import { NAV_DATA } from "../world/maps/nav";
 import { DisposalBag } from "./DisposalBag";
 
 export const FIXED_STEP = 1 / 60;
@@ -424,6 +425,8 @@ export class GameHost {
       scene: world.scene,
       canvas: this.canvas,
       quality: this.settings,
+      workspace: SHOP_FORGE_WORKSPACE,
+      navData: NAV_DATA,
     });
     this.syncSize();
   }
@@ -521,10 +524,10 @@ export class GameHost {
    * lock: the player's choice was about how the game should look, and this is
    * about whether it can be drawn at all.
    *
-   * Once the ladder is spent, `ShaderFailurePolicy` calls it, and the player is
-   * shown the device-fault panel. That panel is the honest end state, since
-   * nothing further can be traded away, so the fatal report is delivered as a
-   * device loss, which is what it becomes within a few draw calls in any case.
+   * Once the ladder is spent, `ShaderFailurePolicy` calls it and reports a
+   * device loss. The shell then owns the expensive remedy: two complete
+   * renderer/scene rebuilds before it leaves the device-fault panel in place as
+   * the manual fallback.
    */
   private handleShaderLinkFailure(failure: ShaderLinkFailure): void {
     const index = QUALITY_TIER_ORDER.indexOf(this.settings.tier);

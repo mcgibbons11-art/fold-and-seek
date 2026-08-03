@@ -46,7 +46,7 @@ const BODY_M = WORLD_SCALE.playerHeight;
  * hand. At this length it is still most of twice the forearm — unmistakable at
  * the distance a hider first sees it — and it is a hand's prop again.
  */
-const GUN_LENGTH_M = BODY_M * 0.3;
+const GUN_LENGTH_M = BODY_M * 0.38;
 
 /**
  * Where the hand carries it, in the look basis: right of, below, and ahead of
@@ -164,6 +164,9 @@ const SELF_LIT_INTENSITY = 0.9;
 const BRASS_LIT_COLOR = 0xffbe6b;
 const WALNUT_COLOR = 0x6b4226;
 const IRON_COLOR = 0x3b3733;
+const ENAMEL_TEAL_COLOR = 0x237f89;
+const SIGNAL_CORAL_COLOR = 0xc9533d;
+const IVORY_COLOR = 0xead7a7;
 /** A catch: warm brass. An innocent object: the HUD's alarm red. A dud: cold smoke. */
 const CATCH_COLOR = 0xffc978;
 const INNOCENT_COLOR = 0xd8563c;
@@ -227,11 +230,16 @@ export class GunView {
 
   private readonly sharedSphere: THREE.SphereGeometry;
   private readonly sharedCylinder: THREE.CylinderGeometry;
+  private readonly sharedFlash: THREE.ConeGeometry;
   private readonly scratch = new THREE.Vector3();
   private readonly scratchTo = new THREE.Vector3();
   /** Kept apart from the pair above, which are both live during a shot. */
   private readonly scratchWorld = new THREE.Vector3();
   private readonly scratchQuaternion = new THREE.Quaternion();
+  private readonly flashAxisRotation = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(1, 0, 0),
+    -Math.PI / 2,
+  );
   /** The colour the seal cools back to, kept rather than rebuilt every frame. */
   private readonly coolColor = new THREE.Color(BRASS_LIT_COLOR);
 
@@ -258,6 +266,10 @@ export class GunView {
 
     this.sharedSphere = this.keep(new THREE.SphereGeometry(1, 10, 8));
     this.sharedCylinder = this.keep(new THREE.CylinderGeometry(1, 1, 1, 8, 1, true));
+    this.sharedFlash = this.keep(new THREE.ConeGeometry(1, 1, 8, 1, true));
+    // The cone begins at the muzzle and points down its local +Y axis. `flash`
+    // turns that axis onto the gun's local -Z.
+    this.sharedFlash.translate(0, 0.5, 0);
 
     this.brass = this.own(
       new THREE.MeshStandardMaterial({
@@ -286,9 +298,36 @@ export class GunView {
         emissiveIntensity: SELF_LIT_INTENSITY * 0.6,
       }),
     );
+    const enamel = this.own(
+      new THREE.MeshStandardMaterial({
+        color: ENAMEL_TEAL_COLOR,
+        roughness: 0.27,
+        metalness: 0.18,
+        emissive: 0x08272b,
+        emissiveIntensity: 0.7,
+      }),
+    );
+    const coral = this.own(
+      new THREE.MeshStandardMaterial({
+        color: SIGNAL_CORAL_COLOR,
+        roughness: 0.32,
+        metalness: 0.12,
+        emissive: 0x2f0c08,
+        emissiveIntensity: 0.68,
+      }),
+    );
+    const ivory = this.own(
+      new THREE.MeshStandardMaterial({
+        color: IVORY_COLOR,
+        roughness: 0.48,
+        metalness: 0.04,
+        emissive: 0x2b2110,
+        emissiveIntensity: 0.58,
+      }),
+    );
     this.sealMaterial = this.own(new THREE.MeshBasicMaterial({ color: BRASS_LIT_COLOR }));
 
-    this.build(walnut);
+    this.build(walnut, enamel, coral, ivory);
     this.scene.add(this.root);
     this.scene.add(this.effectRoot);
 
@@ -298,6 +337,7 @@ export class GunView {
     // path a link is measured in seconds, not milliseconds.
     this.spawn(this.sharedSphere, BRASS_LIT_COLOR, this.scratch.set(0, 0, 0), PRIMER_MS, PRIMER_OPACITY);
     this.spawn(this.sharedCylinder, BRASS_LIT_COLOR, this.scratch.set(0, 0, 0), PRIMER_MS, PRIMER_OPACITY);
+    this.spawn(this.sharedFlash, BRASS_LIT_COLOR, this.scratch.set(0, 0, 0), PRIMER_MS, PRIMER_OPACITY);
   }
 
   /**
@@ -307,29 +347,66 @@ export class GunView {
    * seal on the butt is the shop's own brass, and it is the one part that
    * lights up, because it is what a warrant is stamped with.
    */
-  private build(walnut: THREE.MeshStandardMaterial): void {
+  private build(
+    walnut: THREE.MeshStandardMaterial,
+    enamel: THREE.MeshStandardMaterial,
+    coral: THREE.MeshStandardMaterial,
+    ivory: THREE.MeshStandardMaterial,
+  ): void {
     const L = GUN_LENGTH_M;
     const brass = this.brass;
     const iron = this.iron;
 
     const grip = new THREE.Mesh(this.keep(new THREE.BoxGeometry(L * 0.17, L * 0.44, L * 0.24)), walnut);
+    grip.name = "warrant-gun-grip";
     grip.position.set(0, -L * 0.24, L * 0.1);
     grip.rotation.x = -0.32;
     this.root.add(grip);
 
-    const frame = new THREE.Mesh(this.keep(new THREE.BoxGeometry(L * 0.16, L * 0.22, L * 0.42)), brass);
+    const frame = new THREE.Mesh(this.keep(new THREE.BoxGeometry(L * 0.2, L * 0.24, L * 0.42)), enamel);
+    frame.name = "warrant-gun-teal-frame";
     frame.position.set(0, -L * 0.02, L * 0.02);
     this.root.add(frame);
 
-    const barrel = new THREE.Mesh(this.keep(new THREE.CylinderGeometry(L * 0.075, L * 0.07, L * 0.56, 8)), brass);
+    const barrel = new THREE.Mesh(this.keep(new THREE.CylinderGeometry(L * 0.078, L * 0.072, L * 0.59, 8)), iron);
+    barrel.name = "warrant-gun-barrel";
     barrel.rotation.x = Math.PI / 2;
     barrel.position.set(0, L * 0.02, -L * 0.38);
     this.root.add(barrel);
 
-    const drum = new THREE.Mesh(this.keep(new THREE.CylinderGeometry(L * 0.14, L * 0.14, L * 0.2, 12)), brass);
+    const drum = new THREE.Mesh(this.keep(new THREE.CylinderGeometry(L * 0.155, L * 0.155, L * 0.22, 12)), coral);
+    drum.name = "warrant-gun-coral-drum";
     drum.rotation.x = Math.PI / 2;
     drum.position.set(0, L * 0.01, -L * 0.06);
     this.root.add(drum);
+
+    // Bold sleeve bands break the long barrel into the readable coloured
+    // stripes that made the reference weapon work, without copying its shape.
+    const bandGeometry = this.keep(new THREE.CylinderGeometry(L * 0.095, L * 0.095, L * 0.075, 10));
+    for (const [index, z] of [-0.23, -0.39, -0.55].entries()) {
+      const band = new THREE.Mesh(bandGeometry, [coral, ivory, enamel][index]!);
+      band.name = `warrant-gun-barrel-band-${String(index + 1)}`;
+      band.rotation.x = Math.PI / 2;
+      band.position.set(0, L * 0.02, L * z);
+      this.root.add(band);
+    }
+
+    const spine = new THREE.Mesh(
+      this.keep(new THREE.BoxGeometry(L * 0.09, L * 0.065, L * 0.47)),
+      ivory,
+    );
+    spine.name = "warrant-gun-ivory-spine";
+    spine.position.set(0, L * 0.115, -L * 0.23);
+    this.root.add(spine);
+
+    const sideCore = new THREE.Mesh(
+      this.keep(new THREE.CylinderGeometry(L * 0.055, L * 0.055, L * 0.025, 10)),
+      this.sealMaterial,
+    );
+    sideCore.name = "warrant-gun-lit-core";
+    sideCore.rotation.z = Math.PI / 2;
+    sideCore.position.set(L * 0.17, L * 0.01, -L * 0.06);
+    this.root.add(sideCore);
 
     const guard = new THREE.Mesh(this.keep(new THREE.TorusGeometry(L * 0.11, L * 0.02, 6, 12, Math.PI)), brass);
     guard.rotation.set(Math.PI / 2, 0, Math.PI);
@@ -351,6 +428,23 @@ export class GunView {
     const foresight = new THREE.Mesh(this.keep(new THREE.BoxGeometry(L * 0.02, L * 0.06, L * 0.04)), brass);
     foresight.position.set(0, L * 0.1, -L * 0.62);
     this.root.add(foresight);
+
+    const muzzleCrown = new THREE.Mesh(
+      this.keep(new THREE.TorusGeometry(L * 0.105, L * 0.024, 6, 12)),
+      coral,
+    );
+    muzzleCrown.name = "warrant-gun-muzzle-crown";
+    muzzleCrown.position.set(0, L * 0.02, -L * 0.685);
+    this.root.add(muzzleCrown);
+
+    const buttCap = new THREE.Mesh(
+      this.keep(new THREE.BoxGeometry(L * 0.2, L * 0.08, L * 0.27)),
+      coral,
+    );
+    buttCap.name = "warrant-gun-butt-cap";
+    buttCap.position.set(0, -L * 0.46, L * 0.17);
+    buttCap.rotation.x = -0.32;
+    this.root.add(buttCap);
 
     const seal = new THREE.Mesh(this.keep(new THREE.CylinderGeometry(L * 0.07, L * 0.07, L * 0.02, 10)), this.sealMaterial);
     seal.rotation.z = Math.PI / 2;
@@ -596,14 +690,14 @@ export class GunView {
   }
 
   private flash(at: THREE.Vector3): void {
-    const flash = this.spawn(this.sharedSphere, BRASS_LIT_COLOR, at, FLASH_MS, 0.95);
-    flash.fromScale.set(GUN_LENGTH_M * 0.1, GUN_LENGTH_M * 0.1, GUN_LENGTH_M * 0.34);
-    flash.toScale.set(GUN_LENGTH_M * 0.22, GUN_LENGTH_M * 0.22, GUN_LENGTH_M * 0.5);
-    // A flash points where the barrel does, so it is stretched along the shot
-    // rather than being a ball hanging off the front of the gun. The effect
-    // lives in the scene while the gun may live in a hand, so this is the
-    // gun's world orientation rather than its local one.
-    flash.mesh.quaternion.copy(this.root.getWorldQuaternion(this.scratchQuaternion));
+    const flash = this.spawn(this.sharedFlash, BRASS_LIT_COLOR, at, FLASH_MS, 0.95);
+    flash.fromScale.set(GUN_LENGTH_M * 0.11, GUN_LENGTH_M * 0.42, GUN_LENGTH_M * 0.11);
+    flash.toScale.set(GUN_LENGTH_M * 0.2, GUN_LENGTH_M * 0.68, GUN_LENGTH_M * 0.2);
+    // A tapered flare throws outward from the muzzle instead of expanding as
+    // the pale spherical dome the old stretched ball produced.
+    flash.mesh.quaternion
+      .copy(this.root.getWorldQuaternion(this.scratchQuaternion))
+      .multiply(this.flashAxisRotation);
   }
 
   /**
@@ -666,7 +760,7 @@ export class GunView {
       peakOpacity,
       fromScale: new THREE.Vector3(1, 1, 1),
       toScale: new THREE.Vector3(1, 1, 1),
-      riseM: geometry === this.sharedCylinder ? 0 : GUN_LENGTH_M * 0.3,
+      riseM: geometry === this.sharedSphere ? GUN_LENGTH_M * 0.3 : 0,
       baseY: at.y,
       elapsedMs: 0,
     };

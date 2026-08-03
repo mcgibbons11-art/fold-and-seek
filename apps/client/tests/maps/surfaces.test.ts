@@ -112,7 +112,6 @@ describe("Curiosity Shop procedural surfaces", () => {
 
   it("stays inside the texture budget, and reports what it spends", () => {
     const full = shopTextureBytes(1);
-    // eslint-disable-next-line no-console -- the number this pass is judged on.
     console.log(
       `shop surfaces: ${(full / 1048576).toFixed(2)} MB at full resolution, ` +
         QUALITY_TIER_ORDER.map(
@@ -159,7 +158,6 @@ describe("Curiosity Shop procedural surfaces", () => {
       const roughnessOf = (value: number): number =>
         surface.roughnessFloor + (1 - value) * (1 - surface.roughnessFloor);
 
-      // eslint-disable-next-line no-console -- the ranges the change is reviewed on.
       console.log(
         `${id.padEnd(16)} field p2..p98 ${low.toFixed(3)}..${high.toFixed(3)}` +
           ` | colour x${swing(low).toFixed(2)}..${swing(high).toFixed(2)} of swatch` +

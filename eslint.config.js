@@ -2,7 +2,16 @@ import js from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["**/dist/**", "**/node_modules/**", "**/*.d.ts", "**/public/**"] },
+  {
+    ignores: [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/*.d.ts",
+      "**/public/**",
+      // The Portals upload is a checked-in production artifact, not source.
+      "portals/assets/**",
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

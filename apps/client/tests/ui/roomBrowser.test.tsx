@@ -106,6 +106,25 @@ describe("the room browser", () => {
     expect(container.textContent).toContain(`0 of ${MAX_CONCURRENT_ROOMS}`);
   });
 
+  it("shows room failures beside the room controls", async () => {
+    const reader = await browsingClient("b", "Bex");
+    act(() => {
+      root.render(
+        <RoomBrowser
+          rooms={reader.listRooms()}
+          onJoin={() => undefined}
+          onCreate={() => undefined}
+          onQuickJoin={() => undefined}
+          notice="The room could not be advertised."
+        />,
+      );
+    });
+
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "could not be advertised",
+    );
+  });
+
   it("draws another client's room and joins it when the row is pressed", async () => {
     const host = await browsingClient("a", "Ada");
     const reader = await browsingClient("b", "Bex");

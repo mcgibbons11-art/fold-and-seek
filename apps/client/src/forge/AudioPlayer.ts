@@ -10,6 +10,31 @@
 
 const VOICES_PER_CLIP = 3;
 
+/**
+ * All AudioPlayer instances share this budget. Forge, movement, weapons, and
+ * round feedback each own a player, so a per-instance ceiling still allowed a
+ * noisy frame to start dozens of overlapping elements. The oldest transient
+ * yields first, keeping current input feedback audible.
+ */
+export const MAX_ACTIVE_ONE_SHOTS = 16;
+const activeOneShots: HTMLAudioElement[] = [];
+
+function releaseOneShot(element: HTMLAudioElement): void {
+  const index = activeOneShots.indexOf(element);
+  if (index >= 0) activeOneShots.splice(index, 1);
+}
+
+function reserveOneShot(element: HTMLAudioElement): void {
+  releaseOneShot(element);
+  while (activeOneShots.length >= MAX_ACTIVE_ONE_SHOTS) {
+    const oldest = activeOneShots.shift();
+    if (oldest === undefined) break;
+    oldest.pause();
+    oldest.currentTime = 0;
+  }
+  activeOneShots.push(element);
+}
+
 export type SoundId =
   // Forge
   | "ui_click"
@@ -80,6 +105,19 @@ export type SoundId =
   | "win_sting"
   | "lose_sting";
 
+/**
+ * Conservative trims for supplied recordings whose measured transients land
+ * close to full scale. Quiet material is deliberately not boosted: a missing
+ * footstep is less disruptive than raising its noise floor, while a sharp UI
+ * click benefits from predictable headroom when several cues coincide.
+ */
+const MEASURED_PEAK_TRIM: Partial<Readonly<Record<SoundId, number>>> = {
+  ui_click: 0.68,
+  ui_confirm: 0.55,
+  lock_seal: 0.72,
+  score_tick: 0.72,
+};
+
 interface Voices {
   readonly elements: HTMLAudioElement[];
   next: number;
@@ -93,11 +131,28 @@ interface Voices {
  * them rather than living on any one. Every live player registers here and is
  * told when the number changes.
  */
-let masterVolume = 1;
+function storedMasterVolume(): number {
+  try {
+    const raw = globalThis.localStorage?.getItem("foldseek.masterVolume");
+    if (raw === null || raw === undefined) return 1;
+    const stored = Number(raw);
+    return Number.isFinite(stored) ? Math.min(Math.max(stored, 0), 1) : 1;
+  } catch {
+    return 1;
+  }
+}
+
+let masterVolume = storedMasterVolume();
 const livePlayers = new Set<AudioPlayer>();
 
 export function setMasterVolume(volume: number): void {
   masterVolume = Math.min(Math.max(volume, 0), 1);
+  try {
+    globalThis.localStorage?.setItem("foldseek.masterVolume", String(masterVolume));
+  } catch {
+    // Portals can deny storage in an embedded room. Volume still applies for
+    // the current session, which is the important part.
+  }
   for (const player of livePlayers) player.applyVolume();
 }
 
@@ -109,6 +164,7 @@ export class AudioPlayer {
   private readonly clips = new Map<SoundId, Voices>();
   private readonly baseUrl: string;
   private readonly warned = new Set<string>();
+  private readonly playbackGains = new WeakMap<HTMLAudioElement, number>();
   private volume: number;
 
   constructor(baseUrl: string = import.meta.env.BASE_URL, volume = 0.6) {
@@ -127,7 +183,7 @@ export class AudioPlayer {
     const effective = this.volume * masterVolume;
     for (const clip of this.clips.values()) {
       for (const element of clip.elements) {
-        element.volume = effective;
+        element.volume = Math.min(1, effective * (this.playbackGains.get(element) ?? 1));
       }
     }
   }
@@ -146,10 +202,14 @@ export class AudioPlayer {
       return;
     }
     element.currentTime = 0;
-    element.volume = Math.min(1, Math.max(0, this.volume * masterVolume * gain));
+    const playbackGain = Math.min(1, Math.max(0, gain * (MEASURED_PEAK_TRIM[id] ?? 1)));
+    this.playbackGains.set(element, playbackGain);
+    element.volume = Math.min(1, this.volume * masterVolume * playbackGain);
     element.playbackRate = pitchJitter > 0 ? 1 + (Math.random() * 2 - 1) * pitchJitter : 1;
     clip.lastPlayedMs = performance.now();
+    reserveOneShot(element);
     void element.play().catch((error: unknown) => {
+      releaseOneShot(element);
       // Browsers reject playback until the page has seen a gesture. Nothing
       // here plays before the player has clicked their way into a round, so a
       // rejection means something else is wrong and is worth saying once.
@@ -173,6 +233,7 @@ export class AudioPlayer {
     livePlayers.delete(this);
     for (const clip of this.clips.values()) {
       for (const element of clip.elements) {
+        releaseOneShot(element);
         element.pause();
         element.removeAttribute("src");
       }
@@ -190,6 +251,10 @@ export class AudioPlayer {
       const element = new Audio(`${this.baseUrl}assets/audio/sfx/${id}.mp3`);
       element.preload = "auto";
       element.volume = this.volume * masterVolume;
+      this.playbackGains.set(element, 1);
+      if (typeof element.addEventListener === "function") {
+        element.addEventListener("ended", () => releaseOneShot(element));
+      }
       elements.push(element);
     }
     const clip: Voices = { elements, next: 0, lastPlayedMs: 0 };

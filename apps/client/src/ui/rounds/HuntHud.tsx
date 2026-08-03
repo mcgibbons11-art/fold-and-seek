@@ -6,15 +6,12 @@ import type { RoundViewState } from "../../gameplay/roundView";
 import { ForgeToolPanels } from "../ForgeHud";
 import { ActionRail } from "./ActionRail";
 import { columnDensityFor, forgePanelsOpenByDefault, type ColumnDensity } from "./columnFit";
-import { ControlStrip, ModeNote } from "./ControlStrip";
+import { ModeNote } from "./ControlStrip";
 import { HiderHud } from "./HiderHud";
 import {
-  HIDER_CONTROL_HINTS,
-  INSPECTOR_CONTROL_HINTS,
   boardRailAction,
   hiderRailActions,
   inspectorRailActions,
-  type ControlHint,
   type RailAction,
 } from "./huntControls";
 import { HuntStatus } from "./HuntStatus";
@@ -98,6 +95,7 @@ function useForgePanelsOpen(columnHeight: number, mode: ForgeToolMode | null): {
 export function HuntHud(props: HuntHudProps): ReactElement {
   const { state, gun, forge, pointerLocked, boardOpen, onToggleBoard, onTaunt } = props;
   const forgeState = useForgeState(forge);
+  const [actionsOpen, setActionsOpen] = useState(false);
   const columnHeight = useRegionHeight("leftColumn");
   const density = columnDensityFor(columnHeight);
   const panels = useForgePanelsOpen(columnHeight, forgeState?.mode ?? null);
@@ -120,8 +118,6 @@ export function HuntHud(props: HuntHudProps): ReactElement {
           boardOpen,
         })
       : [boardRailAction(boardOpen)];
-
-  const hints: readonly ControlHint[] = isInspector ? INSPECTOR_CONTROL_HINTS : HIDER_CONTROL_HINTS;
 
   const onRailPress = (id: string): void => {
     if (id === "missedFinds") {
@@ -150,14 +146,59 @@ export function HuntHud(props: HuntHudProps): ReactElement {
     topCenter: <HuntStatus state={state} />,
     topRight: toasts.length === 0 ? undefined : <Toast entries={toasts} />,
     leftColumn: leftColumn({ state, isInspector, isLiveHider, forge, board, density, panels }),
-    rightRail: <ActionRail actions={rail} onPress={onRailPress} />,
+    rightRail: (
+      <ActionsDisclosure
+        actions={rail}
+        open={actionsOpen}
+        onToggle={() => setActionsOpen((open) => !open)}
+        onPress={onRailPress}
+      />
+    ),
     bottomCenter:
-      isInspector && !pointerLocked ? <PointerLockPrompt /> : <ControlStrip hints={hints} />,
+      isInspector && !pointerLocked ? <PointerLockPrompt /> : undefined,
     bottomRight: role === null ? undefined : <ModeNote role={role} />,
     center: isInspector ? <InspectorSight state={state} gun={gun} /> : undefined,
   };
 
   return <HudLayout regions={regions} />;
+}
+
+/** Keeps the full verb/key list one deliberate click away instead of permanently covering the room. */
+function ActionsDisclosure({
+  actions,
+  open,
+  onToggle,
+  onPress,
+}: {
+  readonly actions: readonly RailAction[];
+  readonly open: boolean;
+  readonly onToggle: () => void;
+  readonly onPress: (id: string) => void;
+}): ReactElement {
+  const availableHeight = Math.max(useRegionHeight("rightRail") - 48, 0);
+  return (
+    <div data-action-rail={open ? "open" : "folded"} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        style={{
+          ...plate(),
+          width: 148,
+          padding: "8px 10px",
+          borderRadius: 8,
+          color: BRASS_LIT,
+          font: "inherit",
+          cursor: "pointer",
+          pointerEvents: "auto",
+          textAlign: "right",
+        }}
+      >
+        Actions <span aria-hidden>{open ? "▾" : "▸"}</span>
+      </button>
+      {open ? <ActionRail actions={actions} onPress={onPress} availableHeight={availableHeight} /> : null}
+    </div>
+  );
 }
 
 function leftColumn({

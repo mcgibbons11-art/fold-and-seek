@@ -64,6 +64,14 @@ export class FakePortalsRelay {
   /** join() calls per connection, failed ones included, for the retry tests. */
   readonly joinAttempts = new Map<string, number>();
 
+  /**
+   * Some live editor host builds have stored shared state but missed its state
+   * callback. Tests can turn callbacks off while keeping getState truthful to
+   * prove the room-directory broadcast is a real fallback rather than a fake
+   * that depends on writer echo.
+   */
+  deliverStateEvents = true;
+
   private readonly peers = new Map<string, FakePortalsNet>();
   private readonly sharedState = new Map<string, unknown>();
 
@@ -185,8 +193,10 @@ export class FakePortalsRelay {
       return;
     }
     this.sharedState.set(key, JSON.parse(encoded));
-    for (const peer of [...this.peers.values()]) {
-      peer.dispatch("state", key, this.sharedState.get(key));
+    if (this.deliverStateEvents) {
+      for (const peer of [...this.peers.values()]) {
+        peer.dispatch("state", key, this.sharedState.get(key));
+      }
     }
   }
 

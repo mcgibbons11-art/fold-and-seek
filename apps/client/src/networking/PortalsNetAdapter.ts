@@ -34,6 +34,7 @@ import {
   type ConnectionState,
   type ConnectionStatus,
   type ForgeSnapshot,
+  type InspectorCameraSample,
   type EyePosition,
   type MatchSync,
   type NetworkAdapter,
@@ -71,6 +72,7 @@ import {
   DEFAULT_ROOM_SLOT,
   ROOM_HEARTBEAT_MS,
   ROOM_SLOTS,
+  RoomAdSchema,
   RoomDirectory,
   VACANT_SLOT,
   freeRoomCode,
@@ -233,6 +235,10 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private readonly statusSignal = new Signal<ConnectionState>();
   private readonly rejectionSignal = new Signal<CommandRejection>();
   private readonly syncSignal = new Signal<MatchSync>();
+  private readonly cameraSignal = new Signal<{
+    readonly seatId: string;
+    readonly sample: InspectorCameraSample | null;
+  }>();
 
   private players: PortalsNetPlayer[] = [];
   /** Relay connection id: changes on every reconnect, used only for addressing. */
@@ -774,6 +780,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.rosterSignal.clear();
     this.statusSignal.clear();
     this.syncSignal.clear();
+    this.cameraSignal.clear();
   }
 
   sendCommand(command: MatchCommand): void {
@@ -827,6 +834,11 @@ export class PortalsNetAdapter implements NetworkAdapter {
       to: this.authoritySeatId,
       paint: update,
     });
+  }
+
+  sendCameraSample(sample: InspectorCameraSample | null): void {
+    if (this.connection.status !== "connected" || this.selfSeatId === null) return;
+    this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "cam", sample });
   }
 
   /**
@@ -949,9 +961,35 @@ export class PortalsNetAdapter implements NetworkAdapter {
     return this.syncSignal.subscribe(listener);
   }
 
+  onCameraSample(
+    listener: (seatId: string, sample: InspectorCameraSample | null) => void,
+  ): Unsubscribe {
+    return this.cameraSignal.subscribe(({ seatId, sample }) => listener(seatId, sample));
+  }
+
   // ------------------------------------------------------------- relay events
 
-  private readonly handleMessage = (data: unknown, fromId: string): void => {
+  private readonly handleMessage = (first: unknown, second: unknown): void => {
+    // The checked-in SDK contract is `(data, fromId)`. A few Portals editor
+    // host builds have instead exposed a postMessage-like wrapper, and one
+    // briefly reversed the two arguments. Normalize those carrier differences
+    // before the protocol sees the payload; no game field bypasses validation.
+    let data = first;
+    let fromId = typeof second === "string" ? second : null;
+    if (typeof first === "string" && second !== null && typeof second === "object") {
+      fromId = first;
+      data = second;
+    }
+    if (data !== null && typeof data === "object" && !("t" in data) && "data" in data) {
+      const wrapper = data as { readonly data: unknown; readonly fromId?: unknown };
+      data = wrapper.data;
+      if (fromId === null && typeof wrapper.fromId === "string") fromId = wrapper.fromId;
+    }
+    if (fromId === null) {
+      console.warn("[portals] dropped message without a sender");
+      return;
+    }
+
     // Size first: an oversized payload is refused before it is parsed, so a
     // peer cannot make the host do work by sending something enormous (§36.5).
     const bytes = jsonByteLength(data);
@@ -962,7 +1000,32 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
     const envelope = parseEnvelope(data);
     if (!envelope) {
-      console.warn("[portals] dropped malformed message from", fromId);
+      const shape =
+        data === null
+          ? "null"
+          : Array.isArray(data)
+            ? "array"
+            : typeof data === "object"
+              ? `object:${String((data as { t?: unknown }).t ?? "no-type")}`
+              : typeof data;
+      console.warn(`[portals] dropped malformed ${shape} message from ${fromId}`);
+      return;
+    }
+
+    // Directory broadcasts are session-scoped by design: a player still in
+    // the browser has no roomCode, but is exactly who needs to hear this. The
+    // durable setState copy is still read on join and host migration.
+    if (envelope.t === "ad") {
+      const parsed = RoomAdSchema.safeParse(envelope.ad);
+      if (!parsed.success) {
+        console.warn(`[portals] dropped malformed room advertisement from ${fromId}`);
+        return;
+      }
+      const slot = ROOM_SLOTS[parsed.data.slot];
+      if (slot === undefined) return;
+      this.directory.observe(slot.adKey, parsed.data, this.clock());
+      this.checkAdOwnership();
+      this.emitDirectory();
       return;
     }
 
@@ -1057,6 +1120,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
           return;
         }
         if (fromSeat !== undefined) this.options.onInspectorEye?.(fromSeat, envelope.eye);
+        return;
+
+      case "cam":
+        if (fromSeat !== undefined && fromSeat !== this.selfSeatId) {
+          this.cameraSignal.emit({ seatId: fromSeat, sample: envelope.sample });
+        }
         return;
 
       case "resync": {
@@ -1894,6 +1963,13 @@ export class PortalsNetAdapter implements NetworkAdapter {
       return;
     }
 
+    // A working Forge pose exists only in the authority until it is locked.
+    // Holding the previous compact snapshot is intentional in that window;
+    // checking first avoids turning the expected Locking grace state into a
+    // recurring warning while still leaving snapshot()'s hard safety check in
+    // place for every other caller.
+    if (!sim.canOmitSnapshotPoses()) return;
+
     let snapshot: unknown;
     try {
       snapshot = sim.snapshot({ poses: "omit" });
@@ -2074,8 +2150,14 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.lastAdBody = serialized;
     const ad: RoomAd = { ...body, beat: this.adBeat };
     this.net.setState(this.roomSlot.adKey, ad);
-    // The writer hears its own state event, so the directory learns about this
-    // room the same way it learns about the other one.
+    // Apply our own write synchronously. Portals does not promise sender echo,
+    // and making the creator wait for one was the reason its own browser could
+    // keep reading zero rooms after OPEN.
+    this.directory.observe(this.roomSlot.adKey, ad, nowMs);
+    this.emitDirectory();
+    // Peers get a live copy even when an editor host misses the state callback;
+    // late joiners still discover the durable setState value above.
+    this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "ad", ad });
   }
 
   /** Frees this room's slot at once, rather than leaving it to time out. */

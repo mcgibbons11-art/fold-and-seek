@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import { PANEL_SOCKET_NAMES, SEGMENT_BONES } from "../../src/mimic/rig";
 import {
+  mirroredPaintTarget,
   normalizeTargetUv,
   PAINT_TARGET_COUNT,
   PANEL_TARGET_OFFSET,
@@ -49,6 +50,16 @@ describe("paint target identity", () => {
     const bellows = new THREE.Mesh();
     bellows.userData["segmentSlot"] = SEGMENT_BONES.length;
     expect(paintTargetOfObject(bellows)).toBeNull();
+  });
+
+  it("pairs left/right shells and panel sockets for mirrored spray", () => {
+    const indexOf = (id: string): number => (PAINT_TARGET_IDS as readonly string[]).indexOf(id);
+    expect(mirroredPaintTarget(indexOf("hand_L"))).toBe(indexOf("hand_R"));
+    expect(mirroredPaintTarget(indexOf("foot_R"))).toBe(indexOf("foot_L"));
+    expect(mirroredPaintTarget(indexOf("panel_socket_05"))).toBe(
+      indexOf("panel_socket_06"),
+    );
+    expect(mirroredPaintTarget(indexOf("head"))).toBeNull();
   });
 });
 

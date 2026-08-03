@@ -30,7 +30,11 @@ export const PAINT_TILE_COLUMNS = 8;
 export const PAINT_TILE_ROWS = 4;
 export const PAINT_TILE_COUNT = PAINT_TILE_COLUMNS * PAINT_TILE_ROWS;
 export const PAINT_TARGET_COUNT = PAINT_TARGET_IDS.length;
-export const DEFAULT_ATLAS_SIZE = 1_024;
+// 512 keeps 64×128 px per body part—more detail than the on-screen Mimic can
+// resolve—while cutting each live colour/material upload to a quarter of the
+// old 1024 atlas. Painting is an interaction-rate path, so that difference is
+// felt directly under the cursor.
+export const DEFAULT_ATLAS_SIZE = 512;
 
 /** Panel sockets follow the segments in the shared target order. */
 export const PANEL_TARGET_OFFSET = RIG_SEGMENT_BONES.length;
@@ -124,6 +128,32 @@ export function paintTargetOfObject(object: THREE.Object3D): number | null {
  */
 export function normalizeTargetUv(_targetIndex: number, u: number, v: number): [number, number] {
   return [clamp01(u), clamp01(v)];
+}
+
+const MIRRORED_PAINT_SOCKETS: Readonly<Record<string, string>> = {
+  panel_socket_03: "panel_socket_04",
+  panel_socket_04: "panel_socket_03",
+  panel_socket_05: "panel_socket_06",
+  panel_socket_06: "panel_socket_05",
+  panel_socket_07: "panel_socket_08",
+  panel_socket_08: "panel_socket_07",
+};
+
+/** Paint target on the opposite side of the body, or null on the centre line. */
+export function mirroredPaintTarget(targetIndex: number): number | null {
+  const id = PAINT_TARGET_IDS[targetIndex];
+  if (id === undefined) return null;
+  const socket = MIRRORED_PAINT_SOCKETS[id];
+  const mirrored =
+    socket ??
+    (id.endsWith("_L")
+      ? `${id.slice(0, -2)}_R`
+      : id.endsWith("_R")
+        ? `${id.slice(0, -2)}_L`
+        : null);
+  if (mirrored === null) return null;
+  const index = (PAINT_TARGET_IDS as readonly string[]).indexOf(mirrored);
+  return index < 0 ? null : index;
 }
 
 function clamp01(value: number): number {

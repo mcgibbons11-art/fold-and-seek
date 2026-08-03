@@ -9,7 +9,7 @@ import { HiderLocomotion } from "../../src/forge/HiderLocomotion";
 import { createStarterArrangement } from "../../src/mimic/disguiseState";
 import { decodeDisguiseState, encodeDisguiseState } from "../../src/mimic/poseWire";
 import { LocalLoopbackAdapter } from "../../src/networking/LocalLoopbackAdapter";
-import { WORLD_SCALE, type MutableVec3 } from "../../src/inspector/navData";
+import type { MutableVec3 } from "../../src/inspector/navData";
 import { NAV_DATA } from "../../src/world/maps/nav";
 import { buildObjectRegistry } from "../../src/world/maps/registry";
 

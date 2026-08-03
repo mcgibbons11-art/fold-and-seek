@@ -1,6 +1,10 @@
 import { useState, type CSSProperties, type ReactElement } from "react";
 
+import { getMasterVolume, setMasterVolume } from "../forge/AudioPlayer";
+import { QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
 import { ControlsLegend } from "./ControlsLegend";
+import { CommandMenu } from "./CommandMenu";
+import { HotkeyGuide } from "./HotkeyGuide";
 import { RoomBrowser, type RoomBrowserProps } from "./RoomBrowser";
 import {
   CORE_CONTROL_HINTS,
@@ -8,20 +12,15 @@ import {
   INSPECTOR_ROLE_HINTS,
 } from "./rounds/huntControls";
 import {
-  ALARM,
-  BRASS,
   BRASS_LIT,
   CREAM,
-  FONT_DISPLAY,
   FONT_UI,
   PRESS_CLASS,
   SCREEN_WASH,
   buttonStyle,
-  disabledButtonStyle,
   labelStyle,
   ornamentRuleStyle,
   plate,
-  primaryButtonStyle,
 } from "./rounds/theme";
 
 /**
@@ -36,7 +35,7 @@ import {
  */
 
 const overlayStyle: CSSProperties = {
-  position: "absolute",
+  position: "fixed",
   inset: 0,
   display: "grid",
   placeContent: "center",
@@ -69,9 +68,9 @@ const buttonBlock: CSSProperties = { display: "block", width: "100%", marginTop:
  */
 const rulesCardStyle: CSSProperties = {
   ...cardStyle,
-  width: 460,
+  width: 680,
   textAlign: "left",
-  maxHeight: "min(78vh, 640px)",
+  maxHeight: "min(82vh, 720px)",
   overflowY: "auto",
 };
 
@@ -132,10 +131,18 @@ function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
       </p>
 
       <h3 style={rulesHeadingStyle}>Mimic controls</h3>
+      <ControlsLegend hints={CORE_CONTROL_HINTS} />
       <ControlsLegend hints={HIDER_CONTROL_HINTS} />
 
       <h3 style={rulesHeadingStyle}>Inspector controls</h3>
       <ControlsLegend hints={INSPECTOR_ROLE_HINTS} />
+
+      <h3 style={rulesHeadingStyle}>Hotkeys</h3>
+      <p style={rulesBodyStyle}>
+        Fast switching is part of hiding well: use the Forge keys directly instead of reopening
+        a panel for every change.
+      </p>
+      <HotkeyGuide />
 
       <button
         type="button"
@@ -149,34 +156,124 @@ function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
   );
 }
 
-/**
- * The wordmark, set the way the cover art sets it: FOLD in lit brass, SEEK in
- * cream, and the ampersand between them smaller and dimmer so the two words read
- * as a pair rather than a list.
- */
-function Wordmark(): ReactElement {
+const QUALITY_TIER_LABELS: Readonly<Record<QualityTier, string>> = {
+  light: "Lightest",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  ultra: "Ultra",
+};
+
+const qualityChipStyle: CSSProperties = {
+  ...buttonStyle,
+  padding: "7px 9px",
+  fontSize: 10,
+  letterSpacing: "0.08em",
+  flex: 1,
+};
+
+function Settings({
+  tier,
+  onTierChange,
+  onForgePractice,
+  onBack,
+}: {
+  readonly tier: QualityTier;
+  readonly onTierChange: (tier: QualityTier) => void;
+  readonly onForgePractice: () => void;
+  readonly onBack: () => void;
+}): ReactElement {
+  const [volume, setVolume] = useState(() => getMasterVolume());
+
   return (
-    <h1
-      style={{
-        margin: 0,
-        font: `600 40px/1.05 ${FONT_DISPLAY}`,
-        letterSpacing: "0.1em",
-        // Letter-spacing hangs off the final glyph, which throws a centred line
-        // to the left by half of it.
-        textIndent: "0.1em",
-        textShadow: "0 2px 18px rgba(255, 190, 107, 0.28)",
-      }}
-    >
-      <span style={{ color: BRASS_LIT }}>FOLD</span>
-      <span style={{ color: BRASS, fontSize: 28, opacity: 0.8, margin: "0 0.14em" }}>&amp;</span>
-      <span style={{ color: CREAM, fontWeight: 400 }}>SEEK</span>
-    </h1>
+    <div style={{ ...rulesCardStyle, width: 430 }} className="fs-rise">
+      <div style={{ textAlign: "center" }}>
+        <div style={{ ...labelStyle, opacity: 0.7, marginBottom: 8 }}>Settings</div>
+        <div style={{ ...ornamentRuleStyle(180), margin: "0 auto" }} aria-hidden />
+      </div>
+
+      <h3 style={rulesHeadingStyle}>Graphics quality</h3>
+      <div role="group" aria-label="Graphics quality" style={{ display: "flex", gap: 5 }}>
+        {[...QUALITY_TIER_ORDER].reverse().map((value) => (
+          <button
+            key={value}
+            type="button"
+            className={PRESS_CLASS}
+            aria-pressed={tier === value}
+            style={
+              tier === value
+                ? {
+                    ...qualityChipStyle,
+                    borderColor: BRASS_LIT,
+                    color: "#fff3df",
+                    background:
+                      "linear-gradient(180deg, rgba(194, 151, 79, 0.45), rgba(122, 93, 46, 0.3))",
+                  }
+                : qualityChipStyle
+            }
+            onClick={() => {
+              onTierChange(value);
+            }}
+          >
+            {QUALITY_TIER_LABELS[value]}
+          </button>
+        ))}
+      </div>
+      <p style={{ ...rulesBodyStyle, marginTop: 8 }}>
+        Changes apply immediately. Lightest removes the most expensive room effects.
+      </p>
+
+      <h3 style={rulesHeadingStyle}>Master volume</h3>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 12 }}>
+        <input
+          aria-label="Master volume"
+          type="range"
+          min={0}
+          max={1}
+          step={0.05}
+          value={volume}
+          onChange={(event) => {
+            const next = Number(event.currentTarget.value);
+            setVolume(next);
+            setMasterVolume(next);
+          }}
+          style={{ width: "100%", accentColor: BRASS_LIT }}
+        />
+        <span style={{ minWidth: 38, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+          {Math.round(volume * 100)}%
+        </span>
+      </div>
+
+      <h3 style={rulesHeadingStyle}>Practice</h3>
+      <p style={rulesBodyStyle}>
+        Open the Forge without a timer to learn folding, painting, mirroring, and copying.
+      </p>
+      <button
+        type="button"
+        className={PRESS_CLASS}
+        style={{ ...buttonStyle, ...buttonBlock }}
+        onClick={onForgePractice}
+      >
+        Forge practice
+      </button>
+
+      <button
+        type="button"
+        className={PRESS_CLASS}
+        style={{ ...buttonStyle, ...buttonBlock, marginTop: 20 }}
+        onClick={onBack}
+      >
+        Back
+      </button>
+    </div>
   );
 }
 
 export interface MainMenuProps {
   readonly onPlayRound: () => void;
   readonly onForgePractice: () => void;
+  readonly qualityTier: QualityTier;
+  readonly onQualityTierChange: (tier: QualityTier) => void;
   /** Set while the shop is being unpacked, so the round is not started twice. */
   readonly starting?: boolean;
   /**
@@ -197,101 +294,50 @@ export interface MainMenuProps {
 export function MainMenu({
   onPlayRound,
   onForgePractice,
+  qualityTier,
+  onQualityTierChange,
   starting = false,
   multiplayer = false,
   notice = null,
   browser = null,
 }: MainMenuProps): ReactElement {
-  const [showRules, setShowRules] = useState(false);
+  const [page, setPage] = useState<"main" | "rules" | "settings" | "matchmaking">("main");
 
-  if (showRules) {
+  if (page === "matchmaking" && browser !== null) {
+    return <RoomBrowser {...browser} onBack={() => setPage("main")} />;
+  }
+
+  if (page === "rules") {
     return (
       <div style={overlayStyle}>
-        <HowToPlay onBack={() => setShowRules(false)} />
+        <HowToPlay onBack={() => setPage("main")} />
+      </div>
+    );
+  }
+
+  if (page === "settings") {
+    return (
+      <div style={overlayStyle}>
+        <Settings
+          tier={qualityTier}
+          onTierChange={onQualityTierChange}
+          onForgePractice={onForgePractice}
+          onBack={() => setPage("main")}
+        />
       </div>
     );
   }
 
   return (
-    <div style={overlayStyle}>
-      <div style={cardStyle} className="fs-rise">
-        <div className="fs-candle">
-          <div style={{ ...labelStyle, opacity: 0.7, marginBottom: 10 }}>The Curiosity Shop</div>
-          <Wordmark />
-        </div>
-
-        <div style={{ ...ornamentRuleStyle(200), margin: "16px auto 14px" }} aria-hidden />
-
-        <p style={{ margin: "0 0 20px", fontSize: 13, lineHeight: 1.65, opacity: 0.8 }}>
-          One of the objects in this room is a person. Fold yourself into the furniture, or hunt
-          whatever is lying.
-        </p>
-
-        {/* With a room browser, picking a room IS starting the game, so a play
-            button above it would be a second answer to the same question. */}
-        {browser === null ? (
-          <button
-            type="button"
-            className={PRESS_CLASS}
-            style={{ ...(starting ? disabledButtonStyle(primaryButtonStyle) : primaryButtonStyle), ...buttonBlock }}
-            onClick={onPlayRound}
-            disabled={starting}
-          >
-            {starting ? "Opening the shop…" : multiplayer ? "Join the room" : "Start game"}
-          </button>
-        ) : (
-          <RoomBrowser {...browser} />
-        )}
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          style={{ ...(starting ? disabledButtonStyle(buttonStyle) : buttonStyle), ...buttonBlock }}
-          onClick={() => setShowRules(true)}
-          disabled={starting}
-        >
-          How to play
-        </button>
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          style={{ ...(starting ? disabledButtonStyle(buttonStyle) : buttonStyle), ...buttonBlock }}
-          onClick={onForgePractice}
-          disabled={starting}
-        >
-          Forge Practice
-        </button>
-
-        {notice === null ? null : (
-          <div
-            role="alert"
-            style={{
-              marginTop: 14,
-              padding: "8px 12px",
-              borderRadius: 7,
-              borderLeft: `3px solid ${ALARM}`,
-              background: "rgba(200, 80, 60, 0.12)",
-              color: "#f0b8ab",
-              fontSize: 12,
-              textAlign: "left",
-            }}
-          >
-            {notice}
-          </div>
-        )}
-
-        <div style={{ marginTop: 22 }}>
-          <ControlsLegend hints={CORE_CONTROL_HINTS} />
-        </div>
-
-        {/* Which room this is, and nothing else. The line used to read
-            "SOLO · WEBGL2 · ` FOR DIAGNOSTICS": the graphics backend and the
-            key that shows it are both already in the diagnostics overlay that
-            backquote opens, and neither is anything a player is being asked to
-            decide. */}
-        <div style={{ ...labelStyle, opacity: 0.4, marginTop: 20, letterSpacing: "0.1em" }}>
-          {multiplayer ? "Portals room" : "Playing solo"}
-        </div>
-      </div>
-    </div>
+    <CommandMenu
+      multiplayer={multiplayer}
+      starting={starting}
+      notice={notice}
+      browser={browser}
+      onPlay={onPlayRound}
+      onMatchmaking={() => setPage("matchmaking")}
+      onHowToPlay={() => setPage("rules")}
+      onSettings={() => setPage("settings")}
+    />
   );
 }

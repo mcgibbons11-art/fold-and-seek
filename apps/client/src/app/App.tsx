@@ -13,11 +13,16 @@ import { createPortalsRound, PORTALS_ROUND_CHANNEL, type PortalsRound } from "..
 import type { GameRound } from "../gameplay/round";
 import type { RoundSession } from "../gameplay/RoundSession";
 import { detectPortalsSession, type PortalsBoot } from "../networking/portalsBoot";
-import { QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
+import type { QualityTier } from "../rendering/quality";
 import type { ConnectionDetail } from "../networking/NetworkAdapter";
 import type { RoomEntryFailure, RoomEntryResult } from "../networking/PortalsNetAdapter";
 import { MAX_CONCURRENT_ROOMS, type RoomListing } from "../networking/roomRegistry";
-import { RendererInitError, type DeviceEvent, type RenderBackend } from "../rendering/RendererManager";
+import {
+  GraphicsRecoveryPolicy,
+  RendererInitError,
+  type DeviceEvent,
+  type RenderBackend,
+} from "../rendering/RendererManager";
 import { ForgeHud } from "../ui/ForgeHud";
 import {
   ALARM,
@@ -32,9 +37,11 @@ import {
   labelStyle,
   ornamentRuleStyle,
   plate,
+  primaryButtonStyle,
 } from "../ui/rounds/theme";
 import { LoadingScreen } from "../ui/LoadingScreen";
 import { MainMenu } from "../ui/MainMenu";
+import { StartScreen } from "../ui/StartScreen";
 import type { RoomBrowserProps } from "../ui/RoomBrowser";
 import { RoundHud } from "../ui/RoundHud";
 
@@ -62,6 +69,12 @@ const DEFAULT_PLAYER_NAME = "Curator";
  * without the menu polling hard enough to be felt.
  */
 const ROOM_LIST_REFRESH_MS = 2_000;
+/** Let the browser restore a lost WebGL context before asking for a new one. */
+const CONTEXT_RESTORE_WAIT_MS = 2_000;
+/** A rebuild that draws this long counts as healthy rather than consecutive. */
+const GRAPHICS_STABLE_MS = 15_000;
+/** Briefly leave the recovery copy readable before rebuilding the whole tree. */
+const AUTO_RECOVERY_NOTICE_MS = 350;
 
 const NO_BACKEND_HEADLINE = "This browser cannot draw the shop";
 const NO_BACKEND_DETAIL =
@@ -80,6 +93,30 @@ async function hasDrawableBackend(): Promise<boolean> {
   }
   const probe = document.createElement("canvas");
   return probe.getContext("webgl2") !== null;
+}
+
+/**
+ * WebGL context restoration is asynchronous. The old GameHost is disposed by
+ * the boot effect's cleanup before this runs; when the browser still reports a
+ * lost context, wait for its restoration event (with a bounded fallback) before
+ * constructing the replacement renderer.
+ */
+async function waitForCanvasRestore(canvas: HTMLCanvasElement): Promise<void> {
+  const context = canvas.getContext("webgl2");
+  if (context === null || !context.isContextLost()) return;
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = (): void => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      canvas.removeEventListener("webglcontextrestored", finish);
+      resolve();
+    };
+    const timeout = window.setTimeout(finish, CONTEXT_RESTORE_WAIT_MS);
+    canvas.addEventListener("webglcontextrestored", finish, { once: true });
+  });
 }
 
 function describeFailure(error: unknown): { headline: string; detail: string } {
@@ -117,53 +154,6 @@ const ROOM_FAILURE_COPY: Readonly<Record<RoomEntryFailure, string>> = {
   room_full: "That room already has as many players as a round allows.",
   session_full: `This session holds ${MAX_CONCURRENT_ROOMS} rooms at once. Join one of them, or wait for a room to empty.`,
   already_in_room: "You are already in a room.",
-};
-
-const panelStyle: CSSProperties = {
-  position: "absolute",
-  left: 20,
-  bottom: 20,
-  padding: "12px 16px",
-  borderRadius: 10,
-  ...plate(),
-  color: CREAM,
-  font: `13px/1.6 ${FONT_UI}`,
-  pointerEvents: "auto",
-};
-
-/**
- * The five tiers, named for what they buy rather than for where they sit in the
- * `QUALITY_TIER_ORDER` array. "light" and "low" are neighbours in that list and
- * near-synonyms in English, which is not a choice anybody can make from a
- * dropdown.
- */
-const QUALITY_TIER_LABELS: Readonly<Record<QualityTier, string>> = {
-  light: "Lightest",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  ultra: "Ultra",
-};
-
-/**
- * The quality control as five chips rather than a `<select>`. A native dropdown
- * is the one piece of browser chrome on the title screen, it renders in the
- * platform's own colours whatever is asked of it, and it hides four of the five
- * choices behind a click.
- */
-const qualityChipStyle: CSSProperties = {
-  ...buttonStyle,
-  padding: "5px 9px",
-  fontSize: 10,
-  letterSpacing: "0.1em",
-};
-
-const qualityChipActiveStyle: CSSProperties = {
-  ...qualityChipStyle,
-  background: "linear-gradient(180deg, rgba(194, 151, 79, 0.45), rgba(122, 93, 46, 0.3))",
-  border: `1px solid ${BRASS_LIT}`,
-  color: "#fff3df",
-  boxShadow: "0 0 12px rgba(255, 190, 107, 0.2), inset 0 1px 0 rgba(255, 232, 186, 0.25)",
 };
 
 const noticeStyle: CSSProperties = {
@@ -227,13 +217,47 @@ export function App(): ReactElement {
   const [rooms, setRooms] = useState<readonly RoomListing[]>([]);
   /** True while the session is being joined or rejoined, so nothing is pressed twice. */
   const [lobbyBusy, setLobbyBusy] = useState(false);
+  /** The boot hands off to one deliberate start input before opening navigation. */
+  const [menuEntered, setMenuEntered] = useState(false);
+  /** Incrementing this disposes and rebuilds the complete GPU-owned tree. */
+  const [bootAttempt, setBootAttempt] = useState(0);
   const hostRef = useRef<GameHost | null>(null);
   const lobbyRef = useRef<PortalsRound | null>(null);
   const roundRef = useRef<ActiveRound | null>(null);
   /** Read inside the click handler, where the loading state itself is stale. */
   const loadingRef = useRef(false);
+  /** Cancels whichever join/build currently owns the loading screen. */
+  const cancelOpeningRef = useRef<(() => void) | null>(null);
+  /** The menu session owns this listener until that session is replaced. */
+  const lobbyRejectionRef = useRef<(() => void) | null>(null);
+  /** Consecutive full renderer rebuilds before the player gets the fallback. */
+  const graphicsRecoveryRef = useRef(new GraphicsRecoveryPolicy());
+  /** Retained so a failed rebuild can explain the original device fault. */
+  const lastDeviceFaultRef = useRef<DeviceEvent | null>(null);
+  /** Logical room to re-enter after the GPU-owned tree has been rebuilt. */
+  const recoveryRoomCodeRef = useRef<string | null>(null);
 
   useEffect(() => {
+    // Playwright's headless Edge session does not expose the WebGL device the
+    // game scene needs. Keep a development-only doorway into the real menu and
+    // lobby components so their responsive layouts can still be reviewed in a
+    // browser. `import.meta.env.DEV` is replaced at build time, so a shipped
+    // page can never opt out of renderer validation with a query string.
+    if (
+      (import.meta.env.DEV || import.meta.env.MODE === "visual") &&
+      new URLSearchParams(window.location.search).has("visualReview")
+    ) {
+      let cancelled = false;
+      void detectPortalsSession().then((session) => {
+        if (cancelled) return;
+        setPortals(session);
+        setBoot({ kind: "ready", backend: "webgl2" });
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const canvas = document.getElementById("game-canvas");
     if (!(canvas instanceof HTMLCanvasElement)) {
       setBoot({ kind: "failed", headline: "The shop failed to open", detail: "The game canvas is missing from the page." });
@@ -244,6 +268,8 @@ export function App(): ReactElement {
     let host: GameHost | null = null;
 
     const runBootSequence = async (): Promise<void> => {
+      if (bootAttempt > 0) await waitForCanvasRestore(canvas);
+      if (disposed) return;
       // Both probes ask something outside the page and neither depends on the
       // other, so the slower one sets the length of the boot rather than the
       // sum of the two.
@@ -281,6 +307,7 @@ export function App(): ReactElement {
             // renderer holds is already gone. A device error is survivable, so
             // it stays out of the player's way.
             if (event.kind === "device-lost") {
+              lastDeviceFaultRef.current = event;
               setDeviceFault(event);
             }
           },
@@ -300,7 +327,18 @@ export function App(): ReactElement {
         host.dispose();
         hostRef.current = null;
         if (!disposed) {
-          setBoot({ kind: "failed", ...describeFailure(error) });
+          const previousFault = lastDeviceFaultRef.current;
+          if (graphicsRecoveryRef.current.attemptsUsed > 0 && previousFault !== null) {
+            // Feeding a fresh object back into the recovery effect spends the
+            // second automatic attempt. Once its budget is gone, the same state
+            // remains as the player's manual fallback instead of looping.
+            setDeviceFault({
+              ...previousFault,
+              message: `${previousFault.message} The renderer rebuild did not initialize.`,
+            });
+          } else {
+            setBoot({ kind: "failed", ...describeFailure(error) });
+          }
         }
         return;
       }
@@ -324,12 +362,25 @@ export function App(): ReactElement {
       // before the host that owns the scene its systems are attached to.
       roundRef.current?.round.dispose();
       roundRef.current = null;
+      lobbyRejectionRef.current?.();
+      lobbyRejectionRef.current = null;
       lobbyRef.current?.dispose();
       lobbyRef.current = null;
       host?.dispose();
       hostRef.current = null;
     };
-  }, []);
+  }, [bootAttempt]);
+
+  useEffect(() => {
+    if (boot.kind !== "ready" || deviceFault !== null) return undefined;
+    const timer = window.setTimeout(() => {
+      graphicsRecoveryRef.current.markStable();
+      lastDeviceFaultRef.current = null;
+    }, GRAPHICS_STABLE_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [boot.kind, deviceFault]);
 
   // The whole shell's click and hover, for the life of the page. It listens at
   // the document rather than in the components, so every panel the game grows
@@ -404,6 +455,20 @@ export function App(): ReactElement {
     }
     setRooms(opened.adapter.listRooms());
     opened.adapter.onDirectory(setRooms);
+    lobbyRejectionRef.current?.();
+    lobbyRejectionRef.current = opened.adapter.onRejection((rejection) => {
+      if (rejection.type === "create_room") {
+        setRoundError(
+          rejection.detail === undefined
+            ? "The room could not be opened. Try another name or room slot."
+            : `The room could not be opened: ${rejection.detail}`,
+        );
+      } else if (rejection.type === "state_publish" && roundRef.current === null) {
+        setRoundError(
+          "The room opened locally, but its listing could not be shared. Reopen it or reconnect to the session.",
+        );
+      }
+    });
     setLobby(opened);
     setLobbyBusy(false);
   }, []);
@@ -475,10 +540,28 @@ export function App(): ReactElement {
             displayName: portals.player.displayName ?? DEFAULT_PLAYER_NAME,
           };
     const { round: opened } = opening;
+    let cancelled = false;
+
+    const clearOpening = (): void => {
+      if (cancelOpeningRef.current === cancel) cancelOpeningRef.current = null;
+    };
+    const cancel = (): void => {
+      if (cancelled) return;
+      cancelled = true;
+      clearOpening();
+      roundRef.current = null;
+      loadingRef.current = false;
+      host.exitRoundMode();
+      opened.dispose();
+      setLoading(null);
+    };
+    cancelOpeningRef.current = cancel;
 
     setRoundError(null);
     const abandon = (error: unknown): void => {
+      if (cancelled) return;
       console.error("[round] could not open the shop", error);
+      clearOpening();
       roundRef.current = null;
       loadingRef.current = false;
       opened.dispose();
@@ -502,7 +585,9 @@ export function App(): ReactElement {
     // the shop was ready.
     (async () => {
       await opened.adapter.connect();
+      if (cancelled) return;
       await opened.adapter.join(opening.channel, opening.displayName);
+      if (cancelled) return;
       const session = await host.enterRoundMode(
         opened.adapter,
         opened.director,
@@ -510,12 +595,14 @@ export function App(): ReactElement {
         setLoading,
       );
       if (session === null) {
+        clearOpening();
         opened.dispose();
         loadingRef.current = false;
         setLoading(null);
         return;
       }
       const active: ActiveRound = { round: opened, session };
+      clearOpening();
       roundRef.current = active;
       loadingRef.current = false;
       setRound(active);
@@ -539,7 +626,14 @@ export function App(): ReactElement {
         return;
       }
 
-      const entered = choose(opened);
+      let entered: RoomEntryResult;
+      try {
+        entered = choose(opened);
+      } catch (error) {
+        console.error("[rooms] room choice failed", error);
+        setRoundError(joinFailureCopy(opened.adapter.getConnection().detail, error));
+        return;
+      }
       if (!entered.ok) {
         setRoundError(ROOM_FAILURE_COPY[entered.reason]);
         return;
@@ -548,6 +642,20 @@ export function App(): ReactElement {
       setRoundError(null);
       loadingRef.current = true;
       setLoading({ label: "the shop", fraction: 0 });
+      let cancelled = false;
+      const clearOpening = (): void => {
+        if (cancelOpeningRef.current === cancel) cancelOpeningRef.current = null;
+      };
+      const cancel = (): void => {
+        if (cancelled) return;
+        cancelled = true;
+        clearOpening();
+        opened.adapter.leaveRoom();
+        loadingRef.current = false;
+        host.exitRoundMode();
+        setLoading(null);
+      };
+      cancelOpeningRef.current = cancel;
 
       void (async () => {
         try {
@@ -557,19 +665,24 @@ export function App(): ReactElement {
             opened.spatial,
             setLoading,
           );
+          if (cancelled) return;
           if (session === null) {
+            clearOpening();
             opened.adapter.leaveRoom();
             loadingRef.current = false;
             setLoading(null);
             return;
           }
           const active: ActiveRound = { round: opened, session };
+          clearOpening();
           roundRef.current = active;
           loadingRef.current = false;
           setRound(active);
           setLoading(null);
         } catch (error) {
+          if (cancelled) return;
           console.error("[round] could not open the shop", error);
+          clearOpening();
           opened.adapter.leaveRoom();
           roundRef.current = null;
           loadingRef.current = false;
@@ -581,6 +694,57 @@ export function App(): ReactElement {
     },
     [],
   );
+
+  const onCancelOpening = useCallback(() => {
+    cancelOpeningRef.current?.();
+  }, []);
+
+  /**
+   * A device loss invalidates the renderer and every scene resource it owns.
+   * Re-running the boot effect disposes that whole tree, then builds a fresh
+   * renderer and menu room against the restored canvas.
+   */
+  const recoverGraphics = useCallback(() => {
+    const activeRoom =
+      roundRef.current?.round.adapter.getRoomCode?.() ??
+      lobbyRef.current?.adapter.getRoomCode?.() ??
+      null;
+    if (activeRoom !== null) recoveryRoomCodeRef.current = activeRoom;
+    cancelOpeningRef.current?.();
+    setRound(null);
+    setForge(null);
+    setLoading(null);
+    setLobby(null);
+    setRooms([]);
+    setPortals(null);
+    setRoundError(null);
+    setLobbyBusy(false);
+    setDeviceFault(null);
+    setBoot({ kind: "detecting" });
+    setBootAttempt((attempt) => attempt + 1);
+  }, []);
+
+  useEffect(() => {
+    if (deviceFault === null) return undefined;
+    if (graphicsRecoveryRef.current.requestRebuild() === "fallback") return undefined;
+    const timer = window.setTimeout(recoverGraphics, AUTO_RECOVERY_NOTICE_MS);
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [deviceFault, recoverGraphics]);
+
+  useEffect(() => {
+    const roomCode = recoveryRoomCodeRef.current;
+    if (lobby === null || roomCode === null) return;
+    recoveryRoomCodeRef.current = null;
+    onEnterRoom((opened) => opened.adapter.enterRoom(roomCode));
+  }, [lobby, onEnterRoom]);
+
+  const onManualGraphicsRecovery = useCallback(() => {
+    graphicsRecoveryRef.current.markStable();
+    graphicsRecoveryRef.current.requestRebuild();
+    recoverGraphics();
+  }, [recoverGraphics]);
 
   const onLeaveRound = useCallback(() => {
     const active = roundRef.current;
@@ -604,6 +768,8 @@ export function App(): ReactElement {
     // client that walks into a room ALREADY in its lobby never sees. Reusing it
     // for the next room would show that room the last one's evidence.
     lobbyRef.current = null;
+    lobbyRejectionRef.current?.();
+    lobbyRejectionRef.current = null;
     setLobby(null);
     // Held busy across the whole handover. Without it the menu falls back to
     // the plain play button for as long as the rejoin takes, and pressing it
@@ -630,11 +796,31 @@ export function App(): ReactElement {
         <div style={{ ...plate(true), borderRadius: 14, padding: "30px 34px", maxWidth: 540 }}>
           <NoticeMark />
           <p style={{ margin: "0 0 10px", font: `17px/1.5 ${FONT_DISPLAY}`, color: ALARM }}>
-            The graphics device was lost. Reload the page to reopen the shop.
+            {graphicsRecoveryRef.current.exhausted
+              ? "The graphics device was lost twice. The automatic rebuild has paused."
+              : "The graphics device was lost. The shop is rebuilding its renderer safely."}
           </p>
           <p style={{ ...labelStyle, opacity: 0.6, margin: 0 }}>
             {deviceFault.api}: {deviceFault.message}
           </p>
+          <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 20 }}>
+            <button
+              type="button"
+              className={PRESS_CLASS}
+              style={{ ...primaryButtonStyle, width: "auto", minWidth: 180 }}
+              onClick={onManualGraphicsRecovery}
+            >
+              Recover graphics
+            </button>
+            <button
+              type="button"
+              className={PRESS_CLASS}
+              style={{ ...buttonStyle, width: "auto", margin: 0 }}
+              onClick={() => window.location.reload()}
+            >
+              Reload page
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -669,7 +855,13 @@ export function App(): ReactElement {
 
   if (round !== null) {
     return (
-      <RoundHud director={round.round.director} session={round.session} onLeave={onLeaveRound} />
+      <RoundHud
+        director={round.round.director}
+        session={round.session}
+        onLeave={onLeaveRound}
+        qualityTier={tier}
+        onQualityTierChange={onTierSelect}
+      />
     );
   }
 
@@ -678,7 +870,18 @@ export function App(): ReactElement {
   }
 
   if (loading !== null) {
-    return <LoadingScreen progress={loading} />;
+    return <LoadingScreen progress={loading} onCancel={onCancelOpening} />;
+  }
+
+  if (!menuEntered) {
+    return (
+      <StartScreen
+        multiplayerReady={lobby !== null}
+        onEnter={() => {
+          setMenuEntered(true);
+        }}
+      />
+    );
   }
 
   // Offered only while a relay session is actually held. Without one there is
@@ -690,6 +893,7 @@ export function App(): ReactElement {
           rooms,
           currentCode: lobby.adapter.getRoomCode(),
           busy: lobbyBusy,
+          notice: roundError,
           onJoin: (code) => {
             onEnterRoom((opened) => opened.adapter.enterRoom(code));
           },
@@ -706,30 +910,13 @@ export function App(): ReactElement {
       <MainMenu
         onPlayRound={onPlayRound}
         onForgePractice={onEnterForge}
+        qualityTier={tier}
+        onQualityTierChange={onTierSelect}
         starting={lobbyBusy}
         multiplayer={portals !== null}
         notice={roundError}
         browser={browser}
       />
-      <div style={panelStyle} role="group" aria-label="Quality">
-        <div style={{ ...labelStyle, marginBottom: 7 }}>Quality</div>
-        <div style={{ display: "flex", gap: 5 }}>
-          {[...QUALITY_TIER_ORDER].reverse().map((value) => (
-            <button
-              key={value}
-              type="button"
-              className={PRESS_CLASS}
-              aria-pressed={tier === value}
-              style={tier === value ? qualityChipActiveStyle : qualityChipStyle}
-              onClick={() => {
-                onTierSelect(value);
-              }}
-            >
-              {QUALITY_TIER_LABELS[value]}
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

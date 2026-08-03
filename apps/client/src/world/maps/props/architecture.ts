@@ -56,6 +56,7 @@ export function buildArchitecture(ctx: PropContext): void {
   buildStreetDoor(ctx);
   buildOfficePartition(ctx);
   buildOfficeDoor(ctx);
+  buildOfficeStaffBarrier(ctx);
   buildDisplayPlatform(ctx);
   buildThresholds(ctx);
   buildNightExterior(ctx);
@@ -430,6 +431,7 @@ export const OFFICE_DOOR_HINGE: readonly [number, number, number] = [
   OFFICE_DOOR_MIN_Z - 0.05,
 ];
 export const OFFICE_DOOR_NAME = "shop.officeDoor";
+export const OFFICE_STAFF_BARRIER_NAME = "shop.officeStaffOnlyChain";
 
 function buildOfficeDoor(ctx: PropContext): void {
   const b = ctx.batcher;
@@ -457,6 +459,47 @@ function buildOfficeDoor(ctx: PropContext): void {
     brass,
     {},
   );
+  b.end();
+}
+
+/**
+ * Fiction for the office's permanent Mimic exclusion. The door swings open for
+ * the hunt, but this low brass rope remains across the threshold so a hiding
+ * player meets a visible boundary instead of an invisible wall.
+ */
+function buildOfficeStaffBarrier(ctx: PropContext): void {
+  const b = ctx.batcher;
+  const brass = ctx.materials.get("brass_tarnished_01");
+  const plaque = ctx.materials.get("paint_midnight_02");
+  const z0 = OFFICE_DOOR_MIN_Z + 0.03;
+  const z1 = OFFICE_DOOR_MAX_Z - 0.03;
+  const midZ = (z0 + z1) * 0.5;
+  const x = OFFICE_MIN_X - 0.075;
+
+  b.begin(OFFICE_STAFF_BARRIER_NAME, [0, 0, 0], 0, true, 1, "standard", false);
+  b.part(
+    ctx.geometry.get("officeStaffBarrier.rope", () => {
+      const curve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(x, 0.48, z0),
+        new THREE.Vector3(x, 0.36, midZ),
+        new THREE.Vector3(x, 0.48, z1),
+      ]);
+      return new THREE.TubeGeometry(curve, 24, 0.018, 6, false);
+    }),
+    brass,
+    {},
+  );
+  b.part(
+    ctx.geometry.get("officeStaffBarrier.plaque", () => chamferedBox(0.038, 0.15, 0.34, 0.009)),
+    plaque,
+    { x: x - 0.01, y: 0.33, z: midZ },
+  );
+  // Two ivory-brass bars make the hanging plaque read as official signage at
+  // Mimic eye height without introducing a texture/material shader variant.
+  const mark = ctx.geometry.get("officeStaffBarrier.mark", () => chamferedBox(0.012, 0.082, 0.024, 0.003));
+  for (const dz of [-0.055, 0, 0.055]) {
+    b.part(mark, brass, { x: x - 0.034, y: 0.33, z: midZ + dz }, { shadow: false });
+  }
   b.end();
 }
 

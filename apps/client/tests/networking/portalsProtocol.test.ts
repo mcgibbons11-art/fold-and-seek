@@ -253,7 +253,6 @@ describe("envelope validation", () => {
       { v: 1, t: "ev", events: [{ type: "phase_changed" }] },
       { v: 1, t: "pev", to: "a", events: [] },
       { v: 1, t: "pev", to: "a", events: [], privateState: {} },
-      { v: 1, t: "resync", extra: true },
     ];
     for (const value of rejected) {
       expect(parseEnvelope(value)).toBeNull();
@@ -276,6 +275,27 @@ describe("envelope validation", () => {
     // The room is what separates one match from another on a channel they
     // share, so an envelope without one addresses nobody and is refused.
     expect(parseEnvelope({ v: PORTALS_PROTOCOL_VERSION, t: "resync" })).toBeNull();
+  });
+
+  it("normalizes carrier shapes used by Portals editor hosts", () => {
+    const envelope = { v: PORTALS_PROTOCOL_VERSION, t: "resync", r: "ABCD" } as const;
+    expect(parseEnvelope(JSON.stringify(envelope))).toEqual(envelope);
+    expect(parseEnvelope({ data: envelope })).toEqual(envelope);
+    // Relay metadata is outside the game's protocol and may safely be stripped;
+    // every known game field is still validated by the discriminated union.
+    expect(parseEnvelope({ ...envelope, relayMetadata: "ignored" })).toEqual(envelope);
+  });
+
+  it("validates sparse Inspector camera telemetry", () => {
+    const envelope = {
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "cam",
+      r: "ABCD",
+      sample: { atMs: 125, x: 1, y: 0.3, z: -2, yaw: 0.5, pitch: -0.1 },
+    } as const;
+    expect(parseEnvelope(envelope)).toEqual(envelope);
+    expect(parseEnvelope({ ...envelope, sample: null })).not.toBeNull();
+    expect(parseEnvelope({ ...envelope, sample: { ...envelope.sample, yaw: Infinity } })).toBeNull();
   });
 });
 
