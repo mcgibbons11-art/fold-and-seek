@@ -29,6 +29,8 @@ export interface InspectorCameraOptions {
   readonly shoulderOffsetM?: number;
   /** Fraction of the remaining aim blend closed per second. */
   readonly aimResponsePerSecond?: number;
+  readonly motionScale?: number;
+  readonly shakeScale?: number;
 }
 
 /** Screen-space bracket for the reticle, in normalized device coordinates. */
@@ -107,11 +109,13 @@ export class InspectorCamera {
 
   private readonly camera: PerspectiveCamera;
   private readonly navData: NavData;
-  private readonly baseFovDeg: number;
-  private readonly aimFovDeg: number;
+  private baseFovDeg: number;
+  private aimFovDeg: number;
   private readonly boomLengthM: number;
   private readonly shoulderOffsetM: number;
   private readonly aimResponse: number;
+  private motionScale: number;
+  private shakeScale: number;
 
   private readonly viewMatrix = new Matrix4();
   private readonly corner = new Vector3();
@@ -132,7 +136,16 @@ export class InspectorCamera {
     this.boomLengthM = options.boomLengthM ?? DEFAULT_BOOM_LENGTH_M;
     this.shoulderOffsetM = options.shoulderOffsetM ?? DEFAULT_SHOULDER_OFFSET_M;
     this.aimResponse = options.aimResponsePerSecond ?? DEFAULT_AIM_RESPONSE;
+    this.motionScale = options.motionScale ?? 1;
+    this.shakeScale = options.shakeScale ?? 1;
     this.camera.rotation.order = "YXZ";
+  }
+
+  setViewPreferences(fov: number, motionScale: number, shakeScale: number): void {
+    this.baseFovDeg = fov;
+    this.aimFovDeg = Math.max(40, fov - 14);
+    this.motionScale = Math.min(1, Math.max(0, motionScale));
+    this.shakeScale = Math.min(1, Math.max(0, shakeScale));
   }
 
   /** Blend between hip fire (0) and fully aimed down the sights (1). */
@@ -162,8 +175,8 @@ export class InspectorCamera {
     this.eye.z = controller.position.z;
 
     this.bobPhase += controller.speed * dtSeconds * BOB_RATE_RAD_PER_M;
-    const bob = Math.sin(this.bobPhase) * BOB_AMPLITUDE_M * this.swayScale;
-    const dip = this.stepLandingDip(dtSeconds, controller);
+    const bob = Math.sin(this.bobPhase) * BOB_AMPLITUDE_M * this.swayScale * this.motionScale;
+    const dip = this.stepLandingDip(dtSeconds, controller) * this.shakeScale;
 
     // Right of the Inspector, level with the floor, so the shoulder offset does
     // not tilt with pitch.

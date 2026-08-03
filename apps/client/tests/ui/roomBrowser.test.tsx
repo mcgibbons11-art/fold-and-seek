@@ -86,12 +86,6 @@ function rows(): HTMLLIElement[] {
   return [...container.querySelectorAll("li")];
 }
 
-function buttonIn(row: HTMLElement): HTMLButtonElement {
-  const found = row.querySelector("button");
-  if (found === null) throw new Error("row has no button");
-  return found;
-}
-
 function click(button: HTMLButtonElement): void {
   act(() => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -172,6 +166,11 @@ describe("the room browser", () => {
     });
 
     expect(container.querySelector("form")).toBeNull();
+    const custom = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Custom room and training",
+    );
+    if (custom === undefined) throw new Error("custom options control is missing");
+    click(custom);
     const newRoom = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "New room",
     );
@@ -206,7 +205,11 @@ describe("the room browser", () => {
     // One seat taken of the twelve the first room's key ranges can carry.
     expect(row.textContent).toContain("1/12");
 
-    click(buttonIn(row));
+    const request = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Request to join",
+    );
+    if (request === undefined) throw new Error("selected-room request control is missing");
+    click(request);
     advance();
 
     expect(reader.getRoomCode()).toBeNull();
@@ -216,8 +219,8 @@ describe("the room browser", () => {
     render(reader, () => undefined);
     const pending = rows()[0];
     if (pending === undefined) throw new Error("the room should still have a row");
-    expect(buttonIn(pending).textContent).toBe("Pending");
-    expect(buttonIn(pending).disabled).toBe(true);
+    expect(pending.textContent).toContain("Pending");
+    expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Request to join")).toBe(false);
   });
 
   it("lets the host retire their advertised room without leaving matchmaking", async () => {
@@ -314,11 +317,14 @@ describe("the room browser", () => {
     render(reader, () => undefined);
     const packedRow = rows().find((row) => row.textContent?.includes("Two Seats"));
     if (packedRow === undefined) throw new Error("the full room should still be listed");
-    expect(buttonIn(packedRow).textContent).toBe("Full");
-    expect(buttonIn(packedRow).disabled).toBe(true);
+    expect(packedRow.textContent).toContain("Full");
     expect(container.textContent).toContain(`${MAX_CONCURRENT_ROOMS} of ${MAX_CONCURRENT_ROOMS}`);
     expect(container.textContent).toContain(`holds ${MAX_CONCURRENT_ROOMS} rooms at once`);
 
+    const custom = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Custom room and training",
+    );
+    if (custom !== undefined) click(custom);
     const newRoom = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "New room",
     );

@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactElement } from "react";
 
+import { getPlayerPreferences } from "../../gameplay/preferences";
 import { ALARM, BRASS, CREAM, FONT_DISPLAY, labelStyle, plate } from "./theme";
 
 /**
@@ -77,10 +78,32 @@ export function Toast({ entries, anchor }: ToastProps): ReactElement | null {
 
 /** Rejections read the same everywhere, so their copy is built in one place. */
 export function rejectionToast(id: number, commandType: string, reason: string): ToastEntry {
+  const friendly = REJECTION_COPY[reason] ?? {
+    title: "Action not completed",
+    body: "Try that action again. If it keeps happening, return to matchmaking and rejoin.",
+  };
+  const debug = getPlayerPreferences().showDiagnostics
+    ? ` · ${commandType.replace(/_/g, " ")} / ${reason.replace(/_/g, " ")}`
+    : "";
   return {
     id: -id,
-    title: "REFUSED",
-    body: `${commandType.replace(/_/g, " ")} · ${reason.replace(/_/g, " ")}`,
+    title: friendly.title,
+    body: `${friendly.body}${debug}`,
     tone: "alarm",
   };
 }
+
+const REJECTION_COPY: Readonly<Record<string, { readonly title: string; readonly body: string }>> = {
+  not_connected: { title: "Connection interrupted", body: "Wait for recovery, or leave and rejoin matchmaking." },
+  not_host: { title: "Host action only", body: "The room host controls this action." },
+  not_enough_players: { title: "Waiting for a player", body: "At least two people must join before the round can start." },
+  players_not_ready: { title: "Players not ready", body: "Everyone must ready up before the host can start." },
+  wrong_phase: { title: "Not available now", body: "That action belongs to a different part of the round." },
+  no_warrants: { title: "No warrants left", body: "The Inspector has no accusations remaining this round." },
+  accusation_cooldown: { title: "Warrant recovering", body: "Wait for the weapon indicator before firing again." },
+  taunt_cooldown: { title: "Taunt recovering", body: "Wait for the taunt timer before baiting again." },
+  target_unknown: { title: "Target lost", body: "Aim at the object again and retry when the reticle confirms it." },
+  out_of_range: { title: "Out of range", body: "Move closer until the reticle closes around the target." },
+  obstructed: { title: "Shot obstructed", body: "Move until there is a clear line to the target." },
+  unsupported: { title: "Action unavailable", body: "This room does not support that feature yet." },
+};

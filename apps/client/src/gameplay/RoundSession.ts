@@ -45,6 +45,7 @@ import {
 } from "./huntCues";
 import { RoundActions } from "./RoundActions";
 import { isPlayerFacingRejection, type RoundDirector } from "./RoundDirector";
+import { getPlayerPreferences, subscribePlayerPreferences, type PlayerPreferences } from "./preferences";
 import { RemoteInspectorPresentation } from "./RemoteInspectorPresentation";
 import type { RoundSpatialBridge } from "./roundSpatial";
 import type { RoundViewState } from "./roundView";
@@ -69,6 +70,9 @@ export interface RoundEngineState {
   readonly gun: InspectorGunView;
   /** False while the Inspector's pointer is free, which is when to prompt. */
   readonly pointerLocked: boolean;
+  readonly hiderTraversal: "climbing" | "topout" | "airborne" | null;
+  /** Inspector direction relative to the current camera, radians; private/local only. */
+  readonly dangerBearingRad: number | null;
 }
 
 /** Phases in which the authority accepts a pose from a Mimic (§5.8, override 2). */
@@ -182,6 +186,8 @@ const IDLE_GUN: InspectorGunView = {
   triggerProgress: 0,
   cooldownRemainingMs: 0,
   dryFires: 0,
+  blockedFires: 0,
+  lastShotOutcome: null,
 };
 
 export interface RoundSessionOptions {
@@ -253,6 +259,9 @@ export class RoundSession {
   private lastDeceptionId = -1;
   private engine: RoundEngineState;
   private engineSignature = "";
+  private preferences = getPlayerPreferences();
+  private previousHiderClimbing = false;
+  private topoutFeedbackMs = 0;
   /** The disguise the theatre is not drawing, because the Forge is. */
   private omittedObjectId: string | null = null;
 
@@ -272,7 +281,7 @@ export class RoundSession {
     options.spatial.setOwnDisguiseBounds((objectId) => this.ownDisguiseBoundsOf(objectId));
 
     this.viewCamera = new THREE.PerspectiveCamera(SURVEY_FOV_DEG, 1, 0.01, 60);
-    this.engine = { cameraMode: "survey", forge: null, gun: IDLE_GUN, pointerLocked: false };
+    this.engine = { cameraMode: "survey", forge: null, gun: IDLE_GUN, pointerLocked: false, hiderTraversal: null, dangerBearingRad: null };
 
     this.subscriptions.push(
       options.adapter.onEvent((event) => {
@@ -293,6 +302,11 @@ export class RoundSession {
         ) {
           this.audio.play(rejection.reason === "no_warrants" ? "gun_dry_click" : "ui_deny");
         }
+      }),
+    );
+    this.subscriptions.push(
+      subscribePlayerPreferences((preferences) => {
+        this.applyPlayerPreferences(preferences);
       }),
     );
     const unsubscribeCamera = options.adapter.onCameraSample?.((seatId, sample) => {
@@ -375,7 +389,7 @@ export class RoundSession {
 
     this.publishPose(dtMs, state);
     this.publishPaint(dtMs, state);
-    this.publishEngineState();
+    this.publishEngineState(dtMs, state);
     this.stepCountdown(state);
     this.stepDeceptionTally(state);
     this.stepAmbience(dtMs, state);
@@ -728,6 +742,20 @@ export class RoundSession {
     this.publishedRevision = locked.disguise.revision;
   }
 
+  private applyPlayerPreferences(preferences: PlayerPreferences): void {
+    this.preferences = preferences;
+    const motion = preferences.reducedMotion ? 0 : preferences.cameraMotion;
+    const shake = preferences.reducedMotion ? 0 : preferences.shake;
+    this.inspector?.setViewPreferences({
+      sensitivityX: DEFAULT_LOOK_SENSITIVITY * preferences.sensitivityX,
+      sensitivityY: DEFAULT_LOOK_SENSITIVITY * preferences.sensitivityY,
+      invertY: preferences.invertY,
+      fov: preferences.fov,
+      cameraMotion: motion,
+      shake,
+    });
+  }
+
   /**
    * Sends no paint for an untouched body and one coalesced layer for actual
    * brush work. Pose and paint share the authority limiter, so either send
@@ -795,6 +823,17 @@ export class RoundSession {
       settings,
       domElement: this.options.canvas,
       castShadow: this.options.quality.dynamicShadows,
+      inputOptions: {
+        lookSensitivityX: DEFAULT_LOOK_SENSITIVITY * this.preferences.sensitivityX,
+        lookSensitivityY: DEFAULT_LOOK_SENSITIVITY * this.preferences.sensitivityY,
+        invertY: this.preferences.invertY,
+      },
+      cameraOptions: {
+        baseFovDeg: this.preferences.fov,
+        aimFovDeg: Math.max(40, this.preferences.fov - 14),
+        motionScale: this.preferences.reducedMotion ? 0 : this.preferences.cameraMotion,
+        shakeScale: this.preferences.reducedMotion ? 0 : this.preferences.shake,
+      },
       sendCommand: this.sendInspectorCommand,
       onFocusChange: (focus) => {
         this.focus = focus;
@@ -996,7 +1035,8 @@ export class RoundSession {
     }
     // The same radians-per-pixel every other camera turns at, negated because
     // dragging right should swing the view right (the orbit runs the other way).
-    this.surveyAngle -= (event.clientX - this.surveyLastX) * DEFAULT_LOOK_SENSITIVITY;
+    this.surveyAngle -=
+      (event.clientX - this.surveyLastX) * DEFAULT_LOOK_SENSITIVITY * this.preferences.sensitivityX;
     this.surveyLastX = event.clientX;
     this.surveyIdleMs = 0;
   };
@@ -1048,8 +1088,9 @@ export class RoundSession {
       centre.z + Math.cos(this.surveyAngle) * radius,
     );
     this.viewCamera.lookAt(target);
-    if (Math.abs(this.viewCamera.fov - SURVEY_FOV_DEG) > 1e-3) {
-      this.viewCamera.fov = SURVEY_FOV_DEG;
+    const preferredFov = this.preferences.fov;
+    if (Math.abs(this.viewCamera.fov - preferredFov) > 1e-3) {
+      this.viewCamera.fov = preferredFov;
       this.viewCamera.updateProjectionMatrix();
     }
   }
@@ -1092,8 +1133,10 @@ export class RoundSession {
 
   // ---------------------------------------------------------------- HUD feed
 
-  private publishEngineState(): void {
+  private publishEngineState(dtMs: number, state: RoundViewState): void {
     const gun = this.gunView();
+    const hiderTraversal = this.hiderTraversalView(dtMs);
+    const dangerBearingRad = state.self.watchedLevel > 0 ? this.dangerBearing() : null;
     const signature = [
       this.mode,
       this.forge === null ? "-" : "forge",
@@ -1102,7 +1145,10 @@ export class RoundSession {
       gun.targetInRange ? "1" : "0",
       Math.ceil(gun.cooldownRemainingMs / 100),
       gun.dryFires,
+      gun.blockedFires ?? 0,
       this.pointerLocked ? "1" : "0",
+      hiderTraversal ?? "-",
+      dangerBearingRad === null ? "-" : Math.round(dangerBearingRad * 20),
     ].join("|");
     if (signature === this.engineSignature) return;
     this.engineSignature = signature;
@@ -1111,8 +1157,53 @@ export class RoundSession {
       forge: this.forge,
       gun,
       pointerLocked: this.pointerLocked,
+      hiderTraversal,
+      dangerBearingRad,
     };
     this.changed.emit(this.engine);
+  }
+
+  private hiderTraversalView(dtMs: number): RoundEngineState["hiderTraversal"] {
+    const motion = this.forge?.bodyMotion ?? null;
+    if (motion === null) {
+      this.previousHiderClimbing = false;
+      this.topoutFeedbackMs = 0;
+      return null;
+    }
+    const climbing = motion.climbState !== null;
+    if (this.previousHiderClimbing && !climbing && motion.grounded && motion.position.y > 0.15) {
+      this.topoutFeedbackMs = 1_400;
+    }
+    this.previousHiderClimbing = climbing;
+    this.topoutFeedbackMs = Math.max(0, this.topoutFeedbackMs - dtMs);
+    if (climbing) return "climbing";
+    if (this.topoutFeedbackMs > 0) return "topout";
+    if (!motion.grounded) return "airborne";
+    return null;
+  }
+
+  private dangerBearing(): number | null {
+    const forge = this.forge;
+    if (forge === null) return null;
+    const origin = forge.disguise.root.position;
+    let nearest: Readonly<THREE.Vector3> | null = null;
+    let nearestDistance = Infinity;
+    for (const remote of this.remoteInspectors.values()) {
+      const eye = remote.eye;
+      if (eye === null) continue;
+      const distance = Math.hypot(eye.x - (origin[0] ?? 0), eye.z - (origin[2] ?? 0));
+      if (distance < nearestDistance) {
+        nearest = eye;
+        nearestDistance = distance;
+      }
+    }
+    if (nearest === null) return null;
+    const worldBearing = Math.atan2(
+      nearest.x - (origin[0] ?? 0),
+      -(nearest.z - (origin[2] ?? 0)),
+    );
+    const cameraYaw = forge.camera.rotation.y;
+    return Math.atan2(Math.sin(worldBearing - cameraYaw), Math.cos(worldBearing - cameraYaw));
   }
 
   private gunView(): InspectorGunView {
@@ -1136,6 +1227,8 @@ export class RoundSession {
       triggerProgress: 0,
       cooldownRemainingMs: weapon.cooldownRemainingMs,
       dryFires: published.dryFires,
+      blockedFires: weapon.blockedFires,
+      lastShotOutcome: published.lastShot,
       roundsChambered: Number.isFinite(published.ammo) ? published.ammo : undefined,
     };
   }

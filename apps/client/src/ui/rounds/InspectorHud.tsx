@@ -8,6 +8,7 @@ import {
   AMMO_READY_PROMPT,
 } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
+import type { ShotOutcome } from "../../inspector/ShootingDriver";
 import { ALARM, BRASS, BRASS_LIT, CREAM, FONT_DISPLAY, figureStyle, labelStyle, plate } from "./theme";
 
 /**
@@ -49,6 +50,8 @@ export interface InspectorGunView {
    * hears about has nothing else on screen to say it happened.
    */
   readonly dryFires: number;
+  readonly blockedFires?: number;
+  readonly lastShotOutcome?: ShotOutcome | null;
 }
 
 type ReticleState = "normal" | "on_target" | "out_of_range" | "cooldown";
@@ -57,8 +60,6 @@ type ReticleState = "normal" | "on_target" | "out_of_range" | "cooldown";
 const HIT_CALLOUT_MS = 1_600;
 /** The recolour on firing, kept brief and dim: §5.13 forbids strobing. */
 const FLASH_MS = 220;
-/** How long the reticle stays kicked open after a round that hit nothing. */
-const DRY_FIRE_KICK_MS = 200;
 /** How far the reticle ticks are thrown outward by that kick, in pixels. */
 const DRY_FIRE_KICK_SPREAD = 9;
 
@@ -324,23 +325,43 @@ function useShotResult(
  * no accusation to key on. The weapon's own counter is the whole signal, which
  * is why it counts rather than flags: two misses in a row must read as two.
  */
-function useDryFireKick(dryFires: number): boolean {
+function useTriggerFeedback(
+  dryFires: number,
+  blockedFires: number,
+  outcome: ShotOutcome | null,
+  hasTarget: boolean,
+): { readonly kicked: boolean; readonly callout: string | null } {
   const [kicked, setKicked] = useState(false);
-  const seen = useRef(dryFires);
+  const [callout, setCallout] = useState<string | null>(null);
+  const seen = useRef({ dryFires, blockedFires });
 
   useEffect(() => {
-    if (dryFires === seen.current) return undefined;
-    seen.current = dryFires;
+    if (dryFires === seen.current.dryFires && blockedFires === seen.current.blockedFires) return undefined;
+    const blocked = blockedFires !== seen.current.blockedFires;
+    seen.current = { dryFires, blockedFires };
+    const next = blocked
+      ? "WAIT"
+      : outcome === "out_of_range"
+        ? "OUT OF RANGE"
+        : outcome === "not_shootable"
+          ? "OBSTRUCTED"
+          : outcome === "empty"
+            ? "NO WARRANTS"
+            : hasTarget
+              ? "MISS"
+              : "NO TARGET";
     setKicked(true);
+    setCallout(next);
     const clear = setTimeout(() => {
       setKicked(false);
-    }, DRY_FIRE_KICK_MS);
+      setCallout(null);
+    }, 900);
     return () => {
       clearTimeout(clear);
     };
-  }, [dryFires]);
+  }, [blockedFires, dryFires, hasTarget, outcome]);
 
-  return kicked;
+  return { kicked, callout };
 }
 
 export interface InspectorSightProps {
@@ -358,7 +379,12 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
   const reticle = reticleStateOf(gun, outOfAmmo);
   const latest = state.accusations[0] ?? null;
   const { flash, showCallout } = useShotResult(latest?.id ?? null, latest?.correct ?? false);
-  const kicked = useDryFireKick(gun.dryFires);
+  const triggerFeedback = useTriggerFeedback(
+    gun.dryFires,
+    gun.blockedFires ?? 0,
+    gun.lastShotOutcome ?? null,
+    gun.targetObjectId !== null,
+  );
 
   // Nothing is printed for an empty sight. "NO TARGET" under a reticle that is
   // already drawn in its no-target state is the instrument being explained
@@ -383,8 +409,28 @@ export function InspectorSight({ state, gun }: InspectorSightProps): ReactElemen
         reticle={reticle}
         triggerProgress={gun.triggerProgress}
         flash={flash}
-        kicked={kicked}
+        kicked={triggerFeedback.kicked}
       />
+
+      {triggerFeedback.callout === null ? null : (
+        <div
+          role="status"
+          aria-live="assertive"
+          style={{
+            position: "absolute",
+            top: "calc(50% - 76px)",
+            left: 0,
+            right: 0,
+            textAlign: "center",
+            font: `600 16px/1.2 ${FONT_DISPLAY}`,
+            letterSpacing: "0.16em",
+            color: ALARM,
+            textShadow: "0 1px 5px rgba(0,0,0,0.9)",
+          }}
+        >
+          {triggerFeedback.callout}
+        </div>
+      )}
 
       {gun.targetObjectId === null || gun.targetDistanceM === null ? null : (
         <div

@@ -1,10 +1,12 @@
-import { useState, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 
 import { getMasterVolume, setMasterVolume } from "../forge/AudioPlayer";
+import { getPlayerPreferences, setPlayerPreferences, subscribePlayerPreferences } from "../gameplay/preferences";
 import { QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
 import { ControlsLegend } from "./ControlsLegend";
 import { CommandMenu } from "./CommandMenu";
 import { HotkeyGuide } from "./HotkeyGuide";
+import { KeyBindingPanel } from "./KeyBindingPanel";
 import { RoomBrowser, type RoomBrowserProps } from "./RoomBrowser";
 import {
   CORE_CONTROL_HINTS,
@@ -143,6 +145,7 @@ function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
         a panel for every change.
       </p>
       <HotkeyGuide />
+      <KeyBindingPanel />
 
       <button
         type="button"
@@ -182,12 +185,29 @@ function Settings({
   readonly onBack: () => void;
 }): ReactElement {
   const [volume, setVolume] = useState(() => getMasterVolume());
+  const [preferences, setPreferencesState] = useState(() => getPlayerPreferences());
+  useEffect(() => subscribePlayerPreferences(setPreferencesState), []);
 
   return (
     <div style={{ ...rulesCardStyle, width: 430 }} className="fs-rise">
       <div style={{ textAlign: "center" }}>
         <div style={{ ...labelStyle, opacity: 0.7, marginBottom: 8 }}>Settings</div>
         <div style={{ ...ornamentRuleStyle(180), margin: "0 auto" }} aria-hidden />
+      </div>
+
+      <h3 style={rulesHeadingStyle}>Camera and aiming</h3>
+      <MenuPreferenceSlider label="Horizontal sensitivity" value={preferences.sensitivityX} min={0.25} max={2.5} step={0.05} onChange={(sensitivityX) => setPlayerPreferences({ sensitivityX })} />
+      <MenuPreferenceSlider label="Vertical sensitivity" value={preferences.sensitivityY} min={0.25} max={2.5} step={0.05} onChange={(sensitivityY) => setPlayerPreferences({ sensitivityY })} />
+      <MenuPreferenceSlider label="Field of view" value={preferences.fov} min={50} max={90} step={1} onChange={(fov) => setPlayerPreferences({ fov })} />
+      <MenuPreferenceSlider label="Camera motion" value={preferences.cameraMotion} min={0} max={1} step={0.05} onChange={(cameraMotion) => setPlayerPreferences({ cameraMotion })} />
+      <MenuPreferenceSlider label="Impact shake" value={preferences.shake} min={0} max={1} step={0.05} onChange={(shake) => setPlayerPreferences({ shake })} />
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
+        <button type="button" className={PRESS_CLASS} aria-pressed={preferences.invertY} style={{ ...buttonStyle, borderColor: preferences.invertY ? BRASS_LIT : undefined }} onClick={() => setPlayerPreferences({ invertY: !preferences.invertY })}>
+          Invert Y {preferences.invertY ? "on" : "off"}
+        </button>
+        <button type="button" className={PRESS_CLASS} aria-pressed={preferences.reducedMotion} style={{ ...buttonStyle, borderColor: preferences.reducedMotion ? BRASS_LIT : undefined }} onClick={() => setPlayerPreferences({ reducedMotion: !preferences.reducedMotion })}>
+          Reduced motion {preferences.reducedMotion ? "on" : "off"}
+        </button>
       </div>
 
       <h3 style={rulesHeadingStyle}>Graphics quality</h3>
@@ -251,6 +271,15 @@ function Settings({
         Back
       </button>
     </div>
+  );
+}
+
+function MenuPreferenceSlider({ label, value, min, max, step, onChange }: { readonly label: string; readonly value: number; readonly min: number; readonly max: number; readonly step: number; readonly onChange: (value: number) => void }): ReactElement {
+  return (
+    <label style={{ display: "block", marginBottom: 9 }}>
+      <span style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}><span>{label}</span><span style={{ color: BRASS_LIT }}>{step >= 1 ? Math.round(value) : value.toFixed(2)}</span></span>
+      <input aria-label={label} type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.currentTarget.value))} style={{ width: "100%", accentColor: BRASS_LIT }} />
+    </label>
   );
 }
 

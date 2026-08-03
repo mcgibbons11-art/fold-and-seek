@@ -1,6 +1,7 @@
 import { MatchPhase } from "@foldseek/shared";
-import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from "react";
 
+import { AudioPlayer } from "../forge/AudioPlayer";
 import { MAX_CONCURRENT_ROOMS, type RoomListing } from "../networking/roomRegistry";
 import type {
   OutgoingRoomJoinRequest,
@@ -176,6 +177,22 @@ export function RoomBrowser({
   const [name, setName] = useState("");
   const [selectedCode, setSelectedCode] = useState<string | null>(rooms[0]?.code ?? null);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [customOpen, setCustomOpen] = useState(false);
+  const requestAudio = useRef<AudioPlayer | null>(null);
+  const seenRequests = useRef(new Set<string>());
+
+  useEffect(() => {
+    requestAudio.current = new AudioPlayer();
+    return () => requestAudio.current?.dispose();
+  }, []);
+
+  useEffect(() => {
+    for (const request of pendingRequests) {
+      if (seenRequests.current.has(request.id)) continue;
+      seenRequests.current.add(request.id);
+      requestAudio.current?.play("ui_confirm");
+    }
+  }, [pendingRequests]);
 
   useEffect(() => {
     if (pendingRequests.length === 0 && outgoingRequest === null) return undefined;
@@ -208,7 +225,6 @@ export function RoomBrowser({
   }, [onBack]);
 
   const full = rooms.length >= MAX_CONCURRENT_ROOMS;
-  const anyJoinable = rooms.some((room) => room.joinable);
   const selected = rooms.find((room) => room.code === selectedCode) ?? rooms[0] ?? null;
   const secondsLeft = (expiresAt: number): string => {
     const seconds = Math.max(0, Math.ceil((expiresAt - nowMs) / 1_000));
@@ -288,28 +304,11 @@ export function RoomBrowser({
                     <div style={countStyle}>
                       {humans}/{room.maxPlayers}
                     </div>
-                    <button
-                      type="button"
-                      className={PRESS_CLASS}
-                      style={
-                        busy || mine || outgoingRequest !== null || !room.joinable
-                          ? disabledButtonStyle(smallButtonStyle)
-                          : smallButtonStyle
-                      }
-                      disabled={busy || mine || outgoingRequest !== null || !room.joinable}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        if (!mine) onJoin(room.code);
-                      }}
-                    >
-                      {mine
-                        ? "Hosting"
-                        : outgoingRequest?.roomCode === room.code
-                          ? "Pending"
-                          : room.joinable
-                            ? "Request"
-                            : "Full"}
-                    </button>
+                    {mine || outgoingRequest?.roomCode === room.code || !room.joinable ? (
+                      <span style={{ ...metaStyle, color: mine || outgoingRequest?.roomCode === room.code ? BRASS_LIT : undefined }}>
+                        {mine ? "Hosting" : outgoingRequest?.roomCode === room.code ? "Pending" : "Full"}
+                      </span>
+                    ) : null}
                   </li>
                 );
               })}
@@ -474,19 +473,30 @@ export function RoomBrowser({
             type="button"
             className={PRESS_CLASS}
             style={
-              busy || outgoingRequest !== null || currentCode !== null || !anyJoinable
+              busy || outgoingRequest !== null || currentCode !== null
                 ? disabledButtonStyle({ ...primaryButtonStyle, width: "100%" })
                 : { ...primaryButtonStyle, width: "100%" }
             }
-            disabled={busy || outgoingRequest !== null || currentCode !== null || !anyJoinable}
+            disabled={busy || outgoingRequest !== null || currentCode !== null}
             onClick={onQuickJoin}
           >
-            Quick join
+            Quick Match
+          </button>
+          <p style={{ margin: "9px 0 0", fontSize: 11, lineHeight: 1.55, opacity: 0.68 }}>
+            Join the best open room, or host automatically when none are available.
+          </p>
+
+          <button
+            type="button"
+            className={PRESS_CLASS}
+            aria-expanded={customOpen}
+            style={{ ...buttonStyle, width: "100%", marginTop: 22 }}
+            onClick={() => setCustomOpen((open) => !open)}
+          >
+            {customOpen ? "Hide custom options" : "Custom room and training"}
           </button>
 
-          <div
-            style={{ marginTop: 22, paddingTop: 16, borderTop: RULE }}
-          >
+          {customOpen ? <div style={{ marginTop: 12, paddingTop: 12, borderTop: RULE }}>
             <div style={{ ...labelStyle, marginBottom: 8 }}>Host a room</div>
             <input
               style={inputStyle}
@@ -516,9 +526,9 @@ export function RoomBrowser({
             >
               {currentCode === null ? "New room" : "Room open"}
             </button>
-          </div>
+          </div> : null}
 
-          {onForgePractice === undefined ? null : (
+          {!customOpen || onForgePractice === undefined ? null : (
             <div style={{ marginTop: 22, paddingTop: 16, borderTop: RULE }}>
               <div style={{ ...labelStyle, marginBottom: 8 }}>Training</div>
               <p style={{ margin: "0 0 10px", fontSize: 12, lineHeight: 1.55, opacity: 0.68 }}>
@@ -555,6 +565,42 @@ export function RoomBrowser({
           ) : null}
         </section>
       </main>
+
+      {pendingRequests[0] === undefined ? null : (
+        <aside
+          role="alert"
+          aria-live="assertive"
+          style={{
+            position: "fixed",
+            zIndex: 35,
+            top: 92,
+            right: 18,
+            width: "min(330px, calc(100vw - 36px))",
+            ...plate(true),
+            borderRadius: 10,
+            padding: 13,
+            boxSizing: "border-box",
+            boxShadow: "0 18px 52px rgba(0,0,0,.68)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+            <div>
+              <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1 }}>Player wants to join</div>
+              <strong>{pendingRequests[0].displayName}</strong>
+            </div>
+            <span style={countStyle}>{secondsLeft(pendingRequests[0].expiresAt)}</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 7, marginTop: 10 }}>
+            <button type="button" className={PRESS_CLASS} style={{ ...primaryButtonStyle, padding: "7px 9px" }} onClick={() => onAcceptRequest?.(pendingRequests[0]?.id ?? "")}>
+              Accept
+            </button>
+            <button type="button" className={PRESS_CLASS} style={{ ...smallButtonStyle, padding: "7px 9px" }} onClick={() => onDeclineRequest?.(pendingRequests[0]?.id ?? "")}>
+              Decline
+            </button>
+          </div>
+          {pendingRequests.length > 1 ? <div style={{ ...metaStyle, marginTop: 7 }}>+{pendingRequests.length - 1} more waiting</div> : null}
+        </aside>
+      )}
 
       <footer
         className="fs-matchmaking-footer"

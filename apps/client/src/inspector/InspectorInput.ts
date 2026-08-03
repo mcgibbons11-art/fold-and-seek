@@ -1,4 +1,5 @@
 import type { InspectorMoveInput } from "./InspectorController";
+import { actionForCode, readStandardGamepad } from "../gameplay/inputBindings";
 
 /**
  * Samples keyboard and mouse into the action set the controller consumes
@@ -12,26 +13,24 @@ import type { InspectorMoveInput } from "./InspectorController";
 export interface InspectorInputOptions {
   /** Radians of yaw per pixel of mouse travel. */
   readonly lookSensitivity?: number;
+  readonly lookSensitivityX?: number;
+  readonly lookSensitivityY?: number;
   readonly invertY?: boolean;
   readonly onLockChange?: (locked: boolean) => void;
 }
 
 export const DEFAULT_LOOK_SENSITIVITY = 0.0022;
 
-const FORWARD_KEYS = new Set(["KeyW", "ArrowUp"]);
-const BACK_KEYS = new Set(["KeyS", "ArrowDown"]);
-const LEFT_KEYS = new Set(["KeyA", "ArrowLeft"]);
-const RIGHT_KEYS = new Set(["KeyD", "ArrowRight"]);
 const BRISK_KEYS = new Set(["ShiftLeft", "ShiftRight"]);
-const JUMP_KEYS = new Set(["Space"]);
 
 const MOUSE_BUTTON_FIRE = 0;
 const MOUSE_BUTTON_AIM = 2;
 
 export class InspectorInput {
   private readonly element: HTMLElement;
-  private readonly sensitivity: number;
-  private readonly invertY: boolean;
+  private sensitivityX: number;
+  private sensitivityY: number;
+  private invertY: boolean;
   private readonly onLockChange: ((locked: boolean) => void) | null;
 
   private readonly held = new Set<string>();
@@ -47,12 +46,21 @@ export class InspectorInput {
 
   /** Set on the press, cleared by `takeFirePressed`, so one click is one shot. */
   private firePressed = false;
+  private gamepadFireHeld = false;
+  private gamepadAimHeld = false;
 
   constructor(element: HTMLElement, options: InspectorInputOptions = {}) {
     this.element = element;
-    this.sensitivity = options.lookSensitivity ?? DEFAULT_LOOK_SENSITIVITY;
+    this.sensitivityX = options.lookSensitivityX ?? options.lookSensitivity ?? DEFAULT_LOOK_SENSITIVITY;
+    this.sensitivityY = options.lookSensitivityY ?? options.lookSensitivity ?? DEFAULT_LOOK_SENSITIVITY;
     this.invertY = options.invertY ?? false;
     this.onLockChange = options.onLockChange ?? null;
+  }
+
+  setLookPreferences(sensitivityX: number, sensitivityY: number, invertY: boolean): void {
+    this.sensitivityX = sensitivityX;
+    this.sensitivityY = sensitivityY;
+    this.invertY = invertY;
   }
 
   attach(): void {
@@ -98,7 +106,7 @@ export class InspectorInput {
    * pointer lock is not held the Inspector stands still, so an open menu never
    * drifts the character.
    */
-  sample(out: InspectorMoveInput): void {
+  sample(out: InspectorMoveInput, dtSeconds = 1 / 60): void {
     if (!this.locked) {
       out.forward = 0;
       out.strafe = 0;
@@ -108,12 +116,22 @@ export class InspectorInput {
       out.jump = false;
       return;
     }
-    out.forward = axis(this.held, FORWARD_KEYS, BACK_KEYS);
-    out.strafe = axis(this.held, RIGHT_KEYS, LEFT_KEYS);
+    const gamepad = readStandardGamepad();
+    out.forward = actionAxis(this.held, "moveForward", "moveBack") + -(gamepad?.moveY ?? 0);
+    out.strafe = actionAxis(this.held, "moveRight", "moveLeft") + (gamepad?.moveX ?? 0);
+    out.forward = Math.max(-1, Math.min(1, out.forward));
+    out.strafe = Math.max(-1, Math.min(1, out.strafe));
     out.brisk = hasAny(this.held, BRISK_KEYS);
-    out.jump = hasAny(this.held, JUMP_KEYS);
-    out.lookYawDelta = this.pendingYaw;
-    out.lookPitchDelta = this.pendingPitch;
+    out.jump = actionHeld(this.held, "jump") || (gamepad?.jump ?? false);
+    out.lookYawDelta = this.pendingYaw - (gamepad?.lookX ?? 0) * 2.5 * dtSeconds;
+    const gamepadPitch = (gamepad?.lookY ?? 0) * 2.2 * dtSeconds;
+    out.lookPitchDelta = this.pendingPitch + (this.invertY ? gamepadPitch : -gamepadPitch);
+    const mouseAimHeld = this.aimHeld && !this.gamepadAimHeld;
+    this.gamepadAimHeld = gamepad?.aim ?? false;
+    this.aimHeld = mouseAimHeld || this.gamepadAimHeld;
+    const gamepadFire = gamepad?.fire ?? false;
+    if (gamepadFire && !this.gamepadFireHeld) this.firePressed = true;
+    this.gamepadFireHeld = gamepadFire;
     this.pendingYaw = 0;
     this.pendingPitch = 0;
   }
@@ -126,6 +144,8 @@ export class InspectorInput {
   takeFirePressed(): boolean {
     if (!this.firePressed) return false;
     this.firePressed = false;
+    this.gamepadFireHeld = false;
+    this.gamepadAimHeld = false;
     return true;
   }
 
@@ -163,8 +183,8 @@ export class InspectorInput {
 
   private readonly onMouseMove = (event: MouseEvent): void => {
     if (!this.locked) return;
-    this.pendingYaw -= event.movementX * this.sensitivity;
-    const pitchDelta = event.movementY * this.sensitivity;
+    this.pendingYaw -= event.movementX * this.sensitivityX;
+    const pitchDelta = event.movementY * this.sensitivityY;
     this.pendingPitch += this.invertY ? pitchDelta : -pitchDelta;
   };
 
@@ -186,10 +206,15 @@ export class InspectorInput {
   };
 }
 
-function axis(held: ReadonlySet<string>, positive: ReadonlySet<string>, negative: ReadonlySet<string>): number {
-  const up = hasAny(held, positive) ? 1 : 0;
-  const down = hasAny(held, negative) ? 1 : 0;
+function actionAxis(held: ReadonlySet<string>, positive: Parameters<typeof actionHeld>[1], negative: Parameters<typeof actionHeld>[1]): number {
+  const up = actionHeld(held, positive) ? 1 : 0;
+  const down = actionHeld(held, negative) ? 1 : 0;
   return up - down;
+}
+
+function actionHeld(held: ReadonlySet<string>, action: "moveForward" | "moveBack" | "moveLeft" | "moveRight" | "jump"): boolean {
+  for (const code of held) if (actionForCode(code) === action) return true;
+  return false;
 }
 
 function hasAny(held: ReadonlySet<string>, codes: ReadonlySet<string>): boolean {

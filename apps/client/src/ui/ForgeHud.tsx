@@ -351,7 +351,7 @@ export function ForgeHud({
   const showContextPanel = state.mode !== "paint";
 
   return (
-    <div style={rootStyle}>
+    <div className="fs-forge" style={rootStyle}>
       {showHeader ? (
         <div
           {...hudProps}
@@ -376,6 +376,7 @@ export function ForgeHud({
 
       <div
         {...hudProps}
+        className="fs-forge-tools"
         style={{
           ...panelStyle,
           top: FORGE_LAYOUT.topRow,
@@ -408,12 +409,33 @@ export function ForgeHud({
           <Keycap>M</Keycap>
           Mirror
         </button>
+        <div className="fs-forge-history" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, paddingTop: 4, borderTop: EDGE }}>
+          <button
+            type="button"
+            aria-label={state.undoLabel === null ? "Undo" : `Undo ${state.undoLabel}`}
+            disabled={!state.canUndo}
+            style={{ ...buttonStyle, margin: 0, padding: 6, textAlign: "center", opacity: state.canUndo ? 1 : 0.4 }}
+            onClick={() => controller.undo()}
+          >
+            {state.undoLabel?.startsWith("arrangement ") ? "Undo preset" : "Undo"}
+          </button>
+          <button
+            type="button"
+            aria-label="Redo"
+            disabled={!state.canRedo}
+            style={{ ...buttonStyle, margin: 0, padding: 6, textAlign: "center", opacity: state.canRedo ? 1 : 0.4 }}
+            onClick={() => controller.redo()}
+          >
+            Redo
+          </button>
+        </div>
       </div>
 
       {/* The paint panel places itself at 16/16 and draws nothing unless the
           paint tool is active. The wrapper is what puts that origin beside the
           tool column instead of on top of it. */}
       <div
+        className="fs-forge-paint"
         style={{
           position: "absolute",
           left: LEFT_GUTTER,
@@ -429,6 +451,7 @@ export function ForgeHud({
       {showContextPanel ? (
         <div
           {...hudProps}
+          className="fs-forge-context"
           style={{
             ...panelStyle,
             top: FORGE_LAYOUT.topRow,
@@ -540,6 +563,7 @@ export function ForgeHud({
           width: FORGE_LAYOUT.rightStackWidth,
         }}
       >
+        {!state.locked ? <LockReadiness state={state} /> : null}
         <button
           type="button"
           style={state.locked ? activeButtonStyle : buttonStyle}
@@ -725,18 +749,34 @@ function ArrangementPanel({
       <div style={{ opacity: 0.65, marginBottom: 10 }}>
         A starting point, not a disguise. Drag the handles from here.
       </div>
-      {STARTER_ARRANGEMENT_IDS.map((id: StarterArrangementId) => (
-        <button
-          key={id}
-          type="button"
-          style={state.arrangementId === id ? activeButtonStyle : buttonStyle}
-          onClick={() => {
-            controller.applyArrangement(id);
-          }}
-        >
-          {starterArrangementLabel(id)}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        {STARTER_ARRANGEMENT_IDS.map((id: StarterArrangementId) => (
+          <button
+            key={id}
+            type="button"
+            aria-label={`Preview ${starterArrangementLabel(id)} arrangement`}
+            style={{
+              ...(state.previewArrangementId === id || state.arrangementId === id ? activeButtonStyle : buttonStyle),
+              margin: 0,
+              padding: "7px 6px",
+              textAlign: "center",
+            }}
+            onPointerEnter={() => controller.beginArrangementPreview(id)}
+            onPointerLeave={() => controller.cancelArrangementPreview()}
+            onFocus={() => controller.beginArrangementPreview(id)}
+            onBlur={() => controller.cancelArrangementPreview()}
+            onClick={() => controller.commitArrangementPreview(id)}
+          >
+            <ArrangementThumbnail id={id} />
+            <span style={{ display: "block", marginTop: 3, fontSize: 10 }}>{starterArrangementLabel(id)}</span>
+          </button>
+        ))}
+      </div>
+      {state.undoLabel?.startsWith("arrangement ") ? (
+        <button type="button" style={{ ...buttonStyle, marginTop: 8, marginBottom: 0 }} onClick={() => controller.undo()}>
+          Undo preset
         </button>
-      ))}
+      ) : null}
     </Section>
   );
 }
@@ -829,6 +869,59 @@ function ShapePanel({ controller, state, onCommit }: ContextPanelProps): ReactEl
         </select>
       </details>
     </Section>
+  );
+}
+
+const ARRANGEMENT_GLYPHS: Readonly<Record<StarterArrangementId, string>> = {
+  upright: "│",
+  compact: "●",
+  wide: "↔",
+  tall: "↕",
+  tripod: "△",
+  wall_mount: "╫",
+  shelf_bundle: "≡",
+  hanging: "✣",
+};
+
+function ArrangementThumbnail({ id }: { readonly id: StarterArrangementId }): ReactElement {
+  return (
+    <span
+      aria-hidden
+      style={{
+        display: "grid",
+        placeItems: "center",
+        width: "100%",
+        height: 29,
+        borderRadius: 5,
+        background: "radial-gradient(circle, rgba(216,173,99,0.18), rgba(8,6,4,0.36))",
+        color: BRASS_LIT,
+        font: `600 24px/1 ${FONT_DISPLAY}`,
+      }}
+    >
+      {ARRANGEMENT_GLYPHS[id]}
+    </span>
+  );
+}
+
+function LockReadiness({ state }: { readonly state: ForgeHudState }): ReactElement {
+  const valid = state.lockIssues.length === 0;
+  const anchorsStable = state.unsatisfiedAnchors.length === 0;
+  const rows = [
+    ["Legal shape", valid],
+    ["Contacts stable", anchorsStable],
+    ["Ready to deploy", valid && anchorsStable],
+  ] as const;
+  return (
+    <div aria-label="Disguise readiness" aria-live="polite" style={{ marginBottom: 9 }}>
+      <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, marginBottom: 5 }}>Lock readiness</div>
+      {rows.map(([label, ready]) => (
+        <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 10, color: ready ? CREAM : "#e0785f" }}>
+          <span>{label}</span><span>{ready ? "✓" : "!"}</span>
+        </div>
+      ))}
+      {valid ? null : <div style={{ marginTop: 5, fontSize: 10, color: "#e0785f" }}>{state.lockIssues[0]}</div>}
+      {anchorsStable ? null : <div style={{ marginTop: 3, fontSize: 10, color: "#e0785f" }}>Adjust: {state.unsatisfiedAnchors.join(", ")}</div>}
+    </div>
   );
 }
 

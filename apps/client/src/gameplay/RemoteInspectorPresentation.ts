@@ -33,6 +33,10 @@ export class RemoteInspectorPresentation {
   private visible = true;
   private initialized = false;
 
+  get eye(): Readonly<THREE.Vector3> | null {
+    return this.initialized ? this.renderedEye : null;
+  }
+
   constructor(scene: THREE.Scene, readonly seatId: string, castShadow = true) {
     this.root.name = `remote-inspector-${seatId}`;
     scene.add(this.root);

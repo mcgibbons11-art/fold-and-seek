@@ -77,6 +77,7 @@ import { MAX_BRUSH_RADIUS, MIN_BRUSH_RADIUS } from "../paint/PaintBrushControlle
 import { mirroredPaintTarget } from "../paint/paintTargets";
 import type { QualitySettings } from "../rendering/quality";
 import { AudioPlayer } from "./AudioPlayer";
+import { actionForCode, readStandardGamepad, type InputAction } from "../gameplay/inputBindings";
 import {
   assignmentSlots,
   BODY_SLOT_ID,
@@ -235,6 +236,8 @@ export interface ForgeHudState {
   readonly sampledSwatchId: string | null;
   readonly bodySwatchId: string;
   readonly arrangementId: StarterArrangementId;
+  readonly previewArrangementId: StarterArrangementId | null;
+  readonly lockIssues: readonly string[];
   /** Contact points currently sealed to a surface, and any that cannot be met. */
   readonly anchoredBones: readonly string[];
   readonly unsatisfiedAnchors: readonly string[];
@@ -659,6 +662,15 @@ export class ForgeController {
   };
 
   private state: DisguiseState;
+  private arrangementPreviewOriginal: DisguiseState | null = null;
+  private arrangementPreviewStatus = "";
+  private arrangementPreviewIndex = 0;
+  private previewArrangementId: StarterArrangementId | null = null;
+  private readonly arrangementUndoIds: StarterArrangementId[] = [];
+  private readonly gamepadMoveKeys = new Set<string>();
+  private gamepadPreviousToolHeld = false;
+  private gamepadNextToolHeld = false;
+  private gamepadMirrorHeld = false;
   private lockedPayload: LockedDisguise | null = null;
 
   /**
@@ -919,6 +931,7 @@ export class ForgeController {
   // --- Frame ---------------------------------------------------------------
 
   update(dtMs = 0): void {
+    this.stepGamepadInput();
     this.refreshCreepBudget(dtMs);
     this.flushPointerGesture();
     this.flushPendingValueRefresh();
@@ -1466,6 +1479,7 @@ export class ForgeController {
             swatchId: resolvedSwatchFor(this.state.materials, bone, DEFAULT_BODY_SWATCH_ID),
           };
     const panelState = this.selectedSocket === null ? null : this.findPanel(this.selectedSocket);
+    const lockIssues = validateDisguiseState(this.state);
     return {
       mode: this.mode,
       locked: this.locked,
@@ -1484,6 +1498,8 @@ export class ForgeController {
       sampledSwatchId: this.sampledSwatchId,
       bodySwatchId: resolvedSwatchFor(this.state.materials, BODY_SLOT_ID, DEFAULT_BODY_SWATCH_ID),
       arrangementId: STARTER_ARRANGEMENT_IDS[this.arrangementIndex] ?? "upright",
+      previewArrangementId: this.previewArrangementId,
+      lockIssues,
       anchoredBones: this.state.anchors.map((anchor) => anchor.bone),
       unsatisfiedAnchors: this.state.anchors
         .filter((anchor) => !isAnchorSatisfied(anchor, this.anchorResiduals.get(anchor.bone) ?? 0))
@@ -1969,6 +1985,10 @@ export class ForgeController {
     if (command === null) {
       return;
     }
+    if (command.label.startsWith("arrangement ")) {
+      const previous = this.arrangementUndoIds.pop();
+      if (previous !== undefined) this.arrangementIndex = STARTER_ARRANGEMENT_IDS.indexOf(previous);
+    }
     this.status = `Undid ${command.label}.`;
     this.audio.play("ui_click");
     this.reloadFromState();
@@ -1980,6 +2000,13 @@ export class ForgeController {
     if (command === null) {
       return;
     }
+    if (command.label.startsWith("arrangement ")) {
+      const id = command.label.slice("arrangement ".length) as StarterArrangementId;
+      const current = STARTER_ARRANGEMENT_IDS[this.arrangementIndex];
+      if (current !== undefined) this.arrangementUndoIds.push(current);
+      const index = STARTER_ARRANGEMENT_IDS.indexOf(id);
+      if (index >= 0) this.arrangementIndex = index;
+    }
     this.status = `Redid ${command.label}.`;
     this.audio.play("ui_click");
     this.reloadFromState();
@@ -1989,7 +2016,10 @@ export class ForgeController {
     if (this.locked) {
       return;
     }
+    this.cancelArrangementPreview(false);
     this.commitEdits();
+    const previousArrangement = STARTER_ARRANGEMENT_IDS[this.arrangementIndex];
+    if (previousArrangement !== undefined) this.arrangementUndoIds.push(previousArrangement);
     const next = createStarterArrangement(id);
     next.root.position = [...this.state.root.position];
     next.materials = this.state.materials.map((entry) => ({ ...entry }));
@@ -2009,6 +2039,44 @@ export class ForgeController {
     this.solveAndRefresh();
     this.frameMimic();
     this.emit();
+  }
+
+  beginArrangementPreview(id: StarterArrangementId): void {
+    if (this.locked || this.previewArrangementId === id) return;
+    this.cancelArrangementPreview(false);
+    this.commitEdits();
+    this.arrangementPreviewOriginal = serializeDisguiseState(this.state);
+    this.arrangementPreviewStatus = this.status;
+    this.arrangementPreviewIndex = this.arrangementIndex;
+    const next = createStarterArrangement(id);
+    next.root.position = [...this.state.root.position];
+    next.materials = this.state.materials.map((entry) => ({ ...entry }));
+    next.panels = this.state.panels.map(clonePanelState);
+    this.state = next;
+    this.arrangementIndex = Math.max(STARTER_ARRANGEMENT_IDS.indexOf(id), 0);
+    this.previewArrangementId = id;
+    this.status = `Previewing ${starterArrangementLabel(id)}. Click to apply.`;
+    this.reloadFromState();
+    this.frameMimic();
+    this.emit();
+  }
+
+  cancelArrangementPreview(emit = true): void {
+    const original = this.arrangementPreviewOriginal;
+    if (original === null) return;
+    this.state = original;
+    this.status = this.arrangementPreviewStatus;
+    this.arrangementIndex = this.arrangementPreviewIndex;
+    this.arrangementPreviewOriginal = null;
+    this.previewArrangementId = null;
+    this.reloadFromState();
+    this.frameMimic();
+    if (emit) this.emit();
+  }
+
+  commitArrangementPreview(id: StarterArrangementId): void {
+    this.cancelArrangementPreview(false);
+    this.applyArrangement(id);
   }
 
   /**
@@ -3182,7 +3250,7 @@ export class ForgeController {
       // A release is never filtered by where it landed. A walk key pressed over
       // the canvas and let go over a HUD field would otherwise stay down and
       // the body would keep walking with nothing holding it.
-      const key = event.key.toLowerCase();
+      const key = forgeKey(event);
       this.locomotion?.release(key);
       if (key === "e" && this.preview === "inspector") {
         this.setPreview("none");
@@ -3258,7 +3326,7 @@ export class ForgeController {
   }
 
   private handleKey(event: KeyboardEvent): void {
-    const key = event.key.toLowerCase();
+    const key = forgeKey(event);
     if (event.ctrlKey || event.metaKey) {
       if (key === "z") {
         event.preventDefault();
@@ -3383,6 +3451,38 @@ export class ForgeController {
         return;
     }
     event.preventDefault();
+  }
+
+  private stepGamepadInput(): void {
+    const pad = readStandardGamepad();
+    const desired = new Set<string>();
+    if (pad !== null && !this.locked) {
+      if (pad.moveY < -0.28) desired.add("w");
+      if (pad.moveY > 0.28) desired.add("s");
+      if (pad.moveX < -0.28) desired.add("a");
+      if (pad.moveX > 0.28) desired.add("d");
+      if (pad.jump) desired.add(" ");
+    }
+    for (const key of this.gamepadMoveKeys) if (!desired.has(key)) this.locomotion?.release(key);
+    for (const key of desired) if (!this.gamepadMoveKeys.has(key)) this.locomotion?.press(key);
+    this.gamepadMoveKeys.clear();
+    for (const key of desired) this.gamepadMoveKeys.add(key);
+
+    const previous = pad?.previousTool ?? false;
+    const next = pad?.nextTool ?? false;
+    const mirror = pad?.mirror ?? false;
+    if (previous && !this.gamepadPreviousToolHeld) {
+      const index = (FORGE_TOOL_MODES.indexOf(this.mode) - 1 + FORGE_TOOL_MODES.length) % FORGE_TOOL_MODES.length;
+      this.setToolMode(FORGE_TOOL_MODES[index]!);
+    }
+    if (next && !this.gamepadNextToolHeld) {
+      const index = (FORGE_TOOL_MODES.indexOf(this.mode) + 1) % FORGE_TOOL_MODES.length;
+      this.setToolMode(FORGE_TOOL_MODES[index]!);
+    }
+    if (mirror && !this.gamepadMirrorHeld) this.setMirror(!this.mirror);
+    this.gamepadPreviousToolHeld = previous;
+    this.gamepadNextToolHeld = next;
+    this.gamepadMirrorHeld = mirror;
   }
 
   /**
@@ -3811,6 +3911,26 @@ export class ForgeController {
     );
     this.camera.lookAt(this.orbitTarget);
   }
+}
+
+const FORGE_ACTION_KEYS: Partial<Readonly<Record<InputAction, string>>> = {
+  moveForward: "w",
+  moveBack: "s",
+  moveLeft: "a",
+  moveRight: "d",
+  jump: " ",
+  toolPose: "1",
+  toolShape: "2",
+  toolPanels: "3",
+  toolMaterial: "4",
+  toolPaint: "5",
+  mirror: "m",
+  eyedropper: "f",
+};
+
+function forgeKey(event: KeyboardEvent): string {
+  const action = event.code === "" ? null : actionForCode(event.code);
+  return (action === null ? undefined : FORGE_ACTION_KEYS[action]) ?? event.key.toLowerCase();
 }
 
 const TOOL_HINTS: Readonly<Record<ForgeToolMode, string>> = {

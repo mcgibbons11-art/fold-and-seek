@@ -145,6 +145,7 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
   const { tool } = props;
   const [state, setState] = useState<PaintPanelState>(() => tool.getState());
   const [confirmingClear, setConfirmingClear] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   /**
    * Held only while the field has focus. Without it, typing "#f" would be
    * rewritten to the full hex of whatever that parsed to on every keystroke.
@@ -185,45 +186,16 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
       data-paint-stroke-count={state.strokeCount}
       data-paint-active={state.active ? "true" : "false"}
     >
-      <ColorWheel hsv={state.hsv} onChange={(hsv) => tool.setHsv(hsv)} />
-
-      <div style={{ ...labelStyle, marginTop: 10 }}>Value</div>
-      <input
-        type="range"
-        min={0}
-        max={1}
-        step={0.01}
-        value={state.hsv.v}
-        style={sliderStyle}
-        onChange={(event) => {
-          tool.setHsv({ ...state.hsv, v: Number(event.target.value) });
-        }}
-      />
-
-      <div style={rowStyle}>
-        {/* Old beside new, the comparison the reference panel puts under its
-            wheel: the colour a stroke last went down in, against the one the
-            wheel is holding now. */}
-        <span
-          title={`Previous ${rgbToHex(state.previousColor)}`}
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: "6px 0 0 6px",
-            border: EDGE,
-            borderRight: "none",
-            background: rgbToCss(state.previousColor),
-          }}
-        />
-        <span
-          title={`Current ${rgbToHex(state.color)}`}
-          style={{
-            width: 34,
-            height: 34,
-            marginLeft: -8,
-            borderRadius: "0 6px 6px 0",
-            border: EDGE,
-            background: rgbToCss(state.color),
+      <div style={{ ...labelStyle, marginBottom: 6 }}>Spray colour</div>
+      <div style={{ display: "flex", gap: 7 }}>
+        <input
+          type="color"
+          aria-label="Spray colour"
+          value={rgbToHex(state.color)}
+          style={{ width: 42, height: 32, padding: 2, border: EDGE, borderRadius: 6, background: "transparent" }}
+          onChange={(event) => {
+            const parsed = hexToRgb(event.target.value);
+            if (parsed !== null) tool.setColor(parsed);
           }}
         />
         <input
@@ -241,33 +213,6 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
             setHexDraft(null);
           }}
         />
-      </div>
-
-      <div style={{ ...labelStyle, marginTop: 10 }}>RGB 0-255</div>
-      <div style={{ display: "flex", gap: 6 }}>
-        {(["R", "G", "B"] as const).map((channel, index) => (
-          <label key={channel} style={{ flex: 1 }}>
-            <input
-              type="number"
-              min={0}
-              max={255}
-              aria-label={`${channel} 0 to 255`}
-              value={Math.round((state.color[index] ?? 0) * 255)}
-              style={numberFieldStyle}
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                if (!Number.isFinite(value)) return;
-                const next: [number, number, number] = [
-                  state.color[0],
-                  state.color[1],
-                  state.color[2],
-                ];
-                next[index] = Math.min(255, Math.max(0, Math.round(value))) / 255;
-                tool.setColor(next);
-              }}
-            />
-          </label>
-        ))}
       </div>
 
       {/* The brush comes before the material channels and the swatch grids.
@@ -323,6 +268,56 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
           Eraser
         </button>
       </div>
+
+      <button
+        type="button"
+        aria-expanded={advancedOpen}
+        aria-controls="advanced-paint-controls"
+        style={{ ...toggleStyle, width: "100%", marginTop: 10 }}
+        onClick={() => setAdvancedOpen((open) => !open)}
+      >
+        {advancedOpen ? "Hide advanced" : "Advanced paint"}
+      </button>
+
+      {advancedOpen ? (
+        <div id="advanced-paint-controls" style={{ paddingTop: 12, borderTop: EDGE, marginTop: 10 }}>
+          <ColorWheel hsv={state.hsv} onChange={(hsv) => tool.setHsv(hsv)} />
+
+          <div style={{ ...labelStyle, marginTop: 10 }}>Value</div>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={state.hsv.v}
+            style={sliderStyle}
+            onChange={(event) => {
+              tool.setHsv({ ...state.hsv, v: Number(event.target.value) });
+            }}
+          />
+
+          <div style={{ ...labelStyle, marginTop: 10 }}>RGB 0-255</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {(["R", "G", "B"] as const).map((channel, index) => (
+              <label key={channel} style={{ flex: 1 }}>
+                <input
+                  type="number"
+                  min={0}
+                  max={255}
+                  aria-label={`${channel} 0 to 255`}
+                  value={Math.round((state.color[index] ?? 0) * 255)}
+                  style={numberFieldStyle}
+                  onChange={(event) => {
+                    const value = Number(event.target.value);
+                    if (!Number.isFinite(value)) return;
+                    const next: [number, number, number] = [state.color[0], state.color[1], state.color[2]];
+                    next[index] = Math.min(255, Math.max(0, Math.round(value))) / 255;
+                    tool.setColor(next);
+                  }}
+                />
+              </label>
+            ))}
+          </div>
 
       <div style={{ ...labelStyle, marginTop: 10 }}>
         Metallic {Math.round(state.metallic * 100)}
@@ -438,6 +433,8 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
           {confirmingClear ? "Sure?" : "Clear"}
         </button>
       </div>
+        </div>
+      ) : null}
 
       <div style={{ ...labelStyle, marginTop: 10 }}>
         Paint used {budget}%

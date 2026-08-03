@@ -70,7 +70,7 @@ const columnStyle: CSSProperties = {
   right: 16,
   height: "calc(100% - 32px)",
   maxHeight: "calc(100% - 32px)",
-  minWidth: 900,
+  minWidth: 0,
   overflow: "auto",
   display: "grid",
   gridTemplateAreas: '"header header header" "roster briefing staging" "roster briefing settings"',
@@ -81,6 +81,28 @@ const columnStyle: CSSProperties = {
   // in through `panelStyle`, exactly as the rest of the HUD does.
   pointerEvents: "none",
 };
+
+const NARROW_LOBBY_QUERY = "(max-width: 760px)";
+
+/** Keeps the compact Portals layout semantic, instead of only visually reordering it. */
+function useNarrowLobby(): boolean {
+  const [narrow, setNarrow] = useState(() =>
+    typeof window === "undefined" || typeof window.matchMedia !== "function"
+      ? false
+      : window.matchMedia(NARROW_LOBBY_QUERY).matches,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return undefined;
+    const query = window.matchMedia(NARROW_LOBBY_QUERY);
+    const update = (): void => setNarrow(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return narrow;
+}
 
 /** A lobby plate: the shop's panel, placed by the column rather than by itself. */
 const plateStyle: CSSProperties = {
@@ -173,6 +195,8 @@ export function LobbyHud({
   onRemoveBot,
 }: LobbyHudProps): ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const narrowLobby = useNarrowLobby();
+  const [briefingOpen, setBriefingOpen] = useState(false);
   // A remote player's command has to visit the host before the authoritative
   // ready flag comes back. Keep the button tactile during that round trip: the
   // old control looked as though it had missed the click for every non-host.
@@ -206,8 +230,9 @@ export function LobbyHud({
 
   return (
     <div style={overlayStyle}>
-      <div style={columnStyle}>
+      <div className="fs-lobby-grid" style={columnStyle}>
         <div
+          className="fs-lobby-header"
           style={{
             ...plateStyle,
             gridArea: "header",
@@ -260,6 +285,7 @@ export function LobbyHud({
         </div>
 
         <div
+          className="fs-lobby-staging"
           style={{
             ...plateStyle,
             gridArea: "staging",
@@ -270,7 +296,7 @@ export function LobbyHud({
             padding: "14px 18px",
           }}
         >
-          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <div className="fs-lobby-actions" style={{ display: "flex", gap: 10, alignItems: "center" }}>
             <button
               type="button"
               className={PRESS_CLASS}
@@ -308,6 +334,7 @@ export function LobbyHud({
         </div>
 
         <div
+          className="fs-lobby-briefing"
           style={{
             ...plateStyle,
             gridArea: "briefing",
@@ -319,14 +346,29 @@ export function LobbyHud({
               "radial-gradient(100% 80% at 50% 38%, rgba(118, 82, 38, 0.26), rgba(16, 12, 8, 0.94))",
           }}
         >
-          <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1 }}>Operation briefing</div>
-          <h3 style={{ margin: "10px 0 8px", font: `600 31px/1.1 ${FONT_DISPLAY}` }}>
-            Blend into the Curiosity Shop
-          </h3>
-          <p style={{ margin: 0, maxWidth: 520, opacity: 0.74, lineHeight: 1.7 }}>
-            Mimics forge a convincing object and choose a hiding place. Inspectors wait in Security, then spend limited warrants finding the players.
-          </p>
-          <div style={{ margin: "auto 0", display: "grid", gap: 10, padding: "24px 0" }}>
+          <button
+            type="button"
+            className={`${PRESS_CLASS} fs-lobby-briefing-toggle`}
+            style={{ ...buttonStyle, display: narrowLobby ? "block" : "none", width: "100%" }}
+            aria-expanded={briefingOpen}
+            aria-controls="lobby-operation-briefing"
+            onClick={() => setBriefingOpen((open) => !open)}
+          >
+            {briefingOpen ? "Hide briefing" : "Operation briefing"}
+          </button>
+          <div
+            id="lobby-operation-briefing"
+            className="fs-lobby-briefing-content"
+            hidden={narrowLobby && !briefingOpen}
+          >
+            <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1 }}>Operation briefing</div>
+            <h3 style={{ margin: "10px 0 8px", font: `600 31px/1.1 ${FONT_DISPLAY}` }}>
+              Blend into the Curiosity Shop
+            </h3>
+            <p style={{ margin: 0, maxWidth: 520, opacity: 0.74, lineHeight: 1.7 }}>
+              Mimics forge a convincing object and choose a hiding place. Inspectors wait in Security, then spend limited warrants finding the players.
+            </p>
+            <div className="fs-lobby-briefing-steps" style={{ margin: "auto 0", display: "grid", gap: 10, padding: "24px 0" }}>
             {[
               ["01", "Get ready", "Inspectors can move around the Security Office."],
               ["02", "Forge", "Mimics shape, panel, pose, and paint."],
@@ -338,16 +380,17 @@ export function LobbyHud({
                 <span style={{ opacity: 0.62 }}>{copy}</span>
               </div>
             ))}
-          </div>
-          <div style={{ ...labelStyle, color: BRASS_LIT }}>
-            {settings === undefined
-              ? `${readyCount} of ${state.roster.length} players ready`
-              : roleSplitCopy(state.roster.length, settings.seekerCount)}
+            </div>
+            <div style={{ ...labelStyle, color: BRASS_LIT }}>
+              {settings === undefined
+                ? `${readyCount} of ${state.roster.length} players ready`
+                : roleSplitCopy(state.roster.length, settings.seekerCount)}
+            </div>
           </div>
         </div>
 
         {settings === undefined ? null : (
-          <div style={{ ...plateStyle, gridArea: "settings", width: "auto", padding: "12px 18px" }}>
+          <div className="fs-lobby-settings" style={{ ...plateStyle, gridArea: "settings", width: "auto", padding: "12px 18px" }}>
             <button
               type="button"
               className={PRESS_CLASS}
@@ -402,7 +445,7 @@ export function LobbyHud({
           </div>
         )}
 
-        <div style={{ ...plateStyle, ...rosterPlateStyle, gridArea: "roster" }}>
+        <div className="fs-lobby-roster" style={{ ...plateStyle, ...rosterPlateStyle, gridArea: "roster" }}>
           <div style={{ ...labelStyle, display: "flex", justifyContent: "space-between" }}>
             <span>Roster</span>
             <span style={{ color: BRASS_LIT }}>

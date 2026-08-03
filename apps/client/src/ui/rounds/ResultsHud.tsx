@@ -1,5 +1,5 @@
 import { RESULT_VOTE_CATEGORIES, type ResultVoteCategory } from "@foldseek/game-sim";
-import type { CSSProperties, ReactElement, ReactNode } from "react";
+import { useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
 
 import {
   RESULTS_COLUMN_CAUGHT,
@@ -278,6 +278,7 @@ function AwardRow({
 }
 
 export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): ReactElement | null {
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const results = state.results;
   if (results === null) return null;
 
@@ -289,6 +290,11 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
   const otherRows = results.rows.filter(
     (row) => row.role !== "mimic" && row.role !== "inspector",
   );
+  const caught = mimicRows.filter((row) => !row.fullRoundSurvival).length;
+  const survivors = mimicRows.length - caught;
+  const narrative = results.winner === "inspectors"
+    ? `The Inspectors exposed ${caught} of ${mimicRows.length} Mimic${mimicRows.length === 1 ? "" : "s"} before the shop went quiet.`
+    : `${survivors} Mimic${survivors === 1 ? " stayed" : "s stayed"} hidden until the final bell.`;
 
   return (
     <div style={overlayStyle}>
@@ -301,8 +307,9 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
           left: "50%",
           transform: "translateX(-50%)",
           width: 640,
-          maxHeight: "62vh",
+          maxHeight: "calc(100vh - 150px)",
           overflowY: "auto",
+          boxSizing: "border-box",
         }}
       >
         <div style={{ textAlign: "center" }}>
@@ -322,24 +329,52 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
             {results.winner === "inspectors" ? "Inspectors win" : "Mimics win"}
           </h2>
           <div style={{ ...ornamentRuleStyle(190), margin: "12px auto 0" }} aria-hidden />
+          <p style={{ margin: "14px auto 0", maxWidth: 470, font: `16px/1.55 ${FONT_DISPLAY}`, color: CREAM }}>
+            {narrative}
+          </p>
         </div>
 
-        <Ledger
-          heading={RESULTS_MIMIC_HEADING}
-          columns={mimicColumns(mimicRows)}
-          rows={mimicRows}
-        />
-        <Ledger
-          heading={RESULTS_INSPECTOR_HEADING}
-          columns={INSPECTOR_COLUMNS}
-          rows={inspectorRows}
-        />
-        <Ledger
-          heading={RESULTS_SPECTATOR_HEADING}
-          columns={[PLAYER_COLUMN, SCORE_COLUMN]}
-          rows={otherRows}
-        />
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: RULE, textAlign: "center" }}>
+          <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, marginBottom: 8 }}>What happens next?</div>
+          <div style={{ display: "flex", justifyContent: "center", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+            <button
+              type="button"
+              className={PRESS_CLASS}
+              aria-pressed={state.rematch.myVote === true}
+              style={rematchGate.allowed ? primaryButtonStyle : disabledButtonStyle(primaryButtonStyle)}
+              disabled={!rematchGate.allowed}
+              onClick={() => onRematch(true)}
+            >
+              {state.rematch.myVote === true ? "Rematch requested" : "Play another round"}
+            </button>
+            <button
+              type="button"
+              className={PRESS_CLASS}
+              aria-pressed={state.rematch.myVote === false}
+              style={rematchGate.allowed ? buttonStyle : disabledButtonStyle(buttonStyle)}
+              disabled={!rematchGate.allowed}
+              onClick={() => onRematch(false)}
+            >
+              Return to lobby
+            </button>
+            <span style={labelStyle}>{state.rematch.yesVotes} / {state.rematch.totalVoters} want another</span>
+          </div>
+        </div>
 
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          aria-expanded={detailsOpen}
+          style={{ ...buttonStyle, width: "100%", marginTop: 14 }}
+          onClick={() => setDetailsOpen((open) => !open)}
+        >
+          {detailsOpen ? "Hide round details" : "Round details and awards"}
+        </button>
+
+        {detailsOpen ? <>
+          <Ledger heading={RESULTS_MIMIC_HEADING} columns={mimicColumns(mimicRows)} rows={mimicRows} />
+          <Ledger heading={RESULTS_INSPECTOR_HEADING} columns={INSPECTOR_COLUMNS} rows={inspectorRows} />
+          <Ledger heading={RESULTS_SPECTATOR_HEADING} columns={[PLAYER_COLUMN, SCORE_COLUMN]} rows={otherRows} />
         <div style={{ marginTop: 20, borderTop: RULE, paddingTop: 14 }}>
           <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1 }}>
             {RESULTS_VOTE_HEADING}
@@ -359,44 +394,7 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
             />
           ))}
         </div>
-      </div>
-
-      <div
-        style={{
-          ...panelStyle,
-          bottom: 24,
-          left: "50%",
-          transform: "translateX(-50%)",
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-        }}
-      >
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          style={rematchGate.allowed ? primaryButtonStyle : disabledButtonStyle(primaryButtonStyle)}
-          disabled={!rematchGate.allowed}
-          onClick={() => {
-            onRematch(true);
-          }}
-        >
-          {state.rematch.myVote === true ? "Rematch requested" : "Rematch"}
-        </button>
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          style={rematchGate.allowed ? buttonStyle : disabledButtonStyle(buttonStyle)}
-          disabled={!rematchGate.allowed}
-          onClick={() => {
-            onRematch(false);
-          }}
-        >
-          Sit this one out
-        </button>
-        <span style={labelStyle}>
-          {state.rematch.yesVotes} / {state.rematch.totalVoters} in
-        </span>
+        </> : null}
       </div>
     </div>
   );

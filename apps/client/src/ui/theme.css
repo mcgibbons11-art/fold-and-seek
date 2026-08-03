@@ -352,6 +352,139 @@
   }
 }
 
+/* A joined room must remain operable inside Portals' tall, narrow preview. */
+.fs-lobby-briefing-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+@media (max-width: 760px) {
+  .fs-lobby-grid {
+    inset: 10px !important;
+    width: auto !important;
+    height: calc(100% - 20px) !important;
+    max-height: calc(100% - 20px) !important;
+    display: flex !important;
+    flex-direction: column;
+    gap: 8px !important;
+    overflow-x: hidden !important;
+  }
+
+  .fs-lobby-header {
+    order: 0;
+    flex: 0 0 auto;
+    padding: 11px 13px !important;
+    gap: 10px !important;
+    flex-wrap: wrap;
+  }
+
+  .fs-lobby-header h2 {
+    font-size: 17px !important;
+  }
+
+  .fs-lobby-roster {
+    order: 1;
+    flex: 1 1 auto;
+    min-height: 104px !important;
+    padding: 10px 13px !important;
+  }
+
+  .fs-lobby-staging {
+    order: 2;
+    flex: 0 0 auto;
+    align-items: stretch !important;
+    padding: 11px 13px !important;
+  }
+
+  .fs-lobby-actions {
+    display: grid !important;
+    grid-template-columns: 1fr 1.25fr;
+  }
+
+  .fs-lobby-actions > button {
+    min-height: 42px;
+    white-space: normal;
+  }
+
+  .fs-lobby-briefing {
+    order: 3;
+    flex: 0 0 auto;
+    min-height: 0 !important;
+    padding: 9px 13px !important;
+  }
+
+  .fs-lobby-briefing-content[hidden] {
+    display: none;
+  }
+
+  .fs-lobby-briefing-content {
+    max-height: min(42vh, 330px);
+    overflow-y: auto;
+    padding-top: 12px;
+  }
+
+  .fs-lobby-briefing-content h3 {
+    font-size: 23px !important;
+  }
+
+  .fs-lobby-briefing-steps {
+    padding: 14px 0 !important;
+  }
+
+  .fs-lobby-briefing-steps > div {
+    grid-template-columns: 28px 72px 1fr !important;
+  }
+
+  .fs-lobby-settings {
+    order: 4;
+    flex: 0 0 auto;
+    padding: 9px 13px !important;
+  }
+}
+
+/* Forge controls stay available without walling off the Mimic on narrow panes. */
+@media (max-width: 760px) {
+  .fs-forge-tools {
+    top: 58px !important;
+    left: 10px !important;
+    right: 10px;
+    width: auto !important;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 5px;
+    padding: 8px !important;
+  }
+
+  .fs-forge-tools > button {
+    min-width: 0;
+    margin: 0 !important;
+    padding: 7px 4px !important;
+    overflow: hidden;
+    text-align: center !important;
+    white-space: nowrap;
+  }
+
+  .fs-forge-tools > button span,
+  .fs-forge-history {
+    display: none !important;
+  }
+
+  .fs-forge-paint {
+    left: 10px !important;
+    top: 122px !important;
+    max-height: calc(100vh - 294px) !important;
+  }
+
+  .fs-forge-context {
+    top: 122px !important;
+    right: 10px !important;
+    width: 190px !important;
+    max-height: calc(100vh - 294px) !important;
+  }
+}
+
 @media (max-width: 1000px) {
   .fs-start-content > .fs-folded-mark {
     right: -110px;
@@ -380,4 +513,14 @@
   .fs-press {
     transition: none;
   }
+}
+
+html[data-reduced-motion="true"] .fs-candle,
+html[data-reduced-motion="true"] .fs-rise,
+html[data-reduced-motion="true"] .fs-sheen {
+  animation: none !important;
+}
+
+html[data-reduced-motion="true"] .fs-press {
+  transition: none !important;
 }

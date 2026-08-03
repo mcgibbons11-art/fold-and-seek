@@ -97,6 +97,7 @@ export class ShootingDriver {
   private lastShotObjectIdValue: string | null = null;
   private shotsFiredValue = 0;
   private dryFiresValue = 0;
+  private blockedFiresValue = 0;
 
   private cooldownMs = 0;
   private cooldownTotalMs = 0;
@@ -129,6 +130,11 @@ export class ShootingDriver {
   get cooldownFraction(): number {
     if (this.cooldownTotalMs <= 0) return 0;
     return this.cooldownMs / this.cooldownTotalMs;
+  }
+
+  /** Trigger edges refused locally while the action was pending or cooling. */
+  get blockedFires(): number {
+    return this.blockedFiresValue;
   }
 
   /** Warrants remaining, from the authoritative match state. */
@@ -166,8 +172,9 @@ export class ShootingDriver {
 
     this.targetValue = this.classify(focus);
 
-    if (firePressed && this.phaseValue === "ready") {
-      this.fire(focus);
+    if (firePressed) {
+      if (this.phaseValue === "ready") this.fire(focus);
+      else this.blockedFiresValue += 1;
     }
     this.publish();
   }

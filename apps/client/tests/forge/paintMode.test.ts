@@ -365,6 +365,29 @@ describe("paint in the forge history", () => {
     expect(harness.controller.paint.layer.strokeCount).toBe(painted);
   });
 
+  it("previews an arrangement without history, then commits and rolls it back in one step", () => {
+    expect(harness.controller.snapshot().arrangementId).toBe("upright");
+    expect(harness.controller.snapshot().canUndo).toBe(false);
+
+    harness.controller.beginArrangementPreview("compact");
+    expect(harness.controller.snapshot().previewArrangementId).toBe("compact");
+    expect(harness.controller.snapshot().arrangementId).toBe("compact");
+    expect(harness.controller.snapshot().canUndo).toBe(false);
+
+    harness.controller.cancelArrangementPreview();
+    expect(harness.controller.snapshot().previewArrangementId).toBeNull();
+    expect(harness.controller.snapshot().arrangementId).toBe("upright");
+    expect(harness.controller.snapshot().canUndo).toBe(false);
+
+    harness.controller.beginArrangementPreview("compact");
+    harness.controller.commitArrangementPreview("compact");
+    expect(harness.controller.snapshot().previewArrangementId).toBeNull();
+    expect(harness.controller.snapshot().undoLabel).toBe("arrangement compact");
+
+    harness.controller.undo();
+    expect(harness.controller.snapshot().arrangementId).toBe("upright");
+  });
+
   it("records one entry per drag, not one per stamp", () => {
     paintOnce();
     const stamps = harness.controller.paint.layer.strokeCount;

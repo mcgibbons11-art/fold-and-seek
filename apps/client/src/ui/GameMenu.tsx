@@ -1,9 +1,16 @@
 import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 
 import { getMasterVolume, setMasterVolume } from "../forge/AudioPlayer";
+import {
+  getPlayerPreferences,
+  setPlayerPreferences,
+  subscribePlayerPreferences,
+} from "../gameplay/preferences";
 import { QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
 import { ControlsLegend } from "./ControlsLegend";
 import { HotkeyGuide } from "./HotkeyGuide";
+import { KeyBindingPanel } from "./KeyBindingPanel";
+import { REPLAY_ONBOARDING_EVENT } from "./FirstRoundGuide";
 import {
   CORE_CONTROL_HINTS,
   HIDER_CONTROL_HINTS,
@@ -56,6 +63,9 @@ export interface GameMenuProps {
 export function GameMenu(props: GameMenuProps): ReactElement {
   const [page, setPage] = useState<MenuPage | null>(null);
   const [volume, setVolume] = useState(() => getMasterVolume());
+  const [preferences, setPreferencesState] = useState(() => getPlayerPreferences());
+
+  useEffect(() => subscribePlayerPreferences(setPreferencesState), []);
 
   const open = (): void => {
     if (document.pointerLockElement !== null) void document.exitPointerLock();
@@ -189,6 +199,41 @@ export function GameMenu(props: GameMenuProps): ReactElement {
                     {Math.round(volume * 100)}%
                   </span>
                 </div>
+                <div style={{ ...labelStyle, color: BRASS_LIT, margin: "18px 0 8px" }}>Camera and aiming</div>
+                <PreferenceSlider label="Horizontal sensitivity" value={preferences.sensitivityX} min={0.25} max={2.5} step={0.05} onChange={(sensitivityX) => setPlayerPreferences({ sensitivityX })} />
+                <PreferenceSlider label="Vertical sensitivity" value={preferences.sensitivityY} min={0.25} max={2.5} step={0.05} onChange={(sensitivityY) => setPlayerPreferences({ sensitivityY })} />
+                <PreferenceSlider label="Field of view" value={preferences.fov} min={50} max={90} step={1} suffix="°" onChange={(fov) => setPlayerPreferences({ fov })} />
+                <PreferenceSlider label="Camera motion" value={preferences.cameraMotion} min={0} max={1} step={0.05} percent onChange={(cameraMotion) => setPlayerPreferences({ cameraMotion })} />
+                <PreferenceSlider label="Impact shake" value={preferences.shake} min={0} max={1} step={0.05} percent onChange={(shake) => setPlayerPreferences({ shake })} />
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, margin: "10px 0 20px" }}>
+                  <button
+                    type="button"
+                    className={PRESS_CLASS}
+                    aria-pressed={preferences.invertY}
+                    style={{ ...buttonStyle, borderColor: preferences.invertY ? BRASS_LIT : undefined }}
+                    onClick={() => setPlayerPreferences({ invertY: !preferences.invertY })}
+                  >
+                    Invert Y {preferences.invertY ? "on" : "off"}
+                  </button>
+                  <button
+                    type="button"
+                    className={PRESS_CLASS}
+                    aria-pressed={preferences.reducedMotion}
+                    style={{ ...buttonStyle, borderColor: preferences.reducedMotion ? BRASS_LIT : undefined }}
+                    onClick={() => setPlayerPreferences({ reducedMotion: !preferences.reducedMotion })}
+                  >
+                    Reduced motion {preferences.reducedMotion ? "on" : "off"}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className={PRESS_CLASS}
+                  aria-pressed={preferences.showDiagnostics}
+                  style={{ ...buttonStyle, width: "100%", marginBottom: 20, borderColor: preferences.showDiagnostics ? BRASS_LIT : undefined }}
+                  onClick={() => setPlayerPreferences({ showDiagnostics: !preferences.showDiagnostics })}
+                >
+                  Network diagnostics {preferences.showDiagnostics ? "shown" : "hidden"}
+                </button>
                 <button type="button" className={PRESS_CLASS} style={pageButtonStyle} onClick={() => setPage("root")}>
                   Back
                 </button>
@@ -206,7 +251,19 @@ export function GameMenu(props: GameMenuProps): ReactElement {
                 <ControlsLegend hints={props.role === "inspector" ? INSPECTOR_ROLE_HINTS : CORE_CONTROL_HINTS} />
                 {props.role === "inspector" ? null : <ControlsLegend hints={HIDER_CONTROL_HINTS} />}
                 <HotkeyGuide />
-                <button type="button" className={PRESS_CLASS} style={{ ...pageButtonStyle, marginTop: 18 }} onClick={() => setPage("root")}>
+                <KeyBindingPanel />
+                <button
+                  type="button"
+                  className={PRESS_CLASS}
+                  style={{ ...pageButtonStyle, marginTop: 18 }}
+                  onClick={() => {
+                    window.dispatchEvent(new Event(REPLAY_ONBOARDING_EVENT));
+                    setPage(null);
+                  }}
+                >
+                  Replay first-round guide
+                </button>
+                <button type="button" className={PRESS_CLASS} style={pageButtonStyle} onClick={() => setPage("root")}>
                   Back
                 </button>
               </>
@@ -215,5 +272,44 @@ export function GameMenu(props: GameMenuProps): ReactElement {
         </div>
       )}
     </>
+  );
+}
+
+function PreferenceSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  suffix = "×",
+  percent = false,
+  onChange,
+}: {
+  readonly label: string;
+  readonly value: number;
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+  readonly suffix?: string;
+  readonly percent?: boolean;
+  readonly onChange: (value: number) => void;
+}): ReactElement {
+  const reading = percent ? `${Math.round(value * 100)}%` : `${value.toFixed(step < 1 ? 2 : 0)}${suffix}`;
+  return (
+    <label style={{ display: "grid", gridTemplateColumns: "1fr 54px", gap: 10, marginBottom: 10 }}>
+      <span style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between", fontSize: 11 }}>
+        <span>{label}</span><span style={{ color: BRASS_LIT }}>{reading}</span>
+      </span>
+      <input
+        aria-label={label}
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        style={{ gridColumn: "1 / -1", width: "100%", accentColor: BRASS_LIT }}
+        onChange={(event) => onChange(Number(event.currentTarget.value))}
+      />
+    </label>
   );
 }

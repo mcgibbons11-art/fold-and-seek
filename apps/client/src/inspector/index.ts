@@ -10,7 +10,7 @@ import { GunView, MISS_RANGE_M, shotImpactPoint } from "./GunView";
 import { InspectorBody } from "./InspectorBody";
 import { InspectorCamera, type InspectorCameraOptions } from "./InspectorCamera";
 import { createMoveInput, InspectorController } from "./InspectorController";
-import { InspectorInput } from "./InspectorInput";
+import { InspectorInput, type InspectorInputOptions } from "./InspectorInput";
 import { BRISK_WALK_MULTIPLIER, type NavData, type SpawnPose } from "./navData";
 
 export {
@@ -92,6 +92,7 @@ export interface InspectorSystemDeps {
   readonly onWeaponState?: (state: WeaponState) => void;
   readonly onPointerLockChange?: (locked: boolean) => void;
   readonly cameraOptions?: InspectorCameraOptions;
+  readonly inputOptions?: InspectorInputOptions;
   /**
    * Whether the Inspector's body drops a shadow, which is the light tier's
    * `dynamicShadows`. Defaults to on: at the "light" tier the renderer has no
@@ -124,6 +125,14 @@ export interface InspectorSystem {
    * which is right for anyone who was there when the hunt opened.
    */
   setAmmo(warrantsRemaining: number, warrantsTotal?: number): void;
+  setViewPreferences(options: {
+    readonly sensitivityX: number;
+    readonly sensitivityY: number;
+    readonly invertY: boolean;
+    readonly fov: number;
+    readonly cameraMotion: number;
+    readonly shake: number;
+  }): void;
   /** Outcome of this client's own shot, from `accusation_resolved`. */
   handleAccusationResolved(correct: boolean): void;
   /** A refusal from the adapter's `onRejection`, of any command type. */
@@ -171,7 +180,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
 
   const input =
     deps.domElement != null
-      ? new InspectorInput(deps.domElement, { onLockChange: deps.onPointerLockChange })
+      ? new InspectorInput(deps.domElement, { ...deps.inputOptions, onLockChange: deps.onPointerLockChange })
       : null;
   input?.attach();
 
@@ -212,7 +221,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
       const dtSeconds = dtMs / 1000;
 
       if (this.enabled && input !== null) {
-        input.sample(moveInput);
+        input.sample(moveInput, dtSeconds);
       } else {
         moveInput.forward = 0;
         moveInput.strafe = 0;
@@ -332,6 +341,11 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
       weapon.setAmmo(warrantsRemaining);
       warrantsSeen = Math.max(warrantsSeen, warrantsTotal ?? warrantsRemaining);
       gun.setWarrants(warrantsRemaining, warrantsSeen);
+    },
+
+    setViewPreferences(options): void {
+      input?.setLookPreferences(options.sensitivityX, options.sensitivityY, options.invertY);
+      cameraRig.setViewPreferences(options.fov, options.cameraMotion, options.shake);
     },
 
     handleAccusationResolved(correct: boolean): void {

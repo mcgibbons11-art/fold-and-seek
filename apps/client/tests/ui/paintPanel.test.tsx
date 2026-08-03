@@ -46,6 +46,14 @@ function setSlider(input: HTMLInputElement, value: number): void {
   });
 }
 
+function openAdvancedPaint(): void {
+  const button = [...container.querySelectorAll("button")].find(
+    (candidate) => candidate.textContent === "Advanced paint",
+  );
+  expect(button).not.toBeUndefined();
+  act(() => button?.click());
+}
+
 beforeEach(() => {
   globalThis.IS_REACT_ACT_ENVIRONMENT = true;
   container = document.createElement("div");
@@ -89,12 +97,14 @@ describe("paint panel material channels", () => {
   });
 
   it("offers all three of the original's channels", () => {
+    openAdvancedPaint();
     expect(readingFor("Metallic")).toBe("Metallic 0");
     expect(readingFor("Smoothness")).toBe("Smoothness 35");
     expect(readingFor("Emissive")).toBe("Emissive 0");
   });
 
   it("carries the emissive slider through to the brush and back to the readout", () => {
+    openAdvancedPaint();
     setSlider(sliderLabelled("Emissive"), 0.75);
     expect(tool.getState().emissive).toBeCloseTo(0.75, 5);
     expect(readingFor("Emissive")).toBe("Emissive 75");
@@ -106,6 +116,7 @@ describe("paint panel material channels", () => {
   });
 
   it("leaves the emissive slider alone when another channel moves", () => {
+    openAdvancedPaint();
     setSlider(sliderLabelled("Emissive"), 0.5);
     act(() => {
       tool.setMetallic(1);
