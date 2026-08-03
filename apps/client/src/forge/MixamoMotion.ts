@@ -10,6 +10,8 @@ import {
 } from "./mixamoClips.generated";
 
 const TAU = Math.PI * 2;
+/** The authored fall is 4.4 s; a caught Mimic should collapse in about 1.5 s. */
+export const MIMIC_DEATH_PLAYBACK_RATE = 3;
 
 /** Mixamo actions that can temporarily take control of the Mimic's whole body. */
 export type MimicAction = Extract<MixamoClipName, "taunt" | "hit" | "death">;
@@ -31,6 +33,16 @@ interface WeightedClip {
   weight: number;
   phase: number;
   normalizedPhase?: boolean;
+}
+
+/** Maps action clock time onto its clip while keeping death terminal. */
+export function mimicActionPlaybackSeconds(
+  action: MimicAction,
+  elapsedSeconds: number,
+  durationSeconds: number,
+): number {
+  const playback = action === "death" ? elapsedSeconds * MIMIC_DEATH_PLAYBACK_RATE : elapsedSeconds;
+  return Math.min(playback, durationSeconds);
 }
 
 const BONE_INDICES = MIXAMO_BONE_NAMES.map((name) => boneIndex(name));
@@ -145,10 +157,11 @@ export class MixamoMotion {
   private weightedClips(): WeightedClip[] {
     if (this.action !== null) {
       const clip = MIXAMO_CLIPS[this.action];
-      const time =
-        this.action === "death"
-          ? Math.min(this.actionSeconds, clipDuration(clip))
-          : this.actionSeconds;
+      const time = mimicActionPlaybackSeconds(
+        this.action,
+        this.actionSeconds,
+        clipDuration(clip),
+      );
       return [{ name: this.action, weight: this.active, phase: time }];
     }
 
