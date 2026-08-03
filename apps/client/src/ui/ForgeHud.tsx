@@ -351,7 +351,7 @@ export function ForgeHud({
   const showContextPanel = state.mode !== "paint";
 
   return (
-    <div className="fs-forge" style={rootStyle}>
+    <div className="fs-forge" data-sound-scope="semantic" style={rootStyle}>
       {showHeader ? (
         <div
           {...hudProps}
@@ -632,7 +632,7 @@ export function ForgeToolPanels({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 10, width }}>
+    <div data-sound-scope="semantic" style={{ display: "flex", flexDirection: "column", gap: 10, width }}>
       <div
         {...hudProps}
         role="group"

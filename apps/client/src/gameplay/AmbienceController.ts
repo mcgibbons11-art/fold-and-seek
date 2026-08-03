@@ -1,7 +1,8 @@
 import type { WatchedLevel } from "@foldseek/game-sim";
 import { MatchPhase } from "@foldseek/shared";
 
-import { getMasterVolume } from "../forge/AudioPlayer";
+import { getAudioBusGain } from "../audio/AudioMixer";
+import { audioRuntime } from "../audio/AudioRuntime";
 import { ZONES } from "../world/maps/zones";
 
 /**
@@ -317,7 +318,7 @@ export class AmbienceController {
       channel.progress = Math.min(1, channel.progress + dtMs / channel.crossfadeMs);
     }
 
-    const ceiling = CHANNEL_GAIN[id] * this.duck * getMasterVolume();
+    const ceiling = CHANNEL_GAIN[id] * this.duck * getAudioBusGain("ambience");
     channel.appliedGain = channel.voice === null ? 0 : ceiling * channel.progress;
     channel.voice?.setGain(channel.appliedGain);
     channel.voice?.update(dtMs);
@@ -433,6 +434,7 @@ class ElementBedVoice implements BedVoice {
     this.stopped = true;
     for (const element of this.elements) {
       element.pause();
+      audioRuntime.forget(element);
       element.removeAttribute("src");
     }
   }
@@ -441,10 +443,7 @@ class ElementBedVoice implements BedVoice {
     const element = this.elements[index];
     if (element === undefined) return;
     element.currentTime = 0;
-    void element.play().catch(() => {
-      // A bed refused before the page's first gesture is not an error worth
-      // reporting: the next phase change asks for it again.
-    });
+    audioRuntime.play(element);
   }
 }
 

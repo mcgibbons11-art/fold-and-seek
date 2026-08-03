@@ -4,6 +4,7 @@ import type { SoundId } from "../../src/forge/AudioPlayer";
 import { WORLD_SCALE } from "../../src/inspector/navData";
 import {
   FootstepDriver,
+  RemoteInspectorFootsteps,
   footstepMaterial,
   type MotionSample,
 } from "../../src/gameplay/footsteps";
@@ -155,7 +156,7 @@ describe("FootstepDriver", () => {
     for (let i = 0; i < 40; i++) {
       vaulting.update(100, motion({ climbState: { link: { kind: "mantle" } } }));
     }
-    expect(mantle).toHaveLength(1);
+    expect(mantle).toEqual(["wallstick_attach", "climb_grab"]);
 
     const { sink: ladderSink, played: ladder } = recorder();
     const climbing = new FootstepDriver(ladderSink);
@@ -163,7 +164,19 @@ describe("FootstepDriver", () => {
       climbing.update(100, motion({ climbState: { link: { kind: "ladder" } } }));
     }
     expect(ladder.length).toBeGreaterThan(1);
-    expect(ladder.every((id) => id === "climb_grab" || id === "climb_grab_2")).toBe(true);
+    expect(ladder[0]).toBe("wallstick_attach");
+    expect(ladder.slice(1).every((id) => id === "climb_grab" || id === "climb_grab_2")).toBe(true);
+  });
+
+  it("releases and settles exactly once after topping out", () => {
+    const { sink, played } = recorder();
+    const driver = new FootstepDriver(sink);
+    driver.update(100, motion({ grounded: false, position: { y: 0.4 }, climbState: { link: { kind: "mantle" } } }));
+    driver.update(100, motion({ grounded: false, position: { y: 0.7 }, climbState: { link: { kind: "mantle" } } }));
+    driver.update(100, motion({ grounded: true, position: { y: 0.7 }, climbState: null }));
+    driver.update(100, motion({ grounded: true, position: { y: 0.7 }, climbState: null }));
+    expect(played.filter((id) => id === "wallstick_release")).toHaveLength(1);
+    expect(played.filter((id) => id === "land_soft")).toHaveLength(1);
   });
 
   it("does not burst a run of footfalls after one long frame", () => {
@@ -172,5 +185,54 @@ describe("FootstepDriver", () => {
     // A single second-long stall, which is many strides' worth of distance.
     driver.update(1_000, motion({ speed: WALK_SPEED }));
     expect(played).toHaveLength(1);
+  });
+});
+
+describe("RemoteInspectorFootsteps", () => {
+  it("places surface-specific steps at the interpolated remote position", () => {
+    const played: Array<{ id: SoundId; x: number }> = [];
+    const events: string[] = [];
+    const driver = new RemoteInspectorFootsteps(
+      {
+        playAt(id, position) {
+          played.push({ id, x: position.x });
+        },
+      },
+      (event) => events.push(event.text),
+    );
+    const position = { x: 3.25, y: 0, z: -1 };
+    for (let i = 0; i < 20; i++) {
+      driver.update(50, {
+        position,
+        speedMps: WALK_SPEED,
+        surfaceId: "shelving_board_2",
+      });
+    }
+
+    expect(played.length).toBeGreaterThan(0);
+    expect(played.every((entry) => entry.id.startsWith("footstep_metal"))).toBe(true);
+    expect(played[0]?.x).toBe(3.25);
+    expect(events).toEqual(played.map(() => "metal footsteps"));
+  });
+
+  it("drops a partial stride when the remote body stops or becomes hidden", () => {
+    const played: SoundId[] = [];
+    const driver = new RemoteInspectorFootsteps({
+      playAt(id) {
+        played.push(id);
+      },
+    });
+    const sample = {
+      position: { x: 0, y: 0, z: 0 },
+      speedMps: WALK_SPEED,
+      surfaceId: "floor_00",
+    };
+    driver.update(200, sample);
+    driver.update(16, { ...sample, speedMps: 0 });
+    driver.update(200, sample);
+    expect(played).toHaveLength(0);
+
+    driver.update(1_000, { ...sample, visible: false });
+    expect(played).toHaveLength(0);
   });
 });

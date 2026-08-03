@@ -8,6 +8,9 @@
  * `public/assets/audio/sfx`.
  */
 
+import { audioMixer, getAudioLevels, setAudioBusVolume, type AudioCategory, type AudioPriority } from "../audio/AudioMixer";
+import { audioRuntime } from "../audio/AudioRuntime";
+
 const VOICES_PER_CLIP = 3;
 
 /**
@@ -17,22 +20,13 @@ const VOICES_PER_CLIP = 3;
  * yields first, keeping current input feedback audible.
  */
 export const MAX_ACTIVE_ONE_SHOTS = 16;
-const activeOneShots: HTMLAudioElement[] = [];
 
 function releaseOneShot(element: HTMLAudioElement): void {
-  const index = activeOneShots.indexOf(element);
-  if (index >= 0) activeOneShots.splice(index, 1);
+  audioMixer.release(element);
 }
 
-function reserveOneShot(element: HTMLAudioElement): void {
-  releaseOneShot(element);
-  while (activeOneShots.length >= MAX_ACTIVE_ONE_SHOTS) {
-    const oldest = activeOneShots.shift();
-    if (oldest === undefined) break;
-    oldest.pause();
-    oldest.currentTime = 0;
-  }
-  activeOneShots.push(element);
+function reserveOneShot(element: HTMLAudioElement, bus: "gameplay" | "ui", priority: AudioPriority, category: AudioCategory): boolean {
+  return audioMixer.reserve(element, bus, priority, category);
 }
 
 export type SoundId =
@@ -118,6 +112,33 @@ const MEASURED_PEAK_TRIM: Partial<Readonly<Record<SoundId, number>>> = {
   score_tick: 0.72,
 };
 
+const IMPORTANT_SOUNDS: ReadonlySet<SoundId> = new Set([
+  "ui_confirm", "lock_seal", "gun_fire", "door_open", "unfold_reveal", "role_reveal", "forge_start",
+  "countdown_tick_final",
+]);
+const CRITICAL_SOUNDS: ReadonlySet<SoundId> = new Set([
+  "caught_sting", "wrong_horn", "hunt_riser", "reveal_swell", "results_resolve", "win_sting", "lose_sting",
+]);
+const LOW_PRIORITY_SOUNDS: ReadonlySet<SoundId> = new Set([
+  "paint_stroke", "creep_slide",
+]);
+
+function priorityOf(id: SoundId): AudioPriority {
+  if (CRITICAL_SOUNDS.has(id)) return "critical";
+  if (IMPORTANT_SOUNDS.has(id)) return "important";
+  if (LOW_PRIORITY_SOUNDS.has(id)) return "low";
+  return "normal";
+}
+
+function categoryOf(id: SoundId, bus: "gameplay" | "ui"): AudioCategory {
+  if (bus === "ui") return "ui";
+  if (id.startsWith("footstep_")) return "footsteps";
+  if (id === "paint_stroke" || id === "servo_move" || id === "creep_slide") return "texture";
+  if (id.startsWith("gun_")) return "weapon";
+  if (CRITICAL_SOUNDS.has(id) || id === "rematch_tick") return "results";
+  return "general";
+}
+
 interface Voices {
   readonly elements: HTMLAudioElement[];
   next: number;
@@ -131,46 +152,30 @@ interface Voices {
  * them rather than living on any one. Every live player registers here and is
  * told when the number changes.
  */
-function storedMasterVolume(): number {
-  try {
-    const raw = globalThis.localStorage?.getItem("foldseek.masterVolume");
-    if (raw === null || raw === undefined) return 1;
-    const stored = Number(raw);
-    return Number.isFinite(stored) ? Math.min(Math.max(stored, 0), 1) : 1;
-  } catch {
-    return 1;
-  }
-}
-
-let masterVolume = storedMasterVolume();
 const livePlayers = new Set<AudioPlayer>();
 
 export function setMasterVolume(volume: number): void {
-  masterVolume = Math.min(Math.max(volume, 0), 1);
-  try {
-    globalThis.localStorage?.setItem("foldseek.masterVolume", String(masterVolume));
-  } catch {
-    // Portals can deny storage in an embedded room. Volume still applies for
-    // the current session, which is the important part.
-  }
-  for (const player of livePlayers) player.applyVolume();
+  setAudioBusVolume("master", volume);
 }
 
 export function getMasterVolume(): number {
-  return masterVolume;
+  return getAudioLevels().master;
 }
 
 export class AudioPlayer {
   private readonly clips = new Map<SoundId, Voices>();
   private readonly baseUrl: string;
-  private readonly warned = new Set<string>();
   private readonly playbackGains = new WeakMap<HTMLAudioElement, number>();
+  private readonly bus: "gameplay" | "ui";
+  private readonly unsubscribeMixer: () => void;
   private volume: number;
 
-  constructor(baseUrl: string = import.meta.env.BASE_URL, volume = 0.6) {
+  constructor(baseUrl: string = import.meta.env.BASE_URL, volume = 0.6, bus: "gameplay" | "ui" = "gameplay") {
     this.baseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
     this.volume = volume;
+    this.bus = bus;
     livePlayers.add(this);
+    this.unsubscribeMixer = audioMixer.subscribe(() => this.applyVolume());
   }
 
   setVolume(volume: number): void {
@@ -180,7 +185,7 @@ export class AudioPlayer {
 
   /** Pushes this player's volume, scaled by the master, onto every element. */
   applyVolume(): void {
-    const effective = this.volume * masterVolume;
+    const effective = this.volume * audioMixer.gain(this.bus);
     for (const clip of this.clips.values()) {
       for (const element of clip.elements) {
         element.volume = Math.min(1, effective * (this.playbackGains.get(element) ?? 1));
@@ -204,20 +209,12 @@ export class AudioPlayer {
     element.currentTime = 0;
     const playbackGain = Math.min(1, Math.max(0, gain * (MEASURED_PEAK_TRIM[id] ?? 1)));
     this.playbackGains.set(element, playbackGain);
-    element.volume = Math.min(1, this.volume * masterVolume * playbackGain);
+    element.volume = Math.min(1, this.volume * audioMixer.gain(this.bus) * playbackGain);
     element.playbackRate = pitchJitter > 0 ? 1 + (Math.random() * 2 - 1) * pitchJitter : 1;
     clip.lastPlayedMs = performance.now();
-    reserveOneShot(element);
-    void element.play().catch((error: unknown) => {
-      releaseOneShot(element);
-      // Browsers reject playback until the page has seen a gesture. Nothing
-      // here plays before the player has clicked their way into a round, so a
-      // rejection means something else is wrong and is worth saying once.
-      if (!this.warned.has(id)) {
-        this.warned.add(id);
-        console.warn(`audio: ${id} did not play`, error);
-      }
-    });
+    const priority = priorityOf(id);
+    if (!reserveOneShot(element, this.bus, priority, categoryOf(id, this.bus))) return;
+    audioRuntime.play(element, priority === "critical");
   }
 
   /** Plays at most once every `intervalMs`, for continuous feedback like servos. */
@@ -231,9 +228,11 @@ export class AudioPlayer {
 
   dispose(): void {
     livePlayers.delete(this);
+    this.unsubscribeMixer();
     for (const clip of this.clips.values()) {
       for (const element of clip.elements) {
         releaseOneShot(element);
+        audioRuntime.forget(element);
         element.pause();
         element.removeAttribute("src");
       }
@@ -250,7 +249,7 @@ export class AudioPlayer {
     for (let i = 0; i < VOICES_PER_CLIP; i++) {
       const element = new Audio(`${this.baseUrl}assets/audio/sfx/${id}.mp3`);
       element.preload = "auto";
-      element.volume = this.volume * masterVolume;
+      element.volume = this.volume * audioMixer.gain(this.bus);
       this.playbackGains.set(element, 1);
       if (typeof element.addEventListener === "function") {
         element.addEventListener("ended", () => releaseOneShot(element));

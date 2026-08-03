@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "generate:audio": "node --env-file=../../.env --experimental-strip-types src/generate-audio.ts",
-    "normalize:audio": "node --experimental-strip-types src/normalize-audio.ts"
+    "normalize:audio": "node --experimental-strip-types src/normalize-audio.ts",
+    "ingest:supplied-audio": "node --experimental-strip-types src/ingest-supplied-audio.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

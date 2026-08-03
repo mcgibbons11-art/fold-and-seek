@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "sourceDirectory": "../sound effects",
+  "notice": "Creator labels are transcribed from supplied filenames only. No license or source URL accompanied these files. Every derivative remains in assets-source and is not eligible to ship until its license is verified.",
+  "sources": [
+    {
+      "id": "fabrication_metal",
+      "file": "arunangshubanerjee-subtle-metallic-sounds-from-fabrication-work-359575.mp3",
+      "durationSeconds": 4.632,
+      "sha256": "affa187545ba8627fb8679334e5195aceb0e8a007f4ab14796613cbb3648c0d2",
+      "creditedCreator": "arunangshubanerjee (unverified filename label)",
+      "title": "Subtle metallic sounds from fabrication work (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "gadget_lock",
+      "file": "daviddumaisaudio-steampunk-gadget-lock-and-unlock-188053.mp3",
+      "durationSeconds": 0.576,
+      "sha256": "02a99bedb37ddbbaf49a80a5c8e9a9b8be395caf3a207aacb2412cc005fad7c9",
+      "creditedCreator": "daviddumaisaudio (unverified filename label)",
+      "title": "Steampunk gadget lock and unlock (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "gadget_mechanical",
+      "file": "daviddumaisaudio-steampunk-mechanical-gadget-188052.mp3",
+      "durationSeconds": 1.272,
+      "sha256": "8a588c7dbdf1a2cc44860c07da045453cac306425afdaf2ba54cf91c3fe30ca1",
+      "creditedCreator": "daviddumaisaudio (unverified filename label)",
+      "title": "Steampunk mechanical gadget (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "gunshot",
+      "file": "dragon-studio-gunshot-511311.mp3",
+      "durationSeconds": 2.232,
+      "sha256": "500d6ec7ffa371ba4b379834b3314f8c7380b55d602b0fcc0dd3509a55b45692",
+      "creditedCreator": "Dragon Studio (unverified filename label)",
+      "title": "Gunshot (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "footsteps_long",
+      "file": "freesound_community-foot-steps-70603.mp3",
+      "durationSeconds": 32.328,
+      "sha256": "f34e4839ae5cbf8cbc50353be20ee1ba9c7741e59d7037dc31db7c63d37c363d",
+      "creditedCreator": "Freesound Community (specific creator not supplied)",
+      "title": "Foot steps (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "positive_chime",
+      "file": "freesound_community-good-6081.mp3",
+      "durationSeconds": 1.728,
+      "sha256": "be6cb7d870c84b0300edc7c7b5229ff09288e8e43876ad121e01fefe19fe1d10",
+      "creditedCreator": "Freesound Community (specific creator not supplied)",
+      "title": "Good (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "chamber_round",
+      "file": "freesound_community-gun-chamber-round-96258.mp3",
+      "durationSeconds": 0.72,
+      "sha256": "b0212ecb546cc6c749bd6f10b1b269071f34d4d9551709c88249a231950fa808",
+      "creditedCreator": "Freesound Community (specific creator not supplied)",
+      "title": "Gun chamber round (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "shutter_click",
+      "file": "kauasilbershlachparodes-chutter-click-494024.mp3",
+      "durationSeconds": 0.392,
+      "sha256": "9f5ea1ece0fc14a6031e13087b7e720a874d064c12c68fa4906e98bfbbf20e20",
+      "creditedCreator": "kauasilbershlachparodes (unverified filename label)",
+      "title": "Chutter click (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "clock_long",
+      "file": "spinopel-one-minute-mechanical-clock-ticking-sound-effect-253099.mp3",
+      "durationSeconds": 60.317,
+      "sha256": "cf2957772a26c55441d10c62b7d8a17c206cbfcda9307f36b36c1b3433212625",
+      "creditedCreator": "spinopel (unverified filename label)",
+      "title": "One minute mechanical clock ticking sound effect (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "mouse_click",
+      "file": "universfield-computer-mouse-click-02-383961.mp3",
+      "durationSeconds": 1.056,
+      "sha256": "e9fdb3ed918d112c06a6573fae13c236b18d7c6d2225ab917048e20851d60feb",
+      "creditedCreator": "Universfield (unverified filename label)",
+      "title": "Computer mouse click 02 (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "tiny_click",
+      "file": "u_u4pf5h7zip-click-345983.mp3",
+      "durationSeconds": 0.157,
+      "sha256": "40ca8e553766cfb98da497394490ecce19d498415460377fd58d8e44391ca6cd",
+      "creditedCreator": "u_u4pf5h7zip (unverified filename label)",
+      "title": "Click (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    },
+    {
+      "id": "splat",
+      "file": "xpmonster-splat-sounds-419584.mp3",
+      "durationSeconds": 2.208,
+      "sha256": "153cd806ccbdf9873e06598cac2a6abadaf54cb6df4e162810ef7a3db856992d",
+      "creditedCreator": "xpmonster (unverified filename label)",
+      "title": "Splat sounds (unverified filename title)",
+      "sourceUrl": null,
+      "license": { "status": "requires_verification", "name": null, "url": null }
+    }
+  ],
+  "derivatives": [
+    { "id": "supplied_forge_metal_impact", "sourceId": "fabrication_metal", "kind": "sfx", "startSeconds": 0, "durationSeconds": 1.2, "targetLufs": -23, "shipEligible": false },
+    { "id": "supplied_gadget_lock", "sourceId": "gadget_lock", "kind": "sfx", "startSeconds": 0, "durationSeconds": 0.55, "targetLufs": -23, "shipEligible": false },
+    { "id": "supplied_gadget_servo", "sourceId": "gadget_mechanical", "kind": "sfx", "startSeconds": 0, "durationSeconds": 1.2, "targetLufs": -26, "shipEligible": false },
+    { "id": "supplied_gun_transient", "sourceId": "gunshot", "kind": "sfx", "startSeconds": 0, "durationSeconds": 1.2, "targetLufs": -18, "shipEligible": false },
+    { "id": "supplied_ready_chime", "sourceId": "positive_chime", "kind": "sfx", "startSeconds": 0, "durationSeconds": 1.65, "targetLufs": -22, "shipEligible": false },
+    { "id": "supplied_chamber_cycle", "sourceId": "chamber_round", "kind": "sfx", "startSeconds": 0, "durationSeconds": 0.69, "targetLufs": -23, "shipEligible": false },
+    { "id": "supplied_shutter_click", "sourceId": "shutter_click", "kind": "sfx", "startSeconds": 0, "durationSeconds": 0.36, "targetLufs": -24, "shipEligible": false },
+    { "id": "supplied_ui_click", "sourceId": "tiny_click", "kind": "sfx", "startSeconds": 0, "durationSeconds": 0.13, "targetLufs": -24, "shipEligible": false },
+    { "id": "supplied_hit_splat", "sourceId": "splat", "kind": "sfx", "startSeconds": 0, "durationSeconds": 1.4, "targetLufs": -21, "shipEligible": false },
+    { "id": "supplied_footstep_a", "sourceId": "footsteps_long", "kind": "sfx", "startSeconds": 15.02, "durationSeconds": 0.7, "targetLufs": -27, "shipEligible": false },
+    { "id": "supplied_footstep_b", "sourceId": "footsteps_long", "kind": "sfx", "startSeconds": 17.9, "durationSeconds": 0.82, "targetLufs": -27, "shipEligible": false },
+    { "id": "supplied_footstep_c", "sourceId": "footsteps_long", "kind": "sfx", "startSeconds": 23.7, "durationSeconds": 0.94, "targetLufs": -27, "shipEligible": false },
+    { "id": "supplied_clock_landmark", "sourceId": "clock_long", "kind": "ambience", "startSeconds": 10, "durationSeconds": 8, "targetLufs": -30, "shipEligible": false }
+  ]
+}

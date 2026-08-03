@@ -3,7 +3,10 @@ import { DEFAULT_MATCH_SETTINGS, MatchPhase, type MatchSettings } from "@foldsee
 import * as THREE from "three/webgpu";
 
 import { getMusicEngine, musicSceneForPhase } from "../audio/music";
-import { AudioPlayer } from "../forge/AudioPlayer";
+import { SoundCaptionLedger, type SoundCaption } from "../audio/soundCaptions";
+import { SpatialAudioPlayer, getSpatialAudioRuntime } from "../audio/SpatialAudioPlayer";
+import { WorldAmbienceEmitters } from "../audio/WorldAmbienceEmitters";
+import { AudioPlayer, type SoundId } from "../forge/AudioPlayer";
 import { ForgeController } from "../forge/ForgeController";
 import { SHOP_FORGE_WORKSPACE } from "../world/ShopWorld";
 import {
@@ -14,10 +17,10 @@ import {
   type InspectorSystem,
 } from "../inspector";
 import { DEFAULT_LOOK_SENSITIVITY } from "../inspector/InspectorInput";
-import { INSPECTOR_RADIUS_M, type AABB } from "../inspector/navData";
+import { INSPECTOR_RADIUS_M, INSPECTOR_STEP_HEIGHT_M, surfaceAt, type AABB } from "../inspector/navData";
 import { MIMIC_NAV_DATA, NAV_DATA } from "../world/maps/nav";
 import { OFFICE_DOOR_NAME } from "../world/maps/props";
-import { CURIOSITY_SHOP_OBJECTS } from "../world/maps/registry";
+import { CURIOSITY_SHOP_OBJECTS, mapObject } from "../world/maps/registry";
 import { SECURITY_OFFICE_BOUNDS } from "../world/maps/zones";
 import { encodeDisguiseState } from "../mimic/poseWire";
 import type {
@@ -31,13 +34,14 @@ import type { InspectorGunView } from "../ui/rounds/InspectorHud";
 import { AmbienceController, domBedVoices } from "./AmbienceController";
 import { humanMimicSpawn } from "./botDisguises";
 import { DisguiseTheatre, TAUNT_PITCH_JITTER } from "./disguiseTheatre";
-import { FootstepDriver } from "./footsteps";
+import { FootstepDriver, RemoteInspectorFootsteps } from "./footsteps";
 import {
   CATCH_SOUND,
   CLOSE_PASS_SOUND,
   ESCAPE_SOUND,
   LOSE_SOUND,
   PHASE_SOUNDS,
+  REACTION_SOUNDS,
   ReactionTheatre,
   TAUNT_SOUND,
   WIN_SOUND,
@@ -73,6 +77,8 @@ export interface RoundEngineState {
   readonly hiderTraversal: "climbing" | "topout" | "airborne" | null;
   /** Inspector direction relative to the current camera, radians; private/local only. */
   readonly dangerBearingRad: number | null;
+  /** Semantic gameplay audio exposed visually when captions are enabled. */
+  readonly soundCaptions: readonly SoundCaption[];
 }
 
 /** Phases in which the authority accepts a pose from a Mimic (§5.8, override 2). */
@@ -222,6 +228,11 @@ export class RoundSession {
   private readonly theatre: DisguiseTheatre;
   private readonly reactions: ReactionTheatre;
   private readonly changed = new Signal<RoundEngineState>();
+  private readonly captions = new SoundCaptionLedger();
+  private readonly spatialRuntime = getSpatialAudioRuntime();
+  private readonly spatialAudio = this.spatialRuntime === null ? null : new SpatialAudioPlayer(this.spatialRuntime);
+  private readonly worldAmbience = this.spatialAudio === null ? null : new WorldAmbienceEmitters(this.spatialAudio);
+  private readonly listenerForward = new THREE.Vector3();
   private readonly subscriptions: Unsubscribe[] = [];
 
   private quality: QualitySettings;
@@ -255,6 +266,7 @@ export class RoundSession {
   private lastTickSecond = -1;
   /** Gun state last heard, for the raise and the shot. */
   private lastGunState: InspectorGunView["state"] = "idle";
+  private gunCycleTimer: ReturnType<typeof setTimeout> | null = null;
   /** Newest deception event already tallied, so only fresh points tick. */
   private lastDeceptionId = -1;
   private engine: RoundEngineState;
@@ -275,13 +287,20 @@ export class RoundSession {
     // getter rather than a position: the camera is swapped when the mode
     // changes, and a captured vector would leave the listener behind.
     const listener = (): THREE.Vector3 => this.camera.position;
-    this.theatre = new DisguiseTheatre(options.scene, options.quality, this.audio, listener);
-    this.reactions = new ReactionTheatre(options.scene, this.audio, listener);
+    // The Web Audio path owns world position. Distance-only DOM audio remains
+    // the fallback for browsers without it, never a second layer on top.
+    const worldFallback = this.spatialAudio === null ? this.audio : null;
+    this.theatre = new DisguiseTheatre(options.scene, options.quality, worldFallback, listener);
+    this.reactions = new ReactionTheatre(options.scene, worldFallback, listener);
+    void this.worldAmbience?.start().catch(() => {
+      // Web Audio can be absent in a constrained preview; the broad DOM beds
+      // remain the safe fallback and the round continues without a warning.
+    });
     options.spatial.setDisguiseBounds((objectId) => this.theatre.boundsOf(objectId));
     options.spatial.setOwnDisguiseBounds((objectId) => this.ownDisguiseBoundsOf(objectId));
 
     this.viewCamera = new THREE.PerspectiveCamera(SURVEY_FOV_DEG, 1, 0.01, 60);
-    this.engine = { cameraMode: "survey", forge: null, gun: IDLE_GUN, pointerLocked: false, hiderTraversal: null, dangerBearingRad: null };
+    this.engine = { cameraMode: "survey", forge: null, gun: IDLE_GUN, pointerLocked: false, hiderTraversal: null, dangerBearingRad: null, soundCaptions: [] };
 
     this.subscriptions.push(
       options.adapter.onEvent((event) => {
@@ -385,8 +404,17 @@ export class RoundSession {
         break;
     }
 
+    const camera = this.camera;
+    camera.getWorldDirection(this.listenerForward);
+    this.spatialRuntime?.setListener({
+      position: camera.position,
+      forward: this.listenerForward,
+      up: camera.up,
+    });
+
     this.stepOfficeDoor(dtMs, state);
 
+    this.captions.update(dtMs);
     this.publishPose(dtMs, state);
     this.publishPaint(dtMs, state);
     this.publishEngineState(dtMs, state);
@@ -438,6 +466,13 @@ export class RoundSession {
     this.audio.play(
       timer.secondsRemaining <= URGENT_TICK_SECONDS ? "countdown_tick_final" : "countdown_tick",
     );
+    if (timer.secondsRemaining <= URGENT_TICK_SECONDS) {
+      this.captions.push({
+        label: `${timer.secondsRemaining} seconds`,
+        importance: "critical",
+        durationMs: 900,
+      });
+    }
   }
 
   /**
@@ -499,6 +534,9 @@ export class RoundSession {
     this.theatre.dispose();
     this.reactions.dispose();
     this.ambience.dispose();
+    this.worldAmbience?.dispose();
+    if (this.gunCycleTimer !== null) clearTimeout(this.gunCycleTimer);
+    this.gunCycleTimer = null;
     // The score is deliberately left alone. It outlives the round — the menu
     // shares the one engine — and the shell decides what plays once there is no
     // round to ask, which is the only way a single writer owns it at a time.
@@ -536,17 +574,45 @@ export class RoundSession {
         // A hider's own disguise is drawn by their Forge rather than by the
         // theatre, so their own taunt has no body here and only the sound
         // reaches them.
-        if (!this.theatre.taunt(event.publicObjectId, event.tauntId, event.seed)) {
+        if (this.spatialAudio !== null) {
+          this.theatre.taunt(event.publicObjectId, event.tauntId, event.seed);
+          this.playAtObject(TAUNT_SOUND, event.publicObjectId, 0.85);
+        } else if (!this.theatre.taunt(event.publicObjectId, event.tauntId, event.seed)) {
           this.audio.play(TAUNT_SOUND, TAUNT_PITCH_JITTER);
         }
+        this.captionAtObject("Mechanical taunt", event.publicObjectId);
         break;
 
       case "innocent_reaction":
         this.reactions.play(event.objectId, event.reactionId);
+        this.playAtObject(REACTION_SOUNDS[event.reactionId], event.objectId, 0.9);
+        this.captionAtObject("Object reaction", event.objectId);
         break;
 
       case "accusation_resolved":
-        this.audio.play(event.correct ? CATCH_SOUND : WRONG_ACCUSATION_SOUND);
+        if (this.spatialAudio === null) {
+          this.audio.play(event.correct ? CATCH_SOUND : WRONG_ACCUSATION_SOUND);
+        } else {
+          const shooter = this.state().roster.find(
+            (player) => player.publicPlayerId === event.inspectorPublicId,
+          );
+          const remoteEye = shooter === undefined ? null : this.remoteInspectors.get(shooter.seatId)?.eye ?? null;
+          if (
+            event.inspectorPublicId !== this.state().self.publicPlayerId &&
+            remoteEye !== null
+          ) {
+            void this.spatialAudio.playAt("gun_fire", remoteEye, { gain: 0.72 });
+            window.setTimeout(() => {
+              if (this.spatialAudio !== null) void this.spatialAudio.playAt("panel_snap", remoteEye, { gain: 0.35 });
+            }, 110);
+          }
+          this.playAtObject(event.correct ? CATCH_SOUND : WRONG_ACCUSATION_SOUND, event.targetObjectId, 1);
+        }
+        this.captionAtObject(
+          event.correct ? "Mimic caught" : "Wrong accusation",
+          event.targetObjectId,
+          "critical",
+        );
         this.duckUnderStinger();
         // The recoil and the reticle belong to the Inspector who fired.
         if (event.inspectorPublicId === this.state().self.publicPlayerId) {
@@ -576,6 +642,7 @@ export class RoundSession {
         if (role === "mimic" || role === "inspector") {
           const won = event.winner === (role === "mimic" ? "mimics" : "inspectors");
           this.audio.play(won ? WIN_SOUND : LOSE_SOUND);
+          this.captions.push({ label: won ? "Round won" : "Round lost", importance: "critical" });
           this.duckUnderStinger();
         }
         break;
@@ -589,6 +656,47 @@ export class RoundSession {
   /** True when a named disguise is the one this player is wearing. */
   private ownsDisguise(publicObjectId: string): boolean {
     return this.state().self.ownDisguise?.publicObjectId === publicObjectId;
+  }
+
+  private captionAtObject(
+    label: string,
+    objectId: string,
+    importance: "gameplay" | "critical" = "gameplay",
+  ): void {
+    const centre = this.positionOfObject(objectId);
+    this.captions.push({
+      label,
+      importance,
+      bearingRad: centre === null ? null : this.bearingTo(centre),
+    });
+  }
+
+  private playAtObject(sound: SoundId, objectId: string, gain: number): void {
+    const position = this.positionOfObject(objectId);
+    if (position === null || this.spatialAudio === null) return;
+    void this.spatialAudio.playAt(sound, position, { gain, minimumGain: 0.04 });
+  }
+
+  private positionOfObject(objectId: string): THREE.Vector3 | null {
+    const bounds = this.theatre.boundsOf(objectId) ?? mapObject(objectId)?.focusBounds ?? null;
+    return bounds === null
+      ? null
+      : new THREE.Vector3(
+          (bounds.min.x + bounds.max.x) / 2,
+          (bounds.min.y + bounds.max.y) / 2,
+          (bounds.min.z + bounds.max.z) / 2,
+        );
+  }
+
+  private bearingTo(position: THREE.Vector3): number {
+    const forward = new THREE.Vector3();
+    this.camera.getWorldDirection(forward);
+    const cameraYaw = Math.atan2(forward.x, forward.z);
+    const sourceYaw = Math.atan2(
+      position.x - this.camera.position.x,
+      position.z - this.camera.position.z,
+    );
+    return Math.atan2(Math.sin(sourceYaw - cameraYaw), Math.cos(sourceYaw - cameraYaw));
   }
 
   // ------------------------------------------------------------------ phases
@@ -896,6 +1004,18 @@ export class RoundSession {
         seatId,
         this.options.quality.dynamicShadows,
       );
+      if (this.spatialAudio !== null) {
+        remote.attachFootsteps(
+          new RemoteInspectorFootsteps(this.spatialAudio, (event) => {
+            this.captions.push({
+              label: event.text,
+              importance: "gameplay",
+              bearingRad: this.bearingTo(new THREE.Vector3(event.position.x, event.position.y, event.position.z)),
+            });
+          }),
+          (x, y, z) => surfaceAt(NAV_DATA.floors, x, z, y + INSPECTOR_STEP_HEIGHT_M)?.id ?? null,
+        );
+      }
       this.remoteInspectors.set(seatId, remote);
     }
     remote.push(sample);
@@ -974,6 +1094,12 @@ export class RoundSession {
     if (state === "aiming" && previous === "idle") this.audio.play("gun_aim");
     if (state === "pending") {
       this.audio.play("gun_fire");
+      this.captions.push({ label: "Warrant fired", importance: "critical" });
+      if (this.gunCycleTimer !== null) clearTimeout(this.gunCycleTimer);
+      this.gunCycleTimer = setTimeout(() => {
+        this.gunCycleTimer = null;
+        this.audio.play("panel_snap", 0.03, 0.4);
+      }, 110);
       this.duckUnderStinger();
     }
   }
@@ -1149,6 +1275,9 @@ export class RoundSession {
       this.pointerLocked ? "1" : "0",
       hiderTraversal ?? "-",
       dangerBearingRad === null ? "-" : Math.round(dangerBearingRad * 20),
+      this.captions.current
+        .map((caption) => `${caption.id}:${Math.ceil(caption.remainingMs / 100)}`)
+        .join(","),
     ].join("|");
     if (signature === this.engineSignature) return;
     this.engineSignature = signature;
@@ -1159,6 +1288,7 @@ export class RoundSession {
       pointerLocked: this.pointerLocked,
       hiderTraversal,
       dangerBearingRad,
+      soundCaptions: this.captions.current,
     };
     this.changed.emit(this.engine);
   }

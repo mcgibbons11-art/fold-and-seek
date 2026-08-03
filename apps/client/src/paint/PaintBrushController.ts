@@ -31,6 +31,8 @@ export interface PaintBrushOptions {
    * the Forge's history, and these two are the bounds that entry covers.
    */
   readonly onStrokeStart?: () => void;
+  /** Cursor velocity while the gesture is live, for continuous spray feedback. */
+  readonly onStrokeUpdate?: (speedPxPerSecond: number) => void;
   readonly onStrokeEnd?: () => void;
   /** Returns true when something else consumed the press (the eyedropper). */
   readonly interceptPointerDown?: (pointer: THREE.Vector2, event: PointerEvent) => boolean;
@@ -62,6 +64,9 @@ export class PaintBrushController {
   private pendingClientX = 0;
   private pendingClientY = 0;
   private hasPendingSample = false;
+  private lastPointerX = 0;
+  private lastPointerY = 0;
+  private lastPointerAtMs = 0;
   private readonly cursor: HTMLDivElement | null;
 
   constructor(options: PaintBrushOptions) {
@@ -142,14 +147,25 @@ export class PaintBrushController {
       if (hit === null) return;
       event.preventDefault();
       this.pointerId = event.pointerId;
+      this.lastPointerX = event.clientX;
+      this.lastPointerY = event.clientY;
+      this.lastPointerAtMs = performance.now();
       this.options.canvas.setPointerCapture(event.pointerId);
       this.hasPendingSample = false;
       this.options.onStrokeStart?.();
+      this.options.onStrokeUpdate?.(0);
       this.emit(hit.target, hit.u, hit.v, false);
     };
 
     const onPointerMove = (event: PointerEvent): void => {
       if (event.pointerId !== this.pointerId) return;
+      const nowMs = performance.now();
+      const elapsedSeconds = Math.max((nowMs - this.lastPointerAtMs) / 1_000, 1 / 240);
+      const speed = Math.hypot(event.clientX - this.lastPointerX, event.clientY - this.lastPointerY) / elapsedSeconds;
+      this.lastPointerX = event.clientX;
+      this.lastPointerY = event.clientY;
+      this.lastPointerAtMs = nowMs;
+      this.options.onStrokeUpdate?.(speed);
       // The event itself is the browser's newest pointer position. Replaying
       // coalesced history here made one frame perform dozens of raycasts and
       // software atlas stamps, which is exactly the lag a spray tool must avoid.
@@ -166,6 +182,7 @@ export class PaintBrushController {
         this.options.canvas.releasePointerCapture(event.pointerId);
       }
       this.pointerId = -1;
+      this.options.onStrokeUpdate?.(0);
       this.options.onStrokeEnd?.();
     };
 
@@ -202,6 +219,7 @@ export class PaintBrushController {
       this.options.canvas.releasePointerCapture(this.pointerId);
     }
     this.pointerId = -1;
+    if (wasPainting) this.options.onStrokeUpdate?.(0);
     this.hideCursor();
     this.detach?.();
     this.detach = null;

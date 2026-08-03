@@ -3,6 +3,7 @@ import * as THREE from "three/webgpu";
 import { GunView, InspectorBody } from "../inspector";
 import { INSPECTOR_EYE_HEIGHT_M, WORLD_SCALE } from "../inspector/navData";
 import type { InspectorCameraSample } from "../networking/NetworkAdapter";
+import type { RemoteInspectorFootsteps } from "./footsteps";
 
 /** Sparse relay samples should catch up briskly without snapping on arrival. */
 const POSITION_RESPONSE_PER_SECOND = 18;
@@ -32,6 +33,8 @@ export class RemoteInspectorPresentation {
   private speedMps = 0;
   private visible = true;
   private initialized = false;
+  private footsteps: RemoteInspectorFootsteps | null = null;
+  private surfaceAt: ((x: number, y: number, z: number) => string | null) | null = null;
 
   get eye(): Readonly<THREE.Vector3> | null {
     return this.initialized ? this.renderedEye : null;
@@ -79,6 +82,16 @@ export class RemoteInspectorPresentation {
     if (visible === this.visible) return;
     this.visible = visible;
     this.body.setVisible(visible);
+    if (!visible) this.footsteps?.reset();
+  }
+
+  /** Adds positional steps to this remote seat; never call this on the local body. */
+  attachFootsteps(
+    footsteps: RemoteInspectorFootsteps,
+    surfaceAt: (x: number, y: number, z: number) => string | null,
+  ): void {
+    this.footsteps = footsteps;
+    this.surfaceAt = surfaceAt;
   }
 
   update(dtMs: number): void {
@@ -108,6 +121,16 @@ export class RemoteInspectorPresentation {
       pitch: this.renderedPitch,
       aimAmount: 0,
     });
+    this.footsteps?.update(dtMs, {
+      position: this.renderedEye,
+      speedMps: this.speedMps,
+      surfaceId: this.surfaceAt?.(
+        this.renderedEye.x,
+        this.renderedEye.y - INSPECTOR_EYE_HEIGHT_M,
+        this.renderedEye.z,
+      ) ?? null,
+      visible: this.visible,
+    });
 
     // A stopped sender has no new distance interval to reduce the measured
     // speed, so decay it locally and let the gait settle instead of moonwalking.
@@ -115,6 +138,7 @@ export class RemoteInspectorPresentation {
   }
 
   dispose(): void {
+    this.footsteps?.reset();
     this.gun.dispose();
     this.body.dispose();
     this.root.removeFromParent();

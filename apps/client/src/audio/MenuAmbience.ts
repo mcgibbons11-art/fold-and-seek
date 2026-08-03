@@ -1,4 +1,5 @@
-import { AudioPlayer, getMasterVolume } from "../forge/AudioPlayer";
+import { AudioPlayer } from "../forge/AudioPlayer";
+import { getAudioBusGain } from "./AudioMixer";
 import { domBedVoices, type BedId, type BedVoice, type BedVoiceFactory } from "../gameplay/AmbienceController";
 
 /**
@@ -59,7 +60,7 @@ export class MenuAmbience {
 
   constructor(createVoice: BedVoiceFactory = domBedVoices()) {
     this.createVoice = createVoice;
-    this.chimes = new AudioPlayer(undefined, CHIME_VOLUME);
+    this.chimes = new AudioPlayer(undefined, CHIME_VOLUME, "ui");
   }
 
   /** True while the beds are open, which is what a test can see. */
@@ -111,7 +112,7 @@ export class MenuAmbience {
     const step = dtMs / (this.fadingOut ? FADE_OUT_MS : FADE_IN_MS);
     this.level = Math.min(1, Math.max(0, this.level + (this.fadingOut ? -step : step)));
 
-    const master = getMasterVolume();
+    const master = getAudioBusGain("ambience");
     for (const bed of this.beds) {
       bed.voice.setGain(bed.ceiling * this.level * master);
       bed.voice.update(dtMs);

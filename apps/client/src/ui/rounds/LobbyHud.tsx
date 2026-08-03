@@ -1,7 +1,8 @@
 import { inspectorCountFor, type MatchSettingsPatch } from "@foldseek/game-sim";
 import type { MatchSettings } from "@foldseek/shared";
-import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from "react";
 
+import { AudioPlayer } from "../../forge/AudioPlayer";
 import type { RoundViewState } from "../../gameplay/roundView";
 import {
   BRASS,
@@ -197,6 +198,8 @@ export function LobbyHud({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const narrowLobby = useNarrowLobby();
   const [briefingOpen, setBriefingOpen] = useState(false);
+  const lobbyAudio = useRef<AudioPlayer | null>(null);
+  const previousRoster = useRef<ReadonlyMap<string, boolean> | null>(null);
   // A remote player's command has to visit the host before the authoritative
   // ready flag comes back. Keep the button tactile during that round trip: the
   // old control looked as though it had missed the click for every non-host.
@@ -212,6 +215,29 @@ export function LobbyHud({
   const roomIsFull = state.roster.length >= bots.maxSeats;
   const blockedCopy = startGate.reason === null ? null : (START_BLOCKED_COPY[startGate.reason] ?? null);
   const canEditSettings = state.self.isHost && onSettingsChange !== undefined;
+
+  useEffect(() => {
+    lobbyAudio.current = new AudioPlayer(undefined, 0.45, "ui");
+    return () => lobbyAudio.current?.dispose();
+  }, []);
+
+  useEffect(() => {
+    const next = new Map(state.roster.map((player) => [player.seatId, player.ready]));
+    const previous = previousRoster.current;
+    previousRoster.current = next;
+    if (previous === null) return;
+
+    const departed = [...previous.keys()].some((id) => !next.has(id));
+    const newlyReady = state.roster.filter(
+      (player) => player.ready && previous.get(player.seatId) === false,
+    );
+    const wasStartable = previous.size >= 2 && [...previous.values()].every(Boolean);
+    const isStartable = next.size >= 2 && [...next.values()].every(Boolean);
+
+    if (departed) lobbyAudio.current?.play("ui_back");
+    if (!wasStartable && isStartable) lobbyAudio.current?.play("ui_confirm");
+    else if (newlyReady.length > 0) lobbyAudio.current?.play("rematch_tick", 0.03);
+  }, [state.roster]);
 
   useEffect(() => {
     if (readyIntent === state.self.ready) setReadyIntent(null);

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { MenuAmbience } from "../audio/MenuAmbience";
+import { installAudioRuntime } from "../audio/AudioRuntime";
 import { getMusicEngine } from "../audio/music";
 import { installUiSounds } from "../audio/uiSounds";
 import { GameHost, type RoundLoadProgress } from "../engine/GameHost";
@@ -394,6 +395,7 @@ export function App(): ReactElement {
   // the document rather than in the components, so every panel the game grows
   // later is audible without being wired for it.
   useEffect(() => installUiSounds(), []);
+  useEffect(() => installAudioRuntime(), []);
 
   const menuAmbience = useMemo(() => new MenuAmbience(), []);
   useEffect(() => () => {

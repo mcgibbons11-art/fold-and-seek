@@ -29,6 +29,9 @@ export interface PaintToolDeps {
   /** Everything the eyedropper may sample. Defaults to the Mimic alone. */
   readonly getPickTargets?: () => readonly THREE.Object3D[];
   readonly onStroke?: (stroke: PaintStroke) => void;
+  readonly onStrokeStart?: () => void;
+  readonly onStrokeUpdate?: (speedPxPerSecond: number) => void;
+  readonly onStrokeEnd?: () => void;
   /**
    * The eyedropper fired, and whether it found anything. Both routes to a
    * sample — the armed click the brush intercepts and the direct `sampleAt` —
@@ -145,10 +148,13 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
     },
     onStrokeStart: () => {
       layer.beginStrokeBatch();
+      deps.onStrokeStart?.();
     },
+    onStrokeUpdate: deps.onStrokeUpdate,
     onStrokeEnd: () => {
       const batch = layer.endStrokeBatch();
       if (batch !== null) deps.onStrokeBatch?.(batch);
+      deps.onStrokeEnd?.();
     },
   });
 

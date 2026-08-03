@@ -2,6 +2,7 @@ import { Vector3 as CoreVector3 } from "three";
 import * as THREE from "three/webgpu";
 
 import { DisposalBag } from "../engine/DisposalBag";
+import { LoopingSoundVoice } from "../audio/LoopingSoundVoice";
 import type { AnchorState } from "../mimic/disguiseState";
 import {
   applyDisguiseStateToPose,
@@ -472,14 +473,7 @@ export const TEST_ROOM_WORKSPACE: ForgeWorkspace = {
   maxZ: 4,
 };
 
-const SERVO_INTERVAL_MS = 130;
-
-/**
- * How often a drag retriggers the brush. The clip is half a second of
- * continuous stroke, so retriggering inside its own length is what makes a
- * held drag sound sustained rather than repeated.
- */
-const PAINT_STROKE_INTERVAL_MS = 320;
+const MANIPULATION_AUDIO_IDLE_MS = 110;
 
 const RAD_TO_DEG = 180 / Math.PI;
 
@@ -600,6 +594,9 @@ export class ForgeController {
   private readonly canvas: HTMLCanvasElement;
   private readonly bag = new DisposalBag();
   private readonly audio = new AudioPlayer();
+  private readonly sprayAudio = new LoopingSoundVoice("paint_stroke", { volume: 0.32 });
+  private readonly manipulationAudio = new LoopingSoundVoice("servo_move", { volume: 0.24 });
+  private manipulationAudioTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly mimic = new MimicVisual();
   private readonly handleGroup = new THREE.Object3D();
   private readonly handles: readonly Handle[];
@@ -836,14 +833,16 @@ export class ForgeController {
       setCastShadow: (enabled) => {
         this.mimic.setCastShadow(enabled);
       },
-      // The brush is heard while it is being dragged rather than when the drag
-      // ends, so it is throttled off the stamps rather than played per stamp:
-      // a stroke lays down a stamp every few pixels and one sound each would be
-      // a buzz. `paint_stroke` is a continuous texture and is mixed to sit under
-      // everything, so a long drag reads as one sustained stroke.
-      onStroke: () => {
-        this.audio.playThrottled("paint_stroke", PAINT_STROKE_INTERVAL_MS, 0.06);
+      onStrokeStart: () => {
+        const flow = this.paintTool?.getState().opacity ?? 1;
+        this.sprayAudio.start(0.28 + flow * 0.35, 0.96);
       },
+      onStrokeUpdate: (speedPxPerSecond) => {
+        const motion = Math.min(1, speedPxPerSecond / 1_100);
+        const flow = this.paintTool?.getState().opacity ?? 1;
+        this.sprayAudio.update((0.22 + motion * 0.5) * (0.4 + flow * 0.6), 0.94 + motion * 0.2);
+      },
+      onStrokeEnd: () => this.sprayAudio.stop(),
       onSample: (picked) => {
         this.audio.play(picked ? "eyedropper_pick" : "ui_deny");
       },
@@ -1448,6 +1447,9 @@ export class ForgeController {
     // Before the Mimic goes: the binder hands each part its own material back,
     // and those belong to the Mimic's cache.
     this.paintTool.dispose();
+    this.sprayAudio.dispose();
+    this.stopManipulationAudio();
+    this.manipulationAudio.dispose();
     this.mimic.dispose();
     this.handleGroup.removeFromParent();
     this.handleGroup.clear();
@@ -1576,7 +1578,7 @@ export class ForgeController {
     this.status = mirror
       ? "Mirror on: limb posing, shaping, panels, materials, and paint repeat on the other side."
       : "Mirror off.";
-    this.audio.play("ui_click");
+    this.audio.play(mirror ? "ui_confirm" : "ui_back");
     this.emit();
   }
 
@@ -1708,11 +1710,12 @@ export class ForgeController {
       this.pose.segments[edit.mirrorSlot] = cloneSegmentForm(form);
     }
     this.pendingValueRefresh = "solve";
-    this.audio.playThrottled("servo_move", SERVO_INTERVAL_MS, 0.08);
+    this.startManipulationAudio();
   }
 
   /** Closes any open continuous edit and records it as one undoable command. */
   commitEdits(): void {
+    this.stopManipulationAudio();
     // A slider release must serialize the value the player can see, even when
     // it arrives before the next animation frame has had a chance to solve it.
     this.flushPendingValueRefresh();
@@ -1782,6 +1785,26 @@ export class ForgeController {
         this.emit();
       }
     }
+  }
+
+  private startManipulationAudio(intensity = 0.55): void {
+    const amount = Math.min(1, Math.max(0, intensity));
+    if (this.manipulationAudio.active) {
+      this.manipulationAudio.update(0.3 + amount * 0.45, 0.9 + amount * 0.18);
+    } else {
+      this.manipulationAudio.start(0.3 + amount * 0.45, 0.9 + amount * 0.18);
+    }
+    if (this.manipulationAudioTimer !== null) clearTimeout(this.manipulationAudioTimer);
+    this.manipulationAudioTimer = setTimeout(() => {
+      this.manipulationAudioTimer = null;
+      this.manipulationAudio.stop();
+    }, MANIPULATION_AUDIO_IDLE_MS);
+  }
+
+  private stopManipulationAudio(): void {
+    if (this.manipulationAudioTimer !== null) clearTimeout(this.manipulationAudioTimer);
+    this.manipulationAudioTimer = null;
+    this.manipulationAudio.stop();
   }
 
   // --- Panels --------------------------------------------------------------
@@ -1905,7 +1928,7 @@ export class ForgeController {
     if (this.pendingValueRefresh === "none") {
       this.pendingValueRefresh = "refresh";
     }
-    this.audio.playThrottled("servo_move", SERVO_INTERVAL_MS, 0.08);
+    this.startManipulationAudio();
   }
 
   // --- Material ------------------------------------------------------------
@@ -1983,6 +2006,7 @@ export class ForgeController {
     this.commitEdits();
     const command = this.commands.undo(this.state);
     if (command === null) {
+      this.audio.play("ui_deny");
       return;
     }
     if (command.label.startsWith("arrangement ")) {
@@ -1990,7 +2014,7 @@ export class ForgeController {
       if (previous !== undefined) this.arrangementIndex = STARTER_ARRANGEMENT_IDS.indexOf(previous);
     }
     this.status = `Undid ${command.label}.`;
-    this.audio.play("ui_click");
+    this.audio.play("ui_back");
     this.reloadFromState();
   }
 
@@ -1998,6 +2022,7 @@ export class ForgeController {
     this.commitEdits();
     const command = this.commands.redo(this.state);
     if (command === null) {
+      this.audio.play("ui_deny");
       return;
     }
     if (command.label.startsWith("arrangement ")) {
@@ -2008,7 +2033,7 @@ export class ForgeController {
       if (index >= 0) this.arrangementIndex = index;
     }
     this.status = `Redid ${command.label}.`;
-    this.audio.play("ui_click");
+    this.audio.play("ui_confirm");
     this.reloadFromState();
   }
 
@@ -2140,6 +2165,7 @@ export class ForgeController {
     capturePoseToDisguiseState(this.pose, this.state);
     const errors = validateDisguiseState(this.state);
     if (errors.length > 0) {
+      this.audio.play("ui_deny");
       this.status = `Cannot lock: ${errors[0] ?? "the disguise is not legal"}.`;
       this.emit();
       return;
@@ -2177,7 +2203,7 @@ export class ForgeController {
     this.layoutAnchorMarkers();
     this.mimic.setSocketMarkersVisible(this.mode === "panels");
     this.mimic.setLocked(false);
-    this.audio.play("ui_click");
+    this.audio.play("wallstick_release");
     this.status = status;
     this.emit();
   }
@@ -2898,7 +2924,7 @@ export class ForgeController {
 
     this.reachPanelTo(socketId, this.panelDragTarget);
     this.layoutPanelTipHandles();
-    this.audio.playThrottled("servo_move", SERVO_INTERVAL_MS, 0.08);
+    this.startManipulationAudio();
   }
 
   /** Closes a panel-tip drag, recording the panel move and any seal as one edit. */
@@ -3710,7 +3736,7 @@ export class ForgeController {
     // walk the root further than the pointer asked for. Every drag pays, not
     // only the pelvis: whatever moved the root spent the same budget.
     this.spendCreepBudget(rootX, rootY, rootZ);
-    this.audio.playThrottled("servo_move", SERVO_INTERVAL_MS, 0.1);
+    this.startManipulationAudio(0.75);
   }
 
   /**

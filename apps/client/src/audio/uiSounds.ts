@@ -39,6 +39,7 @@ const HOVER_THROTTLE_MS = 90;
 const UI_VOLUME = 0.5;
 
 function soundFor(element: Element, event: "hover" | "press"): SoundId | null {
+  if (element.closest('[data-sound-scope="semantic"]') !== null) return null;
   const named = element.getAttribute("data-sound");
   if (named === "none") return null;
   if (event === "hover") return "ui_hover";
@@ -73,7 +74,7 @@ function isDisabled(element: Element): boolean {
  * this in an effect can hand it straight back.
  */
 export function installUiSounds(target: Document = document): () => void {
-  const audio = new AudioPlayer(undefined, UI_VOLUME);
+  const audio = new AudioPlayer(undefined, UI_VOLUME, "ui");
   let hovered: Element | null = null;
   let lastHoverMs = 0;
 

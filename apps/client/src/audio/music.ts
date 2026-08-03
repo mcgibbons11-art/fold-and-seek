@@ -1,7 +1,8 @@
 import type { WatchedLevel } from "@foldseek/game-sim";
 import { MatchPhase } from "@foldseek/shared";
 
-import { getMasterVolume } from "../forge/AudioPlayer";
+import { getAudioBusGain } from "./AudioMixer";
+import { audioRuntime } from "./AudioRuntime";
 
 /**
  * The score, synthesised rather than recorded.
@@ -352,7 +353,7 @@ export class MusicEngine {
       this.nextStepTime += stepSeconds;
     }
 
-    const level = MUSIC_LEVEL * getMasterVolume();
+    const level = MUSIC_LEVEL * getAudioBusGain("music");
     if (Math.abs(level - this.appliedLevel) > 1e-4) {
       this.appliedLevel = level;
       this.sink.setLevel(level, now);
@@ -372,8 +373,8 @@ export class MusicEngine {
     this.stepIndex = 0;
     this.nextStepTime = now + SWITCH_LEAD_SECONDS;
     this.sink.duck(SWITCH_DUCK_STRENGTH, now);
-    this.sink.setLevel(MUSIC_LEVEL * getMasterVolume(), now);
-    this.appliedLevel = MUSIC_LEVEL * getMasterVolume();
+    this.sink.setLevel(MUSIC_LEVEL * getAudioBusGain("music"), now);
+    this.appliedLevel = MUSIC_LEVEL * getAudioBusGain("music");
   }
 
   private step(index: number, at: number, scene: Scene, stepSeconds: number): void {
@@ -446,8 +447,6 @@ const DUCK_DEPTH = 0.55;
 const DUCK_ATTACK_SECONDS = 0.03;
 const DUCK_RELEASE_SECONDS = 0.45;
 const LEVEL_GLIDE_SECONDS = 0.05;
-/** How often a suspended device is asked to resume, in seconds. */
-const RESUME_INTERVAL_SECONDS = 1;
 const NOISE_SECONDS = 0.3;
 
 class WebAudioMusicSink implements MusicSink {
@@ -458,10 +457,10 @@ class WebAudioMusicSink implements MusicSink {
   private readonly delay: DelayNode;
   private readonly send: GainNode;
   private noise: AudioBuffer | null = null;
-  private lastResumeAttempt = 0;
 
   constructor(context: AudioContext) {
     this.context = context;
+    audioRuntime.registerContext(context);
     this.bus = context.createGain();
     this.ducker = context.createGain();
     this.level = context.createGain();
@@ -486,16 +485,6 @@ class WebAudioMusicSink implements MusicSink {
 
   now(): number | null {
     if (this.context.state === "running") return this.context.currentTime;
-    // Browsers hold the device suspended until the page has seen a gesture, and
-    // nothing else would ever ask again. Asking once a second recovers the
-    // score whenever the player finally touches something.
-    const elapsed = this.context.currentTime - this.lastResumeAttempt;
-    if (this.lastResumeAttempt === 0 || elapsed > RESUME_INTERVAL_SECONDS) {
-      this.lastResumeAttempt = this.context.currentTime;
-      void this.context.resume().catch(() => {
-        // Still no gesture. The next tick asks again.
-      });
-    }
     return null;
   }
 

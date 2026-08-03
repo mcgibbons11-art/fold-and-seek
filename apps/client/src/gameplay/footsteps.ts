@@ -1,4 +1,5 @@
 import type { AudioPlayer, SoundId } from "../forge/AudioPlayer";
+import type { AudioPoint } from "../audio/SpatialAudioPlayer";
 import { WORLD_SCALE } from "../inspector/navData";
 
 /**
@@ -25,6 +26,81 @@ const FOOTSTEP_VARIATIONS: Readonly<Record<FootstepMaterial, readonly SoundId[]>
   metal: ["footstep_metal", "footstep_metal_2", "footstep_metal_3"],
   glass: ["footstep_glass", "footstep_glass_2", "footstep_glass_3"],
 };
+
+export interface RemoteFootstepEvent {
+  readonly kind: "footstep";
+  readonly position: AudioPoint;
+  readonly material: FootstepMaterial;
+  readonly text: string;
+}
+
+export interface RemoteFootstepSample {
+  readonly position: AudioPoint;
+  readonly speedMps: number;
+  readonly surfaceId: string | null;
+  readonly visible?: boolean;
+}
+
+export interface SpatialFootstepSink {
+  playAt(
+    id: SoundId,
+    position: AudioPoint,
+    options?: { readonly gain?: number; readonly pitch?: number; readonly minimumGain?: number },
+  ): unknown;
+}
+
+/**
+ * Audible presentation for another Inspector. It consumes the interpolated
+ * render position rather than sparse network deltas, so its cadence and source
+ * move with the body the player actually sees. Local movement must continue to
+ * use `FootstepDriver`; constructing this only for remote seats prevents doubles.
+ */
+export class RemoteInspectorFootsteps {
+  private sinceStepM = 0;
+  private nextVariation: Record<FootstepMaterial, number> = { wood: 0, rug: 0, metal: 0, glass: 0 };
+
+  constructor(
+    private readonly audio: SpatialFootstepSink,
+    private readonly onEvent?: (event: RemoteFootstepEvent) => void,
+  ) {}
+
+  update(dtMs: number, sample: RemoteFootstepSample): void {
+    const speed = Number.isFinite(sample.speedMps) ? Math.max(0, sample.speedMps) : 0;
+    if (sample.visible === false || speed < MIN_SPEED_FACTOR * WORLD_SCALE.playerHeight) {
+      // Drop partial travel on a stop: a remote body never emits a delayed step
+      // after standing still, and therefore settles within one stride.
+      this.sinceStepM = 0;
+      return;
+    }
+    const dtSeconds = Math.min(Math.max(dtMs, 0), 100) / 1_000;
+    this.sinceStepM += speed * dtSeconds;
+    const strideM = STRIDE_FACTOR * WORLD_SCALE.playerHeight;
+    if (this.sinceStepM < strideM) return;
+    this.sinceStepM %= strideM;
+
+    const material = footstepMaterial(sample.surfaceId);
+    const variations = FOOTSTEP_VARIATIONS[material];
+    const index = this.nextVariation[material];
+    this.nextVariation[material] = (index + 1) % variations.length;
+    const clip = variations[index];
+    if (clip === undefined) return;
+    this.audio.playAt(clip, sample.position, {
+      gain: 0.72,
+      pitch: 1 + (((index % 3) - 1) * FOOTSTEP_PITCH_JITTER) / 2,
+      minimumGain: 0.035,
+    });
+    this.onEvent?.({
+      kind: "footstep",
+      position: { ...sample.position },
+      material,
+      text: `${material} footsteps`,
+    });
+  }
+
+  reset(): void {
+    this.sinceStepM = 0;
+  }
+}
 
 /**
  * Surfaces that are not the bare boards. The map publishes walkable ledges by
@@ -112,6 +188,7 @@ export class FootstepDriver {
   private lastY = 0;
   private airborneMs = 0;
   private wasClimbing = false;
+  private climbPeakY = 0;
   private sinceClimbGrabMs = 0;
   private sinceCreepMs = 0;
   private nextVariation: Record<FootstepMaterial, number> = {
@@ -141,7 +218,15 @@ export class FootstepDriver {
       this.sinceStepM = 0;
       return;
     }
-    if (this.wasClimbing) this.wasClimbing = false;
+    if (this.wasClimbing) {
+      this.wasClimbing = false;
+      this.audio.play("wallstick_release", 0.04);
+      // Reaching a supported ledge is a top-out, not a fall. Give it one
+      // positive settle here; `stepAir` sees `wasGrounded` and cannot double it.
+      if (motion.grounded && motion.position.y >= this.climbPeakY - WORLD_SCALE.stepHeight) {
+        this.audio.play("land_soft", 0.04);
+      }
+    }
 
     this.stepAir(dtMs, motion);
 
@@ -220,10 +305,13 @@ export class FootstepDriver {
   private stepClimb(dtMs: number, motion: MotionSample): void {
     if (!this.wasClimbing) {
       this.wasClimbing = true;
+      this.climbPeakY = motion.position.y;
       this.sinceClimbGrabMs = 0;
+      this.audio.play("wallstick_attach", 0.04);
       this.grab();
       return;
     }
+    this.climbPeakY = Math.max(this.climbPeakY, motion.position.y);
     if (motion.climbState?.link.kind !== "ladder") return;
     this.sinceClimbGrabMs += dtMs;
     if (this.sinceClimbGrabMs < LADDER_GRAB_INTERVAL_MS) return;

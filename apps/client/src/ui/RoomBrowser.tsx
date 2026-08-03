@@ -180,9 +180,11 @@ export function RoomBrowser({
   const [customOpen, setCustomOpen] = useState(false);
   const requestAudio = useRef<AudioPlayer | null>(null);
   const seenRequests = useRef(new Set<string>());
+  const previousCurrentCode = useRef(currentCode);
+  const previousNotice = useRef(notice);
 
   useEffect(() => {
-    requestAudio.current = new AudioPlayer();
+    requestAudio.current = new AudioPlayer(undefined, 0.5, "ui");
     return () => requestAudio.current?.dispose();
   }, []);
 
@@ -193,6 +195,19 @@ export function RoomBrowser({
       requestAudio.current?.play("ui_confirm");
     }
   }, [pendingRequests]);
+
+  useEffect(() => {
+    if (previousCurrentCode.current === null && currentCode !== null) {
+      requestAudio.current?.play("ui_confirm");
+    }
+    previousCurrentCode.current = currentCode;
+  }, [currentCode]);
+
+  useEffect(() => {
+    if (notice === null || notice === previousNotice.current) return;
+    requestAudio.current?.play(/declin|expir|cancel|fail|unavailable/i.test(notice) ? "ui_deny" : "ui_confirm");
+    previousNotice.current = notice;
+  }, [notice]);
 
   useEffect(() => {
     if (pendingRequests.length === 0 && outgoingRequest === null) return undefined;
@@ -397,7 +412,11 @@ export function RoomBrowser({
                               type="button"
                               className={PRESS_CLASS}
                               style={{ ...primaryButtonStyle, flex: 1, padding: "8px 12px" }}
-                              onClick={() => onAcceptRequest?.(request.id)}
+                              onClick={() => {
+                                requestAudio.current?.play("ui_confirm");
+                                onAcceptRequest?.(request.id);
+                              }}
+                              data-sound="none"
                             >
                               Accept player
                             </button>
@@ -405,7 +424,11 @@ export function RoomBrowser({
                               type="button"
                               className={PRESS_CLASS}
                               style={{ ...smallButtonStyle, flex: 1 }}
-                              onClick={() => onDeclineRequest?.(request.id)}
+                              onClick={() => {
+                                requestAudio.current?.play("ui_back");
+                                onDeclineRequest?.(request.id);
+                              }}
+                              data-sound="none"
                             >
                               Not now
                             </button>
@@ -591,10 +614,16 @@ export function RoomBrowser({
             <span style={countStyle}>{secondsLeft(pendingRequests[0].expiresAt)}</span>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 7, marginTop: 10 }}>
-            <button type="button" className={PRESS_CLASS} style={{ ...primaryButtonStyle, padding: "7px 9px" }} onClick={() => onAcceptRequest?.(pendingRequests[0]?.id ?? "")}>
+            <button type="button" data-sound="none" className={PRESS_CLASS} style={{ ...primaryButtonStyle, padding: "7px 9px" }} onClick={() => {
+              requestAudio.current?.play("ui_confirm");
+              onAcceptRequest?.(pendingRequests[0]?.id ?? "");
+            }}>
               Accept
             </button>
-            <button type="button" className={PRESS_CLASS} style={{ ...smallButtonStyle, padding: "7px 9px" }} onClick={() => onDeclineRequest?.(pendingRequests[0]?.id ?? "")}>
+            <button type="button" data-sound="none" className={PRESS_CLASS} style={{ ...smallButtonStyle, padding: "7px 9px" }} onClick={() => {
+              requestAudio.current?.play("ui_back");
+              onDeclineRequest?.(pendingRequests[0]?.id ?? "");
+            }}>
               Decline
             </button>
           </div>

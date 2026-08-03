@@ -1,3 +1,5 @@
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -23,6 +25,87 @@ import { footstepMaterial } from "../../src/gameplay/footsteps";
  */
 
 const AUDIO_ROOT = resolve(__dirname, "../../public/assets/audio");
+const REPO_ROOT = resolve(__dirname, "../../../..");
+const SUPPLIED_MANIFEST = resolve(REPO_ROOT, "assets-source/audio-supplied/manifest.json");
+const DERIVED_ROOT = resolve(REPO_ROOT, "assets-source/audio-derived");
+
+interface AudioProbe {
+  readonly duration: number;
+  readonly codec: string;
+  readonly sampleRate: number;
+}
+
+interface SuppliedManifest {
+  readonly sources: readonly {
+    readonly id: string;
+    readonly file: string;
+    readonly durationSeconds: number;
+    readonly sha256: string;
+    readonly sourceUrl: string | null;
+    readonly license: {
+      readonly status: "requires_verification" | "verified";
+      readonly name: string | null;
+      readonly url: string | null;
+    };
+  }[];
+  readonly derivatives: readonly {
+    readonly id: string;
+    readonly sourceId: string;
+    readonly kind: "sfx" | "ambience";
+    readonly durationSeconds: number;
+    readonly targetLufs: number;
+    readonly shipEligible: boolean;
+  }[];
+}
+
+const supplied = JSON.parse(readFileSync(SUPPLIED_MANIFEST, "utf8")) as SuppliedManifest;
+
+function probe(path: string): AudioProbe {
+  const output = execFileSync(
+    "ffprobe",
+    [
+      "-v",
+      "error",
+      "-show_entries",
+      "stream=codec_name,sample_rate",
+      "-show_entries",
+      "format=duration",
+      "-of",
+      "json",
+      path,
+    ],
+    { encoding: "utf8" },
+  );
+  const parsed = JSON.parse(output) as {
+    readonly streams?: readonly { readonly codec_name?: string; readonly sample_rate?: string }[];
+    readonly format?: { readonly duration?: string };
+  };
+  return {
+    duration: Number(parsed.format?.duration),
+    codec: parsed.streams?.[0]?.codec_name ?? "",
+    sampleRate: Number(parsed.streams?.[0]?.sample_rate),
+  };
+}
+
+function loudness(path: string): { readonly lufs: number; readonly peak: number } {
+  const measured = spawnSync(
+    "ffmpeg",
+    ["-hide_banner", "-nostats", "-i", path, "-af", "ebur128=peak=true", "-f", "null", "-"],
+    { encoding: "utf8" },
+  );
+  const output = measured.stderr;
+  const summary = output.slice(output.lastIndexOf("Integrated loudness"));
+  return {
+    lufs: Number(/I:\s*(-?\d+(?:\.\d+)?)\s*LUFS/.exec(summary)?.[1]),
+    peak: Number(/Peak:\s*(-?\d+(?:\.\d+)?)\s*dBFS/.exec(summary)?.[1]),
+  };
+}
+
+function audioFiles(root: string): string[] {
+  return ["sfx", "ambience"].flatMap((kind) =>
+    readdirSync(resolve(root, kind)).map((file) => resolve(root, kind, file)),
+  );
+}
 
 function bundled(dir: string): string[] {
   return readdirSync(resolve(AUDIO_ROOT, dir))
@@ -102,18 +185,6 @@ const SOUND_IDS = [
 type Equals<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 export const SOUND_IDS_MATCH_UNION: Equals<SoundId, (typeof SOUND_IDS)[number]> = true;
 
-/**
- * Sounds that are bundled and named but which nothing plays, each with the
- * reason it is allowed to stay. This list is meant to shrink.
- *
- * The wall-stick pair belongs to a movement verb that CLAUDE.md lists alongside
- * jump and climb but which no controller implements: nothing in `src` sets,
- * clears or reports a stuck state, so there is no moment to hang them on. They
- * are kept rather than deleted because the feature is intended and a generated
- * take cannot be reproduced once thrown away.
- */
-const UNWIRED_SOUNDS: ReadonlySet<string> = new Set(["wallstick_attach", "wallstick_release"]);
-
 const SRC_ROOT = resolve(__dirname, "../../src");
 
 /**
@@ -180,24 +251,15 @@ describe("audio bundle parity", () => {
    * Parity above only proves a file exists and can be named. It does not prove
    * anything ever plays it, and the difference is invisible at run time: a sound
    * nobody triggers is silence the player cannot report and weight they download
-   * anyway. Both wall-stick clips sat in the bundle unplayed through eight
-   * gauntlet rounds because every check up to here passed on them.
+   * anyway. The traversal state machine now wires the former wall-stick holdouts,
+   * so there are deliberately no exceptions to this check.
    *
    * A `SoundId` reaches the player only by appearing as a literal somewhere in
    * `src`, so that is what is searched for.
    */
   it("plays every one-shot it ships", () => {
-    const unplayed = SOUND_IDS.filter(
-      (id) => !UNWIRED_SOUNDS.has(id) && !sourceText().includes(`"${id}"`),
-    );
+    const unplayed = SOUND_IDS.filter((id) => !sourceText().includes(`"${id}"`));
     expect(unplayed).toEqual([]);
-  });
-
-  it("has a live feature behind every sound it excuses as unwired", () => {
-    // An excuse that outlives its reason is how the list stops meaning anything,
-    // so a sound both excused and wired is a failure in the other direction.
-    const excusedButWired = [...UNWIRED_SOUNDS].filter((id) => sourceText().includes(`"${id}"`));
-    expect(excusedButWired).toEqual([]);
   });
 
   it("gives every footstep material three variations that are all bundled", () => {
@@ -209,4 +271,71 @@ describe("audio bundle parity", () => {
       expect(variations).toHaveLength(3);
     }
   });
+
+  it("ships only MP3 files at the normalized sample rate and keeps one-shots short", () => {
+    for (const path of audioFiles(AUDIO_ROOT)) {
+      expect(path.endsWith(".mp3")).toBe(true);
+      const metadata = probe(path);
+      expect(metadata.codec).toBe("mp3");
+      expect(metadata.sampleRate).toBe(44_100);
+      expect(metadata.duration).toBeGreaterThan(0.05);
+      if (path.includes(`${resolve(AUDIO_ROOT, "sfx")}`)) expect(metadata.duration).toBeLessThanOrEqual(4);
+    }
+  }, 30_000);
+
+  it("has no duplicate encoded files in the shipped audio bundle", () => {
+    const hashes = audioFiles(AUDIO_ROOT).map((path) =>
+      createHash("sha256").update(readFileSync(path)).digest("hex"),
+    );
+    expect(new Set(hashes).size).toBe(hashes.length);
+  });
+
+  it("keeps unverified supplied recordings and their derivatives out of the bundle", () => {
+    const sourceIds = new Set(supplied.sources.map((source) => source.id));
+    for (const source of supplied.sources) {
+      expect(source.sha256).toMatch(/^[0-9a-f]{64}$/);
+      if (source.license.status === "requires_verification") {
+        expect(source.license.name).toBeNull();
+        expect(source.license.url).toBeNull();
+      }
+    }
+    for (const derivative of supplied.derivatives) {
+      expect(sourceIds.has(derivative.sourceId)).toBe(true);
+      const source = supplied.sources.find((candidate) => candidate.id === derivative.sourceId);
+      if (source?.license.status !== "verified") expect(derivative.shipEligible).toBe(false);
+      expect(derivative.durationSeconds).toBeLessThan(source?.durationSeconds ?? 0);
+      expect(bundled(derivative.kind)).not.toContain(derivative.id);
+    }
+  });
+
+  it("derives exactly the declared bounded clips in MP3 format", () => {
+    const declared = supplied.derivatives.map((recipe) => `${recipe.kind}/${recipe.id}.mp3`).sort();
+    const actual = ["sfx", "ambience"]
+      .flatMap((kind) => readdirSync(resolve(DERIVED_ROOT, kind)).map((file) => `${kind}/${file}`))
+      .sort();
+    expect(actual).toEqual(declared);
+
+    for (const recipe of supplied.derivatives) {
+      const path = resolve(DERIVED_ROOT, recipe.kind, `${recipe.id}.mp3`);
+      const metadata = probe(path);
+      expect(metadata.codec).toBe("mp3");
+      expect(metadata.sampleRate).toBe(44_100);
+      expect(metadata.duration).toBeCloseTo(recipe.durationSeconds, 1);
+      if (recipe.kind === "sfx") expect(metadata.duration).toBeLessThanOrEqual(4);
+    }
+  }, 30_000);
+
+  it("normalizes derived clips to their declared level without clipping", () => {
+    for (const recipe of supplied.derivatives) {
+      const path = resolve(DERIVED_ROOT, recipe.kind, `${recipe.id}.mp3`);
+      const measured = loudness(path);
+      expect(measured.peak).toBeLessThanOrEqual(-0.8);
+      // EBU R128 gates clips shorter than 400 ms as silence. Their peak ceiling
+      // still protects them; integrated loudness is meaningful for longer takes.
+      if (recipe.durationSeconds >= 0.4) {
+        expect(measured.lufs).toBeGreaterThanOrEqual(recipe.targetLufs - 0.8);
+        expect(measured.lufs).toBeLessThanOrEqual(recipe.targetLufs + 0.8);
+      }
+    }
+  }, 30_000);
 });

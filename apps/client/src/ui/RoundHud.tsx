@@ -9,6 +9,7 @@ import type { QualityTier } from "../rendering/quality";
 import { ForgeHud } from "./ForgeHud";
 import { FirstRoundGuide } from "./FirstRoundGuide";
 import { GameMenu } from "./GameMenu";
+import { SoundCaptionHud } from "./SoundCaptionHud";
 import {
   BaselineHud,
   ForgePhaseHud,
@@ -158,6 +159,7 @@ export function RoundHud({
         />
         <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
         <MovementAwarenessCue state={state} traversal={engine.hiderTraversal} dangerBearingRad={engine.dangerBearingRad} />
+        <SoundCaptionHud captions={engine.soundCaptions} />
       </>
     );
   }
@@ -205,6 +207,7 @@ export function RoundHud({
       />
       <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
       <MovementAwarenessCue state={state} traversal={engine.hiderTraversal} dangerBearingRad={engine.dangerBearingRad} />
+      <SoundCaptionHud captions={engine.soundCaptions} />
     </>
   );
 }

@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 
-import { getMasterVolume, setMasterVolume } from "../forge/AudioPlayer";
+import { AudioSettings } from "./AudioSettings";
 import {
   getPlayerPreferences,
   setPlayerPreferences,
@@ -62,7 +62,6 @@ export interface GameMenuProps {
 /** One quiet entry point for help, settings, and leaving instead of three permanent HUD buttons. */
 export function GameMenu(props: GameMenuProps): ReactElement {
   const [page, setPage] = useState<MenuPage | null>(null);
-  const [volume, setVolume] = useState(() => getMasterVolume());
   const [preferences, setPreferencesState] = useState(() => getPlayerPreferences());
 
   useEffect(() => subscribePlayerPreferences(setPreferencesState), []);
@@ -179,26 +178,7 @@ export function GameMenu(props: GameMenuProps): ReactElement {
                   ))}
                 </div>
                 <p style={{ opacity: 0.68, margin: "10px 0 20px" }}>Quality changes apply immediately.</p>
-                <div style={{ ...labelStyle, marginBottom: 8 }}>Master volume</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 12, marginBottom: 20 }}>
-                  <input
-                    aria-label="Master volume"
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={volume}
-                    onChange={(event) => {
-                      const next = Number(event.currentTarget.value);
-                      setVolume(next);
-                      setMasterVolume(next);
-                    }}
-                    style={{ width: "100%", accentColor: BRASS_LIT }}
-                  />
-                  <span style={{ minWidth: 38, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                    {Math.round(volume * 100)}%
-                  </span>
-                </div>
+                <div style={{ marginBottom: 20 }}><AudioSettings /></div>
                 <div style={{ ...labelStyle, color: BRASS_LIT, margin: "18px 0 8px" }}>Camera and aiming</div>
                 <PreferenceSlider label="Horizontal sensitivity" value={preferences.sensitivityX} min={0.25} max={2.5} step={0.05} onChange={(sensitivityX) => setPlayerPreferences({ sensitivityX })} />
                 <PreferenceSlider label="Vertical sensitivity" value={preferences.sensitivityY} min={0.25} max={2.5} step={0.05} onChange={(sensitivityY) => setPlayerPreferences({ sensitivityY })} />

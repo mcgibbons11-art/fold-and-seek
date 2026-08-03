@@ -7,6 +7,7 @@ export interface PlayerPreferences {
   readonly shake: number;
   readonly reducedMotion: boolean;
   readonly showDiagnostics: boolean;
+  readonly soundCaptionMode: "off" | "critical" | "gameplay";
 }
 
 export type PlayerPreferencesPatch = Partial<PlayerPreferences>;
@@ -21,6 +22,7 @@ const DEFAULTS: PlayerPreferences = {
   shake: 0.7,
   reducedMotion: false,
   showDiagnostics: false,
+  soundCaptionMode: "off",
 };
 
 const listeners = new Set<(preferences: PlayerPreferences) => void>();
@@ -41,6 +43,10 @@ function normalize(input: Partial<PlayerPreferences>): PlayerPreferences {
     shake: clamp(input.shake, 0, 1, DEFAULTS.shake),
     reducedMotion: typeof input.reducedMotion === "boolean" ? input.reducedMotion : DEFAULTS.reducedMotion,
     showDiagnostics: typeof input.showDiagnostics === "boolean" ? input.showDiagnostics : DEFAULTS.showDiagnostics,
+    soundCaptionMode:
+      input.soundCaptionMode === "critical" || input.soundCaptionMode === "gameplay"
+        ? input.soundCaptionMode
+        : "off",
   };
 }
 

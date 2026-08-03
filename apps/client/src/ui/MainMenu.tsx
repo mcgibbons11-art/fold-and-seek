@@ -1,6 +1,6 @@
 import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 
-import { getMasterVolume, setMasterVolume } from "../forge/AudioPlayer";
+import { AudioSettings } from "./AudioSettings";
 import { getPlayerPreferences, setPlayerPreferences, subscribePlayerPreferences } from "../gameplay/preferences";
 import { QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
 import { ControlsLegend } from "./ControlsLegend";
@@ -184,7 +184,6 @@ function Settings({
   readonly onTierChange: (tier: QualityTier) => void;
   readonly onBack: () => void;
 }): ReactElement {
-  const [volume, setVolume] = useState(() => getMasterVolume());
   const [preferences, setPreferencesState] = useState(() => getPlayerPreferences());
   useEffect(() => subscribePlayerPreferences(setPreferencesState), []);
 
@@ -241,26 +240,8 @@ function Settings({
         Changes apply immediately. Lightest removes the most expensive room effects.
       </p>
 
-      <h3 style={rulesHeadingStyle}>Master volume</h3>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", alignItems: "center", gap: 12 }}>
-        <input
-          aria-label="Master volume"
-          type="range"
-          min={0}
-          max={1}
-          step={0.05}
-          value={volume}
-          onChange={(event) => {
-            const next = Number(event.currentTarget.value);
-            setVolume(next);
-            setMasterVolume(next);
-          }}
-          style={{ width: "100%", accentColor: BRASS_LIT }}
-        />
-        <span style={{ minWidth: 38, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-          {Math.round(volume * 100)}%
-        </span>
-      </div>
+      <h3 style={rulesHeadingStyle}>Sound</h3>
+      <AudioSettings />
 
       <button
         type="button"
