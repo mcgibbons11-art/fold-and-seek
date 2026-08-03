@@ -76,7 +76,10 @@ import {
   type MaterialSwatch,
 } from "../mimic/visual/materialSwatches";
 import { createPaintTool, type PaintTool } from "../paint/createPaintTool";
-import { MAX_BRUSH_RADIUS, MIN_BRUSH_RADIUS } from "../paint/PaintBrushController";
+import {
+  BRUSH_RADIUS_STEPS,
+  nearestBrushStepIndex,
+} from "../paint/PaintBrushController";
 import { mirroredPaintTarget } from "../paint/paintTargets";
 import type { QualitySettings } from "../rendering/quality";
 import { AudioPlayer } from "./AudioPlayer";
@@ -432,6 +435,8 @@ const HANDLE_GRIP_SCALE = 0.5;
  * seven of them do not compete with the body they are attached to.
  */
 const HANDLE_OPACITY_IDLE = 0.34;
+/** The partner a mirrored edit will move: visible, but secondary to the pointer target. */
+const HANDLE_OPACITY_MIRROR = 0.62;
 const HANDLE_OPACITY_HOVER = 0.85;
 const HANDLE_OPACITY_DRAG = 1;
 
@@ -724,6 +729,7 @@ export class ForgeController {
   private savedBackground: THREE.Scene["background"] = null;
 
   private hoveredHandle: Handle | null = null;
+  private mirrorHoveredHandle: Handle | null = null;
   private draggedHandle: Handle | null = null;
   private dragPointerId = -1;
   private cameraDrag: "orbit" | null = null;
@@ -1554,7 +1560,7 @@ export class ForgeController {
     // A drag belongs to the tool it started under. Switching tools with the
     // button still down would otherwise leave the camera holding a pointer the
     // new tool needs — which is how the brush loses its first stroke.
-    this.cameraDrag = null;
+    this.finishActivePointerGesture();
     this.mode = mode;
     // Paint itself survives the switch. Only the pointer changes hands.
     if (mode === "paint") {
@@ -1577,6 +1583,7 @@ export class ForgeController {
     // to the old partner), making the toggle appear to do nothing.
     this.commitEdits();
     this.mirror = mirror;
+    this.refreshMirrorHover();
     this.status = mirror
       ? "Mirror on: limb posing, shaping, panels, materials, and paint repeat on the other side."
       : "Mirror off.";
@@ -3153,12 +3160,45 @@ export class ForgeController {
     if (this.hoveredHandle !== null && this.hoveredHandle !== this.draggedHandle) {
       this.setHandleOpacity(this.hoveredHandle, HANDLE_OPACITY_IDLE);
     }
+    if (
+      this.mirrorHoveredHandle !== null &&
+      this.mirrorHoveredHandle !== this.draggedHandle &&
+      this.mirrorHoveredHandle !== handle
+    ) {
+      this.setHandleOpacity(this.mirrorHoveredHandle, HANDLE_OPACITY_IDLE);
+    }
     this.hoveredHandle = handle;
     if (handle !== null) {
       this.setHandleOpacity(handle, HANDLE_OPACITY_HOVER);
       this.audio.playThrottled("ui_hover", 220);
     }
+    this.refreshMirrorHover();
     this.canvas.style.cursor = handle === null ? "default" : "grab";
+  }
+
+  /** Lights the exact counterpart Mirror will move, so symmetry is spatial rather than textual. */
+  private refreshMirrorHover(): void {
+    const previous = this.mirrorHoveredHandle;
+    const mirroredTarget =
+      this.mirror && this.hoveredHandle !== null
+        ? mirroredIkTarget(this.hoveredHandle.def.target)
+        : null;
+    const next =
+      mirroredTarget === null
+        ? null
+        : (this.handles.find((handle) => handle.def.target === mirroredTarget) ?? null);
+    if (
+      previous !== null &&
+      previous !== next &&
+      previous !== this.hoveredHandle &&
+      previous !== this.draggedHandle
+    ) {
+      this.setHandleOpacity(previous, HANDLE_OPACITY_IDLE);
+    }
+    this.mirrorHoveredHandle = next;
+    if (next !== null && next !== this.hoveredHandle && next !== this.draggedHandle) {
+      this.setHandleOpacity(next, HANDLE_OPACITY_MIRROR);
+    }
   }
 
   // --- Input ---------------------------------------------------------------
@@ -3344,6 +3384,35 @@ export class ForgeController {
   }
 
   /**
+   * Closes the gesture under its original tool before another tool takes the
+   * pointer. This is used by keyboard/button switching, where no pointer-up is
+   * guaranteed to reach the canvas that began the edit.
+   */
+  private finishActivePointerGesture(): void {
+    this.flushPointerGesture();
+    if (this.draggedHandle !== null) {
+      const released = this.draggedHandle;
+      this.draggedHandle = null;
+      this.setHandleOpacity(
+        released,
+        released === this.hoveredHandle ? HANDLE_OPACITY_HOVER : HANDLE_OPACITY_IDLE,
+      );
+      this.endPoseEdit(released);
+    }
+    if (this.draggedPanelSocket !== null) {
+      const socket = this.draggedPanelSocket;
+      this.endPanelTipDrag(socket);
+    }
+    this.cameraDrag = null;
+    this.pointerGestureDirty = false;
+    if (this.dragPointerId >= 0 && this.canvas.hasPointerCapture(this.dragPointerId)) {
+      this.canvas.releasePointerCapture(this.dragPointerId);
+    }
+    this.dragPointerId = -1;
+    this.canvas.style.cursor = "default";
+  }
+
+  /**
    * Runs at most one pose/panel solve for all pointer events received since the
    * previous game frame. Pointer-up calls it too, preserving the exact release
    * position when the browser delivers down/move/up before another frame.
@@ -3457,16 +3526,18 @@ export class ForgeController {
       case "-":
       case "_":
         if (this.mode !== "paint" || this.locked) return;
-        this.paintTool.setBrushSize(
-          Math.max(MIN_BRUSH_RADIUS, this.paintTool.getState().brushSize - 0.025),
-        );
+        this.paintTool.setBrushSize(BRUSH_RADIUS_STEPS[Math.max(
+          0,
+          nearestBrushStepIndex(this.paintTool.getState().brushSize) - 1,
+        )]!);
         break;
       case "=":
       case "+":
         if (this.mode !== "paint" || this.locked) return;
-        this.paintTool.setBrushSize(
-          Math.min(MAX_BRUSH_RADIUS, this.paintTool.getState().brushSize + 0.025),
-        );
+        this.paintTool.setBrushSize(BRUSH_RADIUS_STEPS[Math.min(
+          BRUSH_RADIUS_STEPS.length - 1,
+          nearestBrushStepIndex(this.paintTool.getState().brushSize) + 1,
+        )]!);
         break;
       case "[":
         this.cycleArrangement(-1);
@@ -3478,7 +3549,17 @@ export class ForgeController {
         this.lock();
         break;
       case "escape":
-        this.unlock();
+        if (this.locked) {
+          this.unlock();
+        } else if (this.mode !== "pose") {
+          this.setToolMode("pose");
+        } else {
+          this.finishActivePointerGesture();
+          this.setHovered(null);
+          this.status = "Pose tool disengaged. Choose a handle or another tool.";
+          this.audio.play("ui_back");
+          this.emit();
+        }
         break;
       default:
         return;

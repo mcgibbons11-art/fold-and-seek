@@ -90,6 +90,20 @@ afterEach(() => {
 });
 
 describe("paint panel material channels", () => {
+  it("offers five visibly distinct brush presets instead of false precision", () => {
+    const names = ["Tiny", "Small", "Medium", "Large", "Massive"];
+    const buttons = names.map((name) =>
+      container.querySelector<HTMLButtonElement>(`button[aria-label="${name} brush"]`),
+    );
+    expect(buttons.every((button) => button !== null)).toBe(true);
+    expect(buttons[2]?.getAttribute("aria-pressed")).toBe("true");
+
+    act(() => buttons[4]?.click());
+    expect(tool.getState().brushSize).toBeCloseTo(0.42, 5);
+    expect(buttons[4]?.getAttribute("aria-pressed")).toBe("true");
+    expect(readingFor("Brush")).toContain("Massive");
+  });
+
   it("exposes live stroke state to the Portals interaction gate", () => {
     const panel = container.querySelector<HTMLElement>("[data-paint-stroke-count]");
     expect(panel?.dataset.paintActive).toBe("true");

@@ -158,6 +158,14 @@ class Harness {
     return mesh.getWorldScale(new THREE.Vector3()).x;
   }
 
+  opacityOf(name: string): number {
+    const mesh = this.scene.getObjectByName(name);
+    if (!(mesh instanceof THREE.Mesh) || !(mesh.material instanceof THREE.Material)) {
+      throw new Error(`no material handle part "${name}"`);
+    }
+    return mesh.material.opacity;
+  }
+
   dispose(): void {
     this.controller.dispose();
     (globalThis as Record<string, unknown>)["window"] = this.previousWindow;
@@ -251,6 +259,38 @@ describe("the workspace camera", () => {
 });
 
 describe("the pose handles", () => {
+  it("finishes the old gesture before a newly selected tool owns the pointer", () => {
+    harness.layout();
+    const grip = harness.screenPointOf("head");
+    harness.pointer("pointerdown", grip);
+    harness.pointer("pointermove", { ...grip, clientX: grip.clientX + 32 });
+
+    harness.controller.setToolMode("shape");
+    expect(harness.controller.snapshot().mode).toBe("shape");
+    expect(harness.controller.snapshot().canUndo).toBe(true);
+  });
+
+  it("uses Escape to disengage a specialist tool back to the safe pose tool", () => {
+    harness.controller.setToolMode("paint");
+    harness.key("keydown", "Escape");
+    expect(harness.controller.snapshot().mode).toBe("pose");
+    expect(harness.controller.snapshot().status).toMatch(/drag a handle/i);
+  });
+
+  it("lights the counterpart that Mirror will move", () => {
+    harness.controller.setMirror(true);
+    harness.layout();
+    const left = harness.screenPointOf("hand_L");
+    harness.pointer("pointermove", left);
+
+    expect(harness.opacityOf("forge_handle_ring_hand_L")).toBeGreaterThan(
+      harness.opacityOf("forge_handle_ring_hand_R"),
+    );
+    expect(harness.opacityOf("forge_handle_ring_hand_R")).toBeGreaterThan(
+      harness.opacityOf("forge_handle_ring_head"),
+    );
+  });
+
   it("moves the opposite limb immediately while Mirror is on", () => {
     const before = createPoseState();
     applyDisguiseStateToPose(harness.controller.disguise, before);

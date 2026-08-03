@@ -68,6 +68,10 @@ const MIN_AXIS_FRACTION = 1e-6;
 const MIN_CLIMB_SECONDS = 0.25;
 /** Ensures a released climber enters the fall sweep instead of ground-snapping. */
 const CLIMB_RELEASE_DOWN_SPEED = WORLD_SCALE.playerHeight * 0.05;
+/** Carries a released body away from the wall seam while gravity takes over. */
+const CLIMB_RELEASE_OUTWARD_SPEED = WORLD_SCALE.playerHeight * 0.65;
+/** Immediate clearance is deliberately smaller than the capsule radius. */
+const CLIMB_RELEASE_CLEARANCE = INSPECTOR_RADIUS_M * 0.45;
 
 /**
  * Shape of a mantle: the body rises before it travels, so it reads as pulling
@@ -1029,6 +1033,23 @@ export class CharacterController {
   }
 
   private finishClimb(climb: MutableClimb): void {
+    // The destination can become invalid after traversal starts. Snapping into
+    // it traps the capsule inside the lip; releasing from the current point
+    // gives the ordinary fall/collision path a chance to recover instead.
+    if (
+      blocksCapsule(
+        this.navData.blockers,
+        climb.endX,
+        climb.endZ,
+        climb.endY,
+        INSPECTOR_RADIUS_M,
+        INSPECTOR_HEIGHT_M,
+        INSPECTOR_STEP_HEIGHT_M,
+      )
+    ) {
+      this.dropClimb(climb);
+      return;
+    }
     this.position.x = climb.endX;
     this.position.y = climb.endY;
     this.position.z = climb.endZ;
@@ -1047,6 +1068,34 @@ export class CharacterController {
 
   /** Releases a traversal in place and hands vertical motion back to gravity. */
   private dropClimb(climb: MutableClimb): void {
+    let awayX = climb.startX - climb.endX;
+    let awayZ = climb.startZ - climb.endZ;
+    let length = Math.hypot(awayX, awayZ);
+    if (length < MIN_AXIS_FRACTION) {
+      // A vertical ladder has no horizontal span. Backward from the facing
+      // direction is the side the body approached from.
+      awayX = Math.sin(this.yaw);
+      awayZ = Math.cos(this.yaw);
+      length = 1;
+    }
+    awayX /= length;
+    awayZ /= length;
+    const releasedX = this.position.x + awayX * CLIMB_RELEASE_CLEARANCE;
+    const releasedZ = this.position.z + awayZ * CLIMB_RELEASE_CLEARANCE;
+    if (
+      !blocksCapsule(
+        this.navData.blockers,
+        releasedX,
+        releasedZ,
+        this.position.y,
+        INSPECTOR_RADIUS_M,
+        INSPECTOR_HEIGHT_M,
+        INSPECTOR_STEP_HEIGHT_M,
+      )
+    ) {
+      this.position.x = releasedX;
+      this.position.z = releasedZ;
+    }
     this.climb = null;
     this.climbLatch = climb.link;
     this.surfaceId = null;
@@ -1054,8 +1103,8 @@ export class CharacterController {
     this.surfaceLocked = false;
     this.solidClimbRequiresJumpRelease = true;
     this.verticalVelocity = -CLIMB_RELEASE_DOWN_SPEED;
-    this.velocityX = 0;
-    this.velocityZ = 0;
+    this.velocityX = awayX * CLIMB_RELEASE_OUTWARD_SPEED;
+    this.velocityZ = awayZ * CLIMB_RELEASE_OUTWARD_SPEED;
     this.speed = 0;
     this.lastResolution = "idle";
   }

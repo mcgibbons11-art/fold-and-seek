@@ -26,6 +26,10 @@ describe("authored Inspector action selection", () => {
     expect(inspectorActionForFrame(STILL)).toBe("rifle-idle");
     expect(inspectorActionForFrame({ ...STILL, speedMps: 0.04 })).toBe("rifle-idle");
     expect(inspectorActionForFrame({ ...STILL, speedMps: 0.06 })).toBe("run");
+    // Once the stride is live it blends down through low residual velocity
+    // instead of flashing idle/run while the controller decelerates.
+    expect(inspectorActionForFrame({ ...STILL, speedMps: 0.04 }, true)).toBe("run");
+    expect(inspectorActionForFrame({ ...STILL, speedMps: 0.02 }, true)).toBe("rifle-idle");
   });
 
   it("gives airborne and climbing actions priority over ground speed", () => {

@@ -3,7 +3,11 @@ import { useEffect, useState, type CSSProperties, type ReactElement } from "reac
 import { FORGE_UI_ATTRIBUTE } from "../../forge/ForgeController";
 import { PAINT_SHADOW_LABEL, PAINT_SHADOW_TITLE } from "../../gameplay/copy";
 import { hexToRgb, rgbToCss, rgbToHex, sameColorByte, type Rgb } from "../../paint/color";
-import { MAX_BRUSH_RADIUS, MIN_BRUSH_RADIUS } from "../../paint/PaintBrushController";
+import {
+  BRUSH_RADIUS_STEPS,
+  BRUSH_SIZE_NAMES,
+  nearestBrushStepIndex,
+} from "../../paint/PaintBrushController";
 import type { PaintPanelState } from "../../paint/paintStore";
 import type { PaintTool } from "../../paint/createPaintTool";
 import { BRASS_LIT, CREAM, FONT_UI, labelStyle, plate } from "../rounds/theme";
@@ -178,6 +182,8 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
 
   const budget = Math.round((state.strokeCount / state.maxStrokes) * 100);
   const isSaved = state.savedColors.some((entry) => sameColorByte(entry, state.color));
+  const brushStep = nearestBrushStepIndex(state.brushSize);
+  const brushDiameterPercent = Math.round(state.brushSize * 200);
 
   return (
     <div
@@ -221,19 +227,50 @@ export function PaintPanel(props: PaintPanelProps): ReactElement | null {
           and the eraser, which is the whole of how you actually paint — was
           under the fold. Frequency of use is the order now. */}
       <div style={{ ...labelStyle, marginTop: 10 }}>
-        Brush {Math.round(state.brushSize * 100)}
+        Brush · {BRUSH_SIZE_NAMES[brushStep]}
+        <span style={{ opacity: 0.62 }}> · {brushDiameterPercent}% footprint</span>
       </div>
-      <input
-        type="range"
-        min={MIN_BRUSH_RADIUS}
-        max={MAX_BRUSH_RADIUS}
-        step={0.005}
-        value={state.brushSize}
-        style={sliderStyle}
-        onChange={(event) => {
-          tool.setBrushSize(Number(event.target.value));
-        }}
-      />
+      <div
+        role="group"
+        aria-label="Brush size"
+        style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 5, marginTop: 5 }}
+      >
+        {BRUSH_RADIUS_STEPS.map((radius, index) => {
+          const selected = index === brushStep;
+          const diameter = [6, 9, 13, 19, 27][index] ?? 13;
+          const name = BRUSH_SIZE_NAMES[index] ?? "Brush";
+          return (
+            <button
+              key={radius}
+              type="button"
+              aria-label={`${name} brush`}
+              aria-pressed={selected}
+              title={`${name} · ${Math.round(radius * 200)}% footprint`}
+              style={{
+                ...(selected ? activeToggleStyle : toggleStyle),
+                minWidth: 0,
+                height: 38,
+                padding: 0,
+                display: "grid",
+                placeItems: "center",
+              }}
+              onClick={() => tool.setBrushSize(radius)}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: diameter,
+                  height: diameter,
+                  borderRadius: "50%",
+                  background: selected ? "#fff3df" : CREAM,
+                  boxShadow: selected ? `0 0 8px ${BRASS}` : "none",
+                  opacity: selected ? 1 : 0.72,
+                }}
+              />
+            </button>
+          );
+        })}
+      </div>
 
       <div style={labelStyle}>Flow {Math.round(state.opacity * 100)}</div>
       <input

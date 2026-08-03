@@ -15,6 +15,9 @@ const FIRE_FADE_SECONDS = 0.045;
 const HIT_FADE_SECONDS = 0.065;
 /** Keep the Mixamo stride readable without its exaggerated hip/shoulder swagger. */
 export const INSPECTOR_RUN_ANIMATION_WEIGHT = 0.58;
+/** Separate exit threshold prevents acceleration noise flickering run and idle. */
+export const INSPECTOR_RUN_EXIT_FRACTION = 0.025;
+export const INSPECTOR_RUN_ENTER_FRACTION = 0.055;
 /** Maximum correction away from the authored pose for each solved joint. */
 const ARM_IK_LIMIT_RAD = 1.45;
 const FOREARM_IK_LIMIT_RAD = 1.8;
@@ -46,11 +49,15 @@ export function sanitizeInspectorClip(clip: THREE.AnimationClip): THREE.Animatio
 }
 
 /** Locomotion choice is kept pure so the gameplay thresholds stay testable. */
-export function inspectorActionForFrame(frame: InspectorBodyFrame): BaseAction {
+export function inspectorActionForFrame(
+  frame: InspectorBodyFrame,
+  wasRunning = false,
+): BaseAction {
   if (frame.climbing) return "climb";
   if (frame.airborne) return "jump";
   const speedFraction = frame.speedCapMps > 0 ? frame.speedMps / frame.speedCapMps : 0;
-  return speedFraction > 0.055 ? "run" : "rifle-idle";
+  const threshold = wasRunning ? INSPECTOR_RUN_EXIT_FRACTION : INSPECTOR_RUN_ENTER_FRACTION;
+  return speedFraction > threshold ? "run" : "rifle-idle";
 }
 
 /**
@@ -188,10 +195,10 @@ export class InspectorAvatar {
       this.oneShotSeconds = Math.max(0, this.oneShotSeconds - dtSeconds);
       if (this.oneShotSeconds === 0) {
         this.reaction = "none";
-        this.play(inspectorActionForFrame(frame));
+        this.play(inspectorActionForFrame(frame, this.currentAction === "run"));
       }
     } else {
-      this.play(inspectorActionForFrame(frame));
+      this.play(inspectorActionForFrame(frame, this.currentAction === "run"));
     }
 
     const run = this.actions.get("run");

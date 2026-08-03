@@ -42,9 +42,36 @@ export interface PaintBrushOptions {
   readonly expandStroke?: (stroke: PaintStroke) => readonly PaintStroke[];
 }
 
-export const MIN_BRUSH_RADIUS = 0.025;
-export const MAX_BRUSH_RADIUS = 0.45;
-export const DEFAULT_BRUSH_RADIUS = 0.12;
+/**
+ * Perceptually distinct footprints. The old 0.005 slider increments were far
+ * below one atlas texel on many body parts, so “20” and “21” often rasterized
+ * the same visible circle. Each step here changes diameter by roughly 40%.
+ */
+export const BRUSH_RADIUS_STEPS = [0.035, 0.07, 0.14, 0.27, 0.42] as const;
+export const BRUSH_SIZE_NAMES = [
+  "Tiny",
+  "Small",
+  "Medium",
+  "Large",
+  "Massive",
+] as const;
+export const MIN_BRUSH_RADIUS: number = BRUSH_RADIUS_STEPS[0];
+export const MAX_BRUSH_RADIUS: number = BRUSH_RADIUS_STEPS[BRUSH_RADIUS_STEPS.length - 1]!;
+export const DEFAULT_BRUSH_RADIUS: number = BRUSH_RADIUS_STEPS[2];
+
+export function nearestBrushStepIndex(radius: number): number {
+  let nearest = 0;
+  let distance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < BRUSH_RADIUS_STEPS.length; index += 1) {
+    const candidate = BRUSH_RADIUS_STEPS[index] ?? DEFAULT_BRUSH_RADIUS;
+    const nextDistance = Math.abs(candidate - radius);
+    if (nextDistance < distance) {
+      nearest = index;
+      distance = nextDistance;
+    }
+  }
+  return nearest;
+}
 
 export class PaintBrushController {
   private readonly options: PaintBrushOptions;
@@ -53,7 +80,7 @@ export class PaintBrushController {
   private readonly intersections: THREE.Intersection[] = [];
 
   private color: [number, number, number] = [0.85, 0.27, 0.2];
-  private radius = DEFAULT_BRUSH_RADIUS;
+  private radius: number = DEFAULT_BRUSH_RADIUS;
   private opacity = 1;
   private metallic = 0;
   private smoothness = 0.35;
@@ -90,7 +117,7 @@ export class PaintBrushController {
   }
 
   setBrushSize(radius: number): void {
-    this.radius = Math.min(MAX_BRUSH_RADIUS, Math.max(MIN_BRUSH_RADIUS, radius));
+    this.radius = BRUSH_RADIUS_STEPS[nearestBrushStepIndex(radius)] ?? DEFAULT_BRUSH_RADIUS;
     this.resizeCursor();
   }
 
