@@ -1,25 +1,23 @@
-import { useEffect, useState, type ReactElement, type ReactNode } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 
-import type { ForgeController, ForgeHudState, ForgeToolMode } from "../../forge/ForgeController";
+import type { ForgeController } from "../../forge/ForgeController";
 import { POINTER_LOCK_BODY, POINTER_LOCK_TITLE } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { ForgeToolPanels } from "../ForgeHud";
 import { ActionRail } from "./ActionRail";
-import { columnDensityFor, type ColumnDensity } from "./columnFit";
-import { ModeNote } from "./ControlStrip";
+import { hiderDensityFor, type ColumnDensity } from "./columnFit";
 import { HiderHud } from "./HiderHud";
 import {
   boardRailAction,
-  hiderRailActions,
   inspectorRailActions,
   type RailAction,
 } from "./huntControls";
 import { HuntStatus } from "./HuntStatus";
 import { InspectorSight, InspectorStatusCard, warrantsRemainingOf, type InspectorGunView } from "./InspectorHud";
-import { HudLayout, REGION_GAP, useRegionHeight, type RegionAssignment } from "./layout";
+import { HudLayout, useRegionHeight, type HudLayoutMode, type RegionAssignment } from "./layout";
 import { MissedFindsHud } from "./MissedFindsHud";
 import { Toast, rejectionToast } from "./Toast";
-import { BRASS_LIT, figureStyle, labelStyle, plate } from "./theme";
+import { BRASS_LIT, PRESS_CLASS, buttonStyle, figureStyle, labelStyle, plate } from "./theme";
 
 /**
  * The whole hunt in one layout. Every phase HUD before this one placed its own
@@ -33,9 +31,6 @@ import { BRASS_LIT, figureStyle, labelStyle, plate } from "./theme";
  * distrust the HUD.
  */
 
-/** The rail's ids for the Forge tools, decoded back into a tool mode. */
-const TOOL_ID_PREFIX = "tool:";
-
 export interface HuntHudProps {
   readonly state: RoundViewState;
   readonly gun: InspectorGunView;
@@ -45,84 +40,36 @@ export interface HuntHudProps {
   readonly boardOpen: boolean;
   readonly onToggleBoard: () => void;
   readonly onTaunt: () => void;
-}
-
-/** Follows the Forge so the rail can show which tool is selected. */
-function useForgeState(controller: ForgeController | null): ForgeHudState | null {
-  const [state, setState] = useState<ForgeHudState | null>(() => controller?.snapshot() ?? null);
-
-  useEffect(() => {
-    if (controller === null) {
-      setState(null);
-      return undefined;
-    }
-    setState(controller.snapshot());
-    return controller.subscribe(setState);
-  }, [controller]);
-
-  return state;
-}
-
-/**
- * Whether the Forge's tool panels are unfolded. They start folded wherever the
- * column cannot hold them whole, and unfold on any deliberate change of tool, so
- * a hider who presses a tool key is never left pressing it at a folded panel.
- */
-function useForgePanelsOpen(_columnHeight: number, _mode: ForgeToolMode | null): {
-  readonly open: boolean;
-  toggle: () => void;
-} {
-  // Hunt authoring is a persistent control panel. It cannot disappear because
-  // the viewport is short or because a disclosure was clicked accidentally.
-  return {
-    open: true,
-    toggle: () => undefined,
-  };
+  readonly traversal?: "climbing" | "topout" | "airborne" | null;
+  readonly dangerBearingRad?: number | null;
 }
 
 export function HuntHud(props: HuntHudProps): ReactElement {
   const { state, gun, forge, pointerLocked, boardOpen, onToggleBoard, onTaunt } = props;
-  const forgeState = useForgeState(forge);
   const [actionsOpen, setActionsOpen] = useState(false);
-  const columnHeight = useRegionHeight("leftColumn");
-  const density = columnDensityFor(columnHeight);
-  const panels = useForgePanelsOpen(columnHeight, forgeState?.mode ?? null);
 
   const role = state.self.role;
   const isInspector = role === "inspector";
   const isLiveHider = role === "mimic" && state.self.lifeState === "active";
+  const layoutMode: HudLayoutMode = isInspector ? "inspector" : isLiveHider ? "hider" : "spectator";
+  const columnHeight = useRegionHeight("leftColumn", layoutMode);
+  const traversal = props.traversal ?? null;
+  const density = hiderDensityFor(columnHeight, {
+    watchedLevel: state.self.watchedLevel,
+    finalTen: state.timer.finalTen,
+    traversal,
+  });
 
   const board = boardOpen ? <MissedFindsHud state={state} /> : null;
 
   const rail: readonly RailAction[] = isInspector
     ? inspectorRailActions({ boardOpen, outOfWarrants: warrantsRemainingOf(state) <= 0 })
-    : isLiveHider
-      ? hiderRailActions({
-          tauntSupported: state.capabilities.taunt,
-          tauntAllowed: state.actions.taunt.allowed,
-          tauntCooldownSeconds: Math.ceil(state.self.tauntCooldownMs / 1_000),
-          toolMode: forgeState?.mode ?? null,
-          mirror: forgeState?.mirror ?? false,
-          boardOpen,
-        })
-      : [boardRailAction(boardOpen)];
+    : [boardRailAction(boardOpen)];
 
   const onRailPress = (id: string): void => {
     if (id === "missedFinds") {
       onToggleBoard();
       return;
-    }
-    if (id === "taunt") {
-      onTaunt();
-      return;
-    }
-    if (forge === null) return;
-    if (id === "mirror") {
-      forge.setMirror(!(forgeState?.mirror ?? false));
-      return;
-    }
-    if (id.startsWith(TOOL_ID_PREFIX)) {
-      forge.setToolMode(id.slice(TOOL_ID_PREFIX.length) as ForgeToolMode);
     }
   };
 
@@ -133,8 +80,20 @@ export function HuntHud(props: HuntHudProps): ReactElement {
   const regions: RegionAssignment = {
     topCenter: <HuntStatus state={state} />,
     topRight: toasts.length === 0 ? undefined : <Toast entries={toasts} />,
-    leftColumn: leftColumn({ state, isInspector, isLiveHider, forge, board, density, panels }),
-    rightRail: (
+    leftColumn: leftColumn({
+      state,
+      isInspector,
+      isLiveHider,
+      forge,
+      board,
+      density,
+      traversal,
+      dangerBearingRad: props.dangerBearingRad ?? null,
+      boardOpen,
+      onToggleBoard,
+      onTaunt,
+    }),
+    rightRail: isLiveHider ? undefined : (
       <ActionsDisclosure
         actions={rail}
         open={actionsOpen}
@@ -144,11 +103,10 @@ export function HuntHud(props: HuntHudProps): ReactElement {
     ),
     bottomCenter:
       isInspector && !pointerLocked ? <PointerLockPrompt /> : undefined,
-    bottomRight: role === null ? undefined : <ModeNote role={role} />,
     center: isInspector ? <InspectorSight state={state} gun={gun} /> : undefined,
   };
 
-  return <HudLayout regions={regions} />;
+  return <HudLayout regions={regions} mode={layoutMode} />;
 }
 
 /** Keeps the full verb/key list one deliberate click away instead of permanently covering the room. */
@@ -196,7 +154,11 @@ function leftColumn({
   forge,
   board,
   density,
-  panels,
+  traversal,
+  dangerBearingRad,
+  boardOpen,
+  onToggleBoard,
+  onTaunt,
 }: {
   readonly state: RoundViewState;
   readonly isInspector: boolean;
@@ -204,7 +166,11 @@ function leftColumn({
   readonly forge: ForgeController | null;
   readonly board: ReactNode;
   readonly density: ColumnDensity;
-  readonly panels: { readonly open: boolean; readonly toggle: () => void };
+  readonly traversal: "climbing" | "topout" | "airborne" | null;
+  readonly dangerBearingRad: number | null;
+  readonly boardOpen: boolean;
+  readonly onToggleBoard: () => void;
+  readonly onTaunt: () => void;
 }): ReactNode {
   if (isInspector) {
     return (
@@ -216,13 +182,15 @@ function leftColumn({
   }
   if (isLiveHider) {
     return (
-      <HiderHud state={state} density={density}>
+      <HiderHud state={state} density={density} traversal={traversal} dangerBearingRad={dangerBearingRad}>
+        {forge === null ? null : <ForgeToolPanels controller={forge} width="100%" embedded />}
+        <HiderDockUtilities
+          state={state}
+          boardOpen={boardOpen}
+          onToggleBoard={onToggleBoard}
+          onTaunt={onTaunt}
+        />
         {board}
-        {forge === null ? null : (
-          <ForgePanelsDisclosure density={density} open={panels.open} onToggle={panels.toggle}>
-            <ForgeToolPanels controller={forge} width={288} />
-          </ForgePanelsDisclosure>
-        )}
       </HiderHud>
     );
   }
@@ -234,57 +202,43 @@ function leftColumn({
   );
 }
 
-/**
- * The Forge's tool panels, folded behind their own header where the column
- * cannot hold them whole. At 1280x720 the hider's column was drawing 661 px of
- * content into a 558 px region and the status card — the one part that has to be
- * readable at a glance — was behind a scrollbar because of it.
- *
- * The header is a button rather than a caption, and it declares its height, so
- * the folded column is an arithmetic `hudLayout.test.ts` can check. It adds no
- * scroll container of its own: the region's is the only one in the column.
- */
-function ForgePanelsDisclosure({
-  density,
-  open,
-  onToggle,
-  children,
+/** Low-frequency utilities stay in the dock; Forge tools never reappear on a rail. */
+function HiderDockUtilities({
+  state,
+  boardOpen,
+  onToggleBoard,
+  onTaunt,
 }: {
-  readonly density: ColumnDensity;
-  readonly open: boolean;
-  readonly onToggle: () => void;
-  readonly children: ReactNode;
+  readonly state: RoundViewState;
+  readonly boardOpen: boolean;
+  readonly onToggleBoard: () => void;
+  readonly onTaunt: () => void;
 }): ReactElement {
+  const tauntEnabled = state.capabilities.taunt && state.actions.taunt.allowed;
   return (
     <div
-      data-forge-panels={open ? "open" : "folded"}
-      style={{ display: "flex", flexDirection: "column", gap: REGION_GAP, width: "100%" }}
+      role="group"
+      aria-label="Hider utilities"
+      style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, padding: "8px 4px 2px" }}
     >
       <button
         type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          height: density.disclosureHeight,
-          width: "100%",
-          boxSizing: "border-box",
-          overflow: "hidden",
-          padding: density.cardPadding,
-          ...plate(),
-          borderRadius: 10,
-          color: BRASS_LIT,
-          font: "inherit",
-          cursor: "pointer",
-          pointerEvents: "auto",
-        }}
+        className={PRESS_CLASS}
+        disabled={!tauntEnabled}
+        onClick={onTaunt}
+        style={{ ...buttonStyle, margin: 0, padding: "7px 8px", opacity: tauntEnabled ? 1 : 0.45 }}
       >
-        <span style={{ ...labelStyle, opacity: 1 }}>Forge tools</span>
-        <span aria-hidden>{open ? "▾" : "▸"}</span>
+        T · {tauntEnabled ? "Taunt" : `${Math.ceil(state.self.tauntCooldownMs / 1_000)}s`}
       </button>
-      {open ? children : null}
+      <button
+        type="button"
+        className={PRESS_CLASS}
+        aria-pressed={boardOpen}
+        onClick={onToggleBoard}
+        style={{ ...buttonStyle, margin: 0, padding: "7px 8px" }}
+      >
+        6 · Missed spots
+      </button>
     </div>
   );
 }

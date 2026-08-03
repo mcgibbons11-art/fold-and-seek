@@ -3,7 +3,7 @@ import type { CSSProperties, ReactElement, ReactNode } from "react";
 import { DECEPTION_TITLE, deceptionLabel, HIDER_CREEP_HINT } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
 import { COLUMN_DENSITIES, type ColumnDensity } from "./columnFit";
-import { ALARM, BRASS_LIT, figureStyle, labelStyle, plate } from "./theme";
+import { ALARM, BRASS_LIT, CREAM, figureStyle, labelStyle, plate } from "./theme";
 
 /**
  * What a disguised Mimic reads while the Inspectors hunt. The disguise is not a
@@ -27,6 +27,9 @@ export interface HiderStatusCardProps {
   readonly state: RoundViewState;
   /** Geometry for the viewport this column is being drawn into. */
   readonly density?: ColumnDensity;
+  readonly embedded?: boolean;
+  readonly traversal?: "climbing" | "topout" | "airborne" | null;
+  readonly dangerBearingRad?: number | null;
 }
 
 /**
@@ -35,9 +38,9 @@ export interface HiderStatusCardProps {
  * and the regions themselves already follow. Without a declared height there is
  * no arithmetic for `hudLayout.test.ts` to check the column against.
  */
-function cardStyle(density: ColumnDensity, scored: boolean): CSSProperties {
+function cardStyle(density: ColumnDensity, scored: boolean, embedded: boolean): CSSProperties {
   return {
-    ...plate(),
+    ...(embedded ? {} : plate()),
     borderRadius: 10,
     padding: density.cardPadding,
     height: scored ? density.statusScoredHeight : density.statusHeight,
@@ -51,6 +54,9 @@ function cardStyle(density: ColumnDensity, scored: boolean): CSSProperties {
 export function HiderStatusCard({
   state,
   density = COLUMN_DENSITIES[0] as ColumnDensity,
+  embedded = false,
+  traversal = null,
+  dangerBearingRad = null,
 }: HiderStatusCardProps): ReactElement {
   const level = state.self.watchedLevel;
   const caught = state.self.lifeState !== "active";
@@ -63,11 +69,31 @@ export function HiderStatusCard({
   const hintStyle: CSSProperties = density.wrapHint
     ? { marginTop: 4, opacity: 0.85 }
     : { marginTop: 4, opacity: 0.85, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+  const urgency = hiderUrgencyCopy(state, traversal);
 
   return (
-    <div style={cardStyle(density, scored)}>
+    <div
+      style={cardStyle(density, scored, embedded)}
+      data-hider-density={density.id}
+      data-hider-urgency={urgency.kind}
+    >
       <div style={labelStyle}>{caught ? "Status" : "In the room"}</div>
-      <div style={hintStyle}>{caught ? "OBJECT STATUS REVOKED" : HIDER_CREEP_HINT}</div>
+      <div style={{ ...hintStyle, color: urgency.kind === "danger" ? ALARM : undefined }}>
+        {dangerBearingRad === null || state.self.watchedLevel === 0 ? null : (
+          <span
+            aria-label="Inspector direction"
+            style={{
+              display: "inline-block",
+              marginRight: 6,
+              color: state.self.watchedLevel === 2 ? ALARM : BRASS_LIT,
+              transform: `rotate(${dangerBearingRad}rad)`,
+            }}
+          >
+            ↑
+          </span>
+        )}
+        {caught ? "OBJECT STATUS REVOKED" : urgency.copy}
+      </div>
 
       <div style={{ ...labelStyle, marginTop: density.headingGap }}>Being watched</div>
       <div
@@ -99,7 +125,7 @@ export function HiderStatusCard({
         {WATCHED_COPY[level]}
       </div>
 
-      {scored ? (
+      {scored && urgency.kind === "calm" ? (
         <>
           <div style={{ ...labelStyle, marginTop: density.headingGap }}>{DECEPTION_TITLE}</div>
           <div style={figureStyle}>{deception.points}</div>
@@ -122,14 +148,46 @@ export interface HiderHudProps {
   readonly density?: ColumnDensity;
   /** The board and the hider's tool panels, stacked under the status card. */
   readonly children?: ReactNode;
+  readonly traversal?: "climbing" | "topout" | "airborne" | null;
+  readonly dangerBearingRad?: number | null;
 }
 
-/** The whole of a hider's left column, in the order it reads top to bottom. */
-export function HiderHud({ state, density, children }: HiderHudProps): ReactElement {
+function hiderUrgencyCopy(
+  state: RoundViewState,
+  traversal: "climbing" | "topout" | "airborne" | null,
+): { readonly kind: "calm" | "time" | "traversal" | "danger"; readonly copy: string } {
+  if (state.self.watchedLevel === 2) return { kind: "danger", copy: "Freeze — the Inspector is holding you in sight." };
+  if (traversal === "topout") return { kind: "traversal", copy: "Top reached — release Space to dismount." };
+  if (traversal === "climbing") return { kind: "traversal", copy: "Climbing — keep forward held to top out." };
+  if (state.self.watchedLevel === 1) return { kind: "danger", copy: "Watched — break sight before reshaping." };
+  if (state.timer.finalTen) return { kind: "time", copy: "Final seconds — hold your disguise." };
+  return { kind: "calm", copy: HIDER_CREEP_HINT };
+}
+
+/** One persistent dock: status, urgent cue, authoring controls, then utilities. */
+export function HiderHud({ state, density, children, traversal, dangerBearingRad }: HiderHudProps): ReactElement {
   return (
-    <>
-      <HiderStatusCard state={state} density={density} />
+    <div
+      data-hider-forge-dock="persistent"
+      data-persistent-plate="hider-forge"
+      style={{
+        ...plate(),
+        width: "100%",
+        boxSizing: "border-box",
+        borderRadius: 10,
+        padding: 8,
+        color: CREAM,
+        pointerEvents: "auto",
+      }}
+    >
+      <HiderStatusCard
+        state={state}
+        density={density}
+        embedded
+        traversal={traversal}
+        dangerBearingRad={dangerBearingRad}
+      />
       {children}
-    </>
+    </div>
   );
 }

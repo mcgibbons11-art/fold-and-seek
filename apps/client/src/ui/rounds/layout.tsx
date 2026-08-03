@@ -38,6 +38,9 @@ export const HUD_REGIONS = [
 
 export type HudRegion = (typeof HUD_REGIONS)[number];
 
+/** The hunt role changes which pieces need protected screen space. */
+export type HudLayoutMode = "generic" | "hider" | "inspector" | "spectator";
+
 /**
  * Where one edge-to-edge extent of a region sits.
  *
@@ -118,6 +121,88 @@ export const REGION_RULES: Readonly<Record<HudRegion, RegionRule>> = {
   },
 };
 
+const PORTALS_PANE_MAX_WIDTH = 720;
+const COMPACT_HUD_MAX_WIDTH = 1100;
+
+/**
+ * Portals may mount the game in a tall 640px pane rather than a desktop tab.
+ * These rules keep the role's interaction corridor clear instead of shrinking
+ * the desktop table until its columns overlap the reticle.
+ */
+export function regionRulesFor(
+  viewportWidth: number,
+  viewportHeight: number,
+  mode: HudLayoutMode = "generic",
+): Readonly<Record<HudRegion, RegionRule>> {
+  if (viewportWidth > COMPACT_HUD_MAX_WIDTH && viewportHeight >= 600) return REGION_RULES;
+
+  const pane = viewportWidth <= PORTALS_PANE_MAX_WIDTH;
+  const edge = 8;
+  const topHeight = pane ? 84 : 88;
+  const contentTop = topHeight + 16;
+  const bottomReserve = pane ? 100 : 102;
+  const hiderWidth = Math.min(pane ? 280 : 288, viewportWidth - edge * 2);
+  const inspectorColumnWidth = pane ? 192 : 238;
+  const railWidth = 148;
+  const centerSize = pane ? 220 : 240;
+
+  return {
+    topCenter: {
+      x: { kind: "center", size: Math.min(pane ? 396 : 420, viewportWidth - edge * 2) },
+      y: { kind: "start", offset: edge, size: topHeight },
+      overflowY: "hidden",
+      justify: "start",
+      align: "center",
+    },
+    topRight: {
+      x: { kind: "end", offset: edge, size: Math.min(220, viewportWidth - edge * 2) },
+      y: { kind: "start", offset: contentTop, size: pane ? 88 : 82 },
+      overflowY: "hidden",
+      justify: "start",
+      align: "end",
+    },
+    leftColumn: {
+      x: {
+        kind: "start",
+        offset: edge,
+        size: mode === "hider" ? hiderWidth : inspectorColumnWidth,
+      },
+      y: { kind: "stretch", start: contentTop, end: mode === "hider" ? 8 : bottomReserve },
+      overflowY: "auto",
+      justify: "start",
+      align: "start",
+    },
+    rightRail: {
+      x: { kind: "end", offset: edge, size: railWidth },
+      y: { kind: "stretch", start: contentTop + 90, end: bottomReserve },
+      overflowY: "auto",
+      justify: "center",
+      align: "end",
+    },
+    bottomCenter: {
+      x: { kind: "center", size: Math.min(360, viewportWidth - edge * 2) },
+      y: { kind: "end", offset: edge, size: 80 },
+      overflowY: "hidden",
+      justify: "end",
+      align: "center",
+    },
+    bottomRight: {
+      x: { kind: "end", offset: edge, size: Math.min(230, viewportWidth - edge * 2) },
+      y: { kind: "end", offset: edge, size: 64 },
+      overflowY: "hidden",
+      justify: "end",
+      align: "end",
+    },
+    center: {
+      x: { kind: "center", size: centerSize },
+      y: { kind: "center", size: centerSize },
+      overflowY: "hidden",
+      justify: "center",
+      align: "center",
+    },
+  };
+}
+
 /** Space a region leaves between the cards stacked inside it. */
 export const REGION_GAP = 10;
 
@@ -144,8 +229,13 @@ function resolveAxis(axis: RegionAxis, extent: number): { start: number; end: nu
 }
 
 /** The box a region occupies in a viewport of this size. */
-export function regionRect(region: HudRegion, viewportWidth: number, viewportHeight: number): Rect {
-  const rule = REGION_RULES[region];
+export function regionRect(
+  region: HudRegion,
+  viewportWidth: number,
+  viewportHeight: number,
+  mode: HudLayoutMode = "generic",
+): Rect {
+  const rule = regionRulesFor(viewportWidth, viewportHeight, mode)[region];
   const x = resolveAxis(rule.x, viewportWidth);
   const y = resolveAxis(rule.y, viewportHeight);
   return { left: x.start, top: y.start, right: x.end, bottom: y.end };
@@ -178,8 +268,13 @@ const FLEX_POSITION: Readonly<Record<"start" | "center" | "end", string>> = {
   end: "flex-end",
 };
 
-export function regionStyle(region: HudRegion): CSSProperties {
-  const rule = REGION_RULES[region];
+export function regionStyle(
+  region: HudRegion,
+  viewportWidth = 1280,
+  viewportHeight = 720,
+  mode: HudLayoutMode = "generic",
+): CSSProperties {
+  const rule = regionRulesFor(viewportWidth, viewportHeight, mode)[region];
   return {
     position: "absolute",
     ...axisCss(rule.x, "left", "width"),
@@ -202,27 +297,27 @@ export function regionStyle(region: HudRegion): CSSProperties {
  * 1280x720, the smallest size the HUD is checked at, so anything sized from this
  * before layout is never larger than it can be.
  */
-export function regionHeight(region: HudRegion): number {
+export function regionHeight(region: HudRegion, mode: HudLayoutMode = "generic"): number {
   const width = typeof window === "undefined" ? 1280 : window.innerWidth;
   const height = typeof window === "undefined" ? 720 : window.innerHeight;
-  const rect = regionRect(region, width, height);
+  const rect = regionRect(region, width, height, mode);
   return rect.bottom - rect.top;
 }
 
 /** `regionHeight`, kept current through a window that changes size mid-round. */
-export function useRegionHeight(region: HudRegion): number {
-  const [height, setHeight] = useState(() => regionHeight(region));
+export function useRegionHeight(region: HudRegion, mode: HudLayoutMode = "generic"): number {
+  const [height, setHeight] = useState(() => regionHeight(region, mode));
 
   useEffect(() => {
     const onResize = (): void => {
-      setHeight(regionHeight(region));
+      setHeight(regionHeight(region, mode));
     };
     onResize();
     window.addEventListener("resize", onResize);
     return () => {
       window.removeEventListener("resize", onResize);
     };
-  }, [region]);
+  }, [mode, region]);
 
   return height;
 }
@@ -236,6 +331,7 @@ export type RegionAssignment = Partial<Readonly<Record<HudRegion, ReactNode>>>;
 
 export interface HudLayoutProps {
   readonly regions: RegionAssignment;
+  readonly mode?: HudLayoutMode;
 }
 
 /**
@@ -252,14 +348,30 @@ const rootStyle: CSSProperties = {
   font: `13px/1.5 ${FONT_UI}`,
 };
 
-export function HudLayout({ regions }: HudLayoutProps): ReactElement {
+export function HudLayout({ regions, mode = "generic" }: HudLayoutProps): ReactElement {
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window === "undefined" ? 1280 : window.innerWidth,
+    height: typeof window === "undefined" ? 720 : window.innerHeight,
+  }));
+
+  useEffect(() => {
+    const onResize = (): void => setViewport({ width: window.innerWidth, height: window.innerHeight });
+    onResize();
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
   return (
-    <div style={rootStyle}>
+    <div style={rootStyle} data-hud-layout={mode} data-hud-viewport={`${viewport.width}x${viewport.height}`}>
       {HUD_REGIONS.map((region) => {
         const content = regions[region];
         if (content === undefined || content === null || content === false) return null;
         return (
-          <div key={region} data-hud-region={region} style={regionStyle(region)}>
+          <div
+            key={region}
+            data-hud-region={region}
+            style={regionStyle(region, viewport.width, viewport.height, mode)}
+          >
             {content}
           </div>
         );

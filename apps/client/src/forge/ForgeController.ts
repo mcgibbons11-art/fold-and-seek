@@ -668,6 +668,7 @@ export class ForgeController {
   private gamepadPreviousToolHeld = false;
   private gamepadNextToolHeld = false;
   private gamepadMirrorHeld = false;
+  private gamepadToolActionHeld: InputAction | null = null;
   private lockedPayload: LockedDisguise | null = null;
 
   /**
@@ -3498,6 +3499,7 @@ export class ForgeController {
     const previous = pad?.previousTool ?? false;
     const next = pad?.nextTool ?? false;
     const mirror = pad?.mirror ?? false;
+    const toolAction = pad?.toolAction ?? null;
     if (previous && !this.gamepadPreviousToolHeld) {
       const index = (FORGE_TOOL_MODES.indexOf(this.mode) - 1 + FORGE_TOOL_MODES.length) % FORGE_TOOL_MODES.length;
       this.setToolMode(FORGE_TOOL_MODES[index]!);
@@ -3507,9 +3509,21 @@ export class ForgeController {
       this.setToolMode(FORGE_TOOL_MODES[index]!);
     }
     if (mirror && !this.gamepadMirrorHeld) this.setMirror(!this.mirror);
+    if (toolAction !== null && toolAction !== this.gamepadToolActionHeld) {
+      const directMode: Partial<Record<InputAction, ForgeToolMode>> = {
+        toolPose: "pose",
+        toolShape: "shape",
+        toolPanels: "panels",
+        toolMaterial: "material",
+        toolPaint: "paint",
+      };
+      const mode = directMode[toolAction];
+      if (mode !== undefined) this.setToolMode(mode);
+    }
     this.gamepadPreviousToolHeld = previous;
     this.gamepadNextToolHeld = next;
     this.gamepadMirrorHeld = mirror;
+    this.gamepadToolActionHeld = toolAction;
   }
 
   /**

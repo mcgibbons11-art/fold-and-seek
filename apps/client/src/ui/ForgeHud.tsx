@@ -610,9 +610,12 @@ export function ForgeHud({
 export function ForgeToolPanels({
   controller,
   width = 236,
+  embedded = false,
 }: {
   readonly controller: ForgeController;
-  readonly width?: number;
+  readonly width?: number | string;
+  /** Draw inside the hunt's single persistent dock instead of making sub-plates. */
+  readonly embedded?: boolean;
 }): ReactElement {
   const [state, setState] = useState<ForgeHudState>(() => controller.snapshot());
 
@@ -623,16 +626,21 @@ export function ForgeToolPanels({
   };
 
   const cardStyle: CSSProperties = {
-    ...plate(),
+    ...(embedded ? {} : plate()),
     borderRadius: 10,
-    padding: "12px 14px",
+    padding: embedded ? "10px 4px" : "12px 14px",
     pointerEvents: "auto",
-    width,
+    width: embedded ? "100%" : width,
     boxSizing: "border-box",
+    ...(embedded ? { borderTop: EDGE } : {}),
   };
 
   return (
-    <div data-sound-scope="semantic" style={{ display: "flex", flexDirection: "column", gap: 10, width }}>
+    <div
+      data-sound-scope="semantic"
+      data-forge-command-owner="hider-dock"
+      style={{ display: "flex", flexDirection: "column", gap: embedded ? 0 : 10, width: embedded ? "100%" : width }}
+    >
       <div
         {...hudProps}
         role="group"

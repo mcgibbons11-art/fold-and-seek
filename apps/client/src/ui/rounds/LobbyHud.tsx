@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactElement } fr
 
 import { AudioPlayer } from "../../forge/AudioPlayer";
 import type { RoundViewState } from "../../gameplay/roundView";
+import { useScreenEntryFocus } from "../accessibility";
 import {
   BRASS,
   BRASS_LIT,
@@ -195,6 +196,7 @@ export function LobbyHud({
   onAddBot,
   onRemoveBot,
 }: LobbyHudProps): ReactElement {
+  const screenRef = useScreenEntryFocus<HTMLDivElement>("lobby");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const narrowLobby = useNarrowLobby();
   const [briefingOpen, setBriefingOpen] = useState(false);
@@ -255,7 +257,7 @@ export function LobbyHud({
   }, [readyIntent]);
 
   return (
-    <div style={overlayStyle}>
+    <div ref={screenRef} style={overlayStyle}>
       <div className="fs-lobby-grid" style={columnStyle}>
         <div
           className="fs-lobby-header"
@@ -336,6 +338,7 @@ export function LobbyHud({
               disabled={!readyGate.allowed}
               aria-pressed={displayedReady}
               aria-busy={readyIntent !== null}
+              data-entry-focus="true"
               onClick={() => {
                 const next = !displayedReady;
                 setReadyIntent(next);

@@ -2,6 +2,7 @@ import type { CSSProperties, ReactElement } from "react";
 
 import type { RoundLoadProgress } from "../engine/GameHost";
 import { loadingLabel } from "../gameplay/copy";
+import { AtomicLiveRegion, useProgressMilestones, useScreenEntryFocus } from "./accessibility";
 import {
   BRASS,
   BRASS_LIT,
@@ -63,9 +64,17 @@ export interface LoadingScreenProps {
 
 export function LoadingScreen({ progress, onCancel }: LoadingScreenProps): ReactElement {
   const percent = Math.round(Math.min(Math.max(progress.fraction, 0), 1) * 100);
+  const screenRef = useScreenEntryFocus<HTMLDivElement>("loading");
+  const announcement = useProgressMilestones("Opening the shop", progress.fraction);
   return (
-    <div style={backdropStyle} role="status" aria-live="polite">
-      <h1 style={{ ...headlineStyle, fontSize: 22 }} className="fs-candle">
+    <div ref={screenRef} style={backdropStyle}>
+      <AtomicLiveRegion message={announcement} />
+      <h1
+        style={{ ...headlineStyle, fontSize: 22 }}
+        className="fs-candle"
+        tabIndex={onCancel === undefined ? -1 : undefined}
+        data-entry-focus={onCancel === undefined ? "true" : undefined}
+      >
         Opening the shop
       </h1>
       <div style={ornamentRuleStyle(160)} aria-hidden />
@@ -102,6 +111,7 @@ export function LoadingScreen({ progress, onCancel }: LoadingScreenProps): React
           className={PRESS_CLASS}
           style={{ ...buttonStyle, marginTop: 6 }}
           onClick={onCancel}
+          data-entry-focus="true"
         >
           Return to menu
         </button>

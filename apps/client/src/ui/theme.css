@@ -327,28 +327,75 @@
 
 @media (max-width: 680px) {
   .fs-matchmaking-screen {
-    grid-template-rows: auto minmax(0, 1fr) 42px !important;
+    grid-template-rows: auto minmax(0, 1fr) 38px !important;
   }
   .fs-matchmaking-header {
-    padding: 14px 16px !important;
+    gap: 8px !important;
+    padding: 10px 12px !important;
   }
   .fs-matchmaking-header > div:last-child > div {
     display: none;
   }
   .fs-matchmaking-columns {
-    display: block !important;
-    overflow-y: auto !important;
-    padding: 10px !important;
+    display: grid !important;
+    grid-template-columns: minmax(190px, 0.85fr) minmax(0, 1.15fr) !important;
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 8px !important;
+    overflow: hidden !important;
+    padding: 8px !important;
   }
   .fs-matchmaking-columns > section {
-    margin-bottom: 10px;
-    min-height: 260px !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    margin: 0;
+    padding: 11px !important;
   }
-  .fs-matchmaking-columns > section:last-child {
-    display: block;
+  .fs-matchmaking-room-list,
+  .fs-matchmaking-selected {
+    overflow-y: auto !important;
+  }
+  .fs-matchmaking-actions {
+    grid-column: 1 / -1;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px 8px !important;
+    overflow-y: auto !important;
+  }
+  .fs-matchmaking-actions > h2,
+  .fs-matchmaking-actions > div[aria-hidden="true"] {
+    display: none;
+  }
+  .fs-matchmaking-actions > button:first-of-type {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .fs-matchmaking-actions > button:nth-of-type(2) {
+    grid-column: 2;
+    grid-row: 1;
+    margin-top: 0 !important;
+  }
+  .fs-matchmaking-actions > p:first-of-type {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    margin: 0 !important;
+  }
+  .fs-matchmaking-actions > div:not([aria-hidden="true"]),
+  .fs-matchmaking-actions > .fs-matchmaking-recovery {
+    grid-column: 1 / -1;
   }
   .fs-matchmaking-footer {
-    padding: 0 14px !important;
+    padding: 0 10px !important;
+  }
+  .fs-matchmaking-footer > span:first-child {
+    display: none;
+  }
+  .fs-matchmaking-request-sheet {
+    top: 72px !important;
+    right: 8px !important;
+    bottom: auto !important;
+    width: min(330px, calc(100vw - 16px)) !important;
+    max-height: calc(100vh - 118px);
+    overflow-y: auto;
   }
 }
 
@@ -523,4 +570,30 @@ html[data-reduced-motion="true"] .fs-sheen {
 
 html[data-reduced-motion="true"] .fs-press {
   transition: none !important;
+}
+
+/* User-scaled HUD remains bounded by each responsive region rather than changing the viewport. */
+.fs-hud-root,
+.fs-game-menu,
+.fs-sound-captions {
+  font-size: calc(1em * var(--fs-text-scale, 1));
+}
+
+html[data-high-contrast-hud="true"] .fs-press,
+html[data-high-contrast-hud="true"] [data-hud-region] > * {
+  border-color: rgba(255, 220, 150, 0.88) !important;
+  background-color: rgba(5, 4, 3, 0.96) !important;
+  backdrop-filter: none !important;
+}
+
+html[data-high-contrast-hud="true"] .fs-press:focus-visible {
+  outline: 3px solid #ffcf79;
+  outline-offset: 2px;
+}
+
+.fs-settings-categories summary:focus-visible,
+details > summary:focus-visible {
+  outline: 2px solid #ffbe6b;
+  outline-offset: 3px;
+  border-radius: 3px;
 }

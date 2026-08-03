@@ -114,6 +114,26 @@ export function columnDensityFor(availableHeight: number): ColumnDensity {
   return COLUMN_DENSITIES[COLUMN_DENSITIES.length - 1] as ColumnDensity;
 }
 
+export interface HiderHudUrgency {
+  readonly watchedLevel: 0 | 1 | 2;
+  readonly finalTen: boolean;
+  readonly traversal: "climbing" | "topout" | "airborne" | null;
+}
+
+/**
+ * Returning players do not need the roomy teaching copy while the round is
+ * demanding an immediate response. Danger, traversal, and the final countdown
+ * all switch the dock to its compact grammar so the actionable cue stays above
+ * lower-priority score detail.
+ */
+export function hiderDensityFor(
+  availableHeight: number,
+  urgency: HiderHudUrgency,
+): ColumnDensity {
+  if (urgency.watchedLevel > 0 || urgency.finalTen || urgency.traversal !== null) return COMPACT;
+  return columnDensityFor(availableHeight);
+}
+
 /**
  * Whether the tool panels start unfolded: wherever the column can hold them
  * whole.

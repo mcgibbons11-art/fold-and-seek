@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactElement } from "react";
 
 import type { PhaseTimerView } from "../../gameplay/roundView";
+import { AtomicLiveRegion, useCountdownMilestones } from "../accessibility";
 import {
   ALARM,
   BRASS,
@@ -53,11 +54,14 @@ const barTrackStyle: CSSProperties = {
 
 export function PhaseTimer({ timer, label, note }: PhaseTimerProps): ReactElement {
   const accent = timer.finalTen ? ALARM : BRASS;
+  const spokenLabel = label ?? "Round timer";
+  const announcement = useCountdownMilestones(spokenLabel, timer.remainingMs, timer.running);
   const fraction =
     timer.totalMs > 0 ? Math.min(1, Math.max(0, timer.remainingMs / timer.totalMs)) : 0;
 
   return (
-    <div style={containerStyle} role="status" aria-live="polite">
+    <div style={containerStyle} aria-label={spokenLabel}>
+      <AtomicLiveRegion message={announcement} />
       {label === null ? null : (
         <h2 style={{ ...headlineStyle, color: accent, fontSize: timer.finalTen ? 22 : 18 }}>
           {label}

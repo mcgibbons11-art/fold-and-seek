@@ -6,6 +6,9 @@ export interface PlayerPreferences {
   readonly cameraMotion: number;
   readonly shake: number;
   readonly reducedMotion: boolean;
+  readonly hudScale: number;
+  readonly textScale: number;
+  readonly highContrastHud: boolean;
   readonly showDiagnostics: boolean;
   readonly soundCaptionMode: "off" | "critical" | "gameplay";
 }
@@ -21,6 +24,9 @@ const DEFAULTS: PlayerPreferences = {
   cameraMotion: 0.65,
   shake: 0.7,
   reducedMotion: false,
+  hudScale: 1,
+  textScale: 1,
+  highContrastHud: false,
   showDiagnostics: false,
   soundCaptionMode: "off",
 };
@@ -42,6 +48,10 @@ function normalize(input: Partial<PlayerPreferences>): PlayerPreferences {
     cameraMotion: clamp(input.cameraMotion, 0, 1, DEFAULTS.cameraMotion),
     shake: clamp(input.shake, 0, 1, DEFAULTS.shake),
     reducedMotion: typeof input.reducedMotion === "boolean" ? input.reducedMotion : DEFAULTS.reducedMotion,
+    hudScale: clamp(input.hudScale, 0.85, 1.25, DEFAULTS.hudScale),
+    textScale: clamp(input.textScale, 0.9, 1.3, DEFAULTS.textScale),
+    highContrastHud:
+      typeof input.highContrastHud === "boolean" ? input.highContrastHud : DEFAULTS.highContrastHud,
     showDiagnostics: typeof input.showDiagnostics === "boolean" ? input.showDiagnostics : DEFAULTS.showDiagnostics,
     soundCaptionMode:
       input.soundCaptionMode === "critical" || input.soundCaptionMode === "gameplay"
@@ -65,6 +75,9 @@ let current = load();
 function applyDocumentPreference(preferences: PlayerPreferences): void {
   if (typeof document === "undefined") return;
   document.documentElement.dataset.reducedMotion = preferences.reducedMotion ? "true" : "false";
+  document.documentElement.dataset.highContrastHud = preferences.highContrastHud ? "true" : "false";
+  document.documentElement.style.setProperty("--fs-hud-scale", String(preferences.hudScale));
+  document.documentElement.style.setProperty("--fs-text-scale", String(preferences.textScale));
 }
 
 applyDocumentPreference(current);

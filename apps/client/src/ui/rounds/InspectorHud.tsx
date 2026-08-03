@@ -54,7 +54,7 @@ export interface InspectorGunView {
   readonly lastShotOutcome?: ShotOutcome | null;
 }
 
-type ReticleState = "normal" | "on_target" | "out_of_range" | "cooldown";
+type ReticleState = "normal" | "on_target" | "out_of_range" | "cooldown" | "empty";
 
 /** How long a shot's result holds the middle of the screen. */
 const HIT_CALLOUT_MS = 1_600;
@@ -79,6 +79,7 @@ const RETICLE_COLORS: Readonly<Record<ReticleState, string>> = {
   on_target: BRASS_LIT,
   out_of_range: "rgba(232, 221, 205, 0.55)",
   cooldown: ALARM,
+  empty: "rgba(232, 221, 205, 0.48)",
 };
 
 /** How far the ticks stand off centre, which closes when there is something to shoot. */
@@ -87,13 +88,15 @@ const RETICLE_SPREAD: Readonly<Record<ReticleState, number>> = {
   on_target: 8,
   out_of_range: 13,
   cooldown: 17,
+  empty: 19,
 };
 
 /** The dark edge every mark carries, so the reticle never sinks into the room. */
 const RETICLE_OUTLINE = "0 0 0 1px rgba(10, 7, 4, 0.75), 0 0 6px rgba(10, 7, 4, 0.6)";
 
 function reticleStateOf(gun: InspectorGunView, outOfAmmo: boolean): ReticleState {
-  if (outOfAmmo || gun.state === "cooldown" || gun.cooldownRemainingMs > 0) return "cooldown";
+  if (outOfAmmo) return "empty";
+  if (gun.state === "cooldown" || gun.cooldownRemainingMs > 0) return "cooldown";
   if (gun.targetObjectId === null) return "normal";
   return gun.targetInRange ? "on_target" : "out_of_range";
 }
@@ -157,6 +160,7 @@ export function InspectorStatusCard({ state }: InspectorStatusCardProps): ReactE
 
   return (
     <div
+      data-warrant-state={outOfAmmo ? "empty" : "ready"}
       style={{
         ...plate(),
         borderRadius: 10,
@@ -166,10 +170,13 @@ export function InspectorStatusCard({ state }: InspectorStatusCardProps): ReactE
         pointerEvents: "none",
       }}
     >
-      <div style={{ ...labelStyle, display: "flex", justifyContent: "space-between", gap: 12 }}>
-        <span>{AMMO_LABEL}</span>
-        <span style={{ color: outOfAmmo ? ALARM : BRASS_LIT, fontVariantNumeric: "tabular-nums" }}>
-          {warrantsRemaining} / {warrantTotal}
+      <div style={labelStyle}>{AMMO_LABEL}</div>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+        <span style={{ ...figureStyle, color: outOfAmmo ? ALARM : BRASS_LIT, fontVariantNumeric: "tabular-nums" }}>
+          {warrantsRemaining}
+        </span>
+        <span style={{ ...labelStyle, opacity: 0.9 }}>
+          {outOfAmmo ? "EMPTY" : `OF ${warrantTotal} READY`}
         </span>
       </div>
       <AmmoRounds total={warrantTotal} remaining={warrantsRemaining} />
@@ -199,6 +206,15 @@ function Reticle({
   // gun has a target, so the difference between an object and empty air is a
   // shape appearing rather than a shade of cream changing.
   const ringDiameter = spread * 2 + 6;
+  const symbol =
+    reticle === "out_of_range" ? "×" : reticle === "cooldown" ? "Ⅱ" : reticle === "empty" ? "∕" : null;
+  const stateLabel: Readonly<Record<ReticleState, string>> = {
+    normal: "No target",
+    on_target: "Warrant ready",
+    out_of_range: "Target out of range",
+    cooldown: "Warrant cycling",
+    empty: "No warrants",
+  };
 
   const tick = (rotation: number): CSSProperties => ({
     position: "absolute",
@@ -226,6 +242,17 @@ function Reticle({
         pointerEvents: "none",
       }}
       data-reticle={reticle}
+      data-reticle-shape={
+        reticle === "normal"
+          ? "open"
+          : reticle === "on_target"
+            ? "lock"
+            : reticle === "out_of_range"
+              ? "broken"
+              : reticle
+      }
+      role="img"
+      aria-label={stateLabel[reticle]}
     >
       {reticle === "normal" ? null : (
         <div
@@ -238,7 +265,7 @@ function Reticle({
             marginLeft: -ringDiameter / 2,
             marginTop: -ringDiameter / 2,
             borderRadius: "50%",
-            border: `1px solid ${color}`,
+            border: `${reticle === "on_target" ? 2 : 1}px ${reticle === "out_of_range" || reticle === "empty" ? "dashed" : "solid"} ${color}`,
             boxShadow: RETICLE_OUTLINE,
             opacity: reticle === "on_target" ? 0.95 : 0.5,
             transition: "width 90ms ease-out, height 90ms ease-out, border-color 90ms linear",
@@ -263,6 +290,23 @@ function Reticle({
           boxShadow: RETICLE_OUTLINE,
         }}
       />
+      {symbol === null ? null : (
+        <span
+          data-reticle-symbol={reticle}
+          aria-hidden
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "grid",
+            placeItems: "center",
+            color,
+            font: `700 13px/1 ${FONT_DISPLAY}`,
+            textShadow: RETICLE_OUTLINE,
+          }}
+        >
+          {symbol}
+        </span>
+      )}
       {progress > 0 ? (
         <div
           style={{

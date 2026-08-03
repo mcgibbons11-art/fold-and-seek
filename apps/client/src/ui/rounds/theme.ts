@@ -182,6 +182,28 @@ export const primaryButtonStyle: CSSProperties = {
     "0 6px 16px rgba(0, 0, 0, 0.45), 0 0 22px rgba(255, 190, 107, 0.16), inset 0 1px 0 rgba(255, 240, 205, 0.5)",
 };
 
+/** Destructive actions are alarm-red and textual; brass remains reserved for progress/selection. */
+export const destructiveButtonStyle: CSSProperties = {
+  ...buttonStyle,
+  color: "#ffd8cf",
+  borderColor: "rgba(200, 80, 60, 0.78)",
+  background: "repeating-linear-gradient(135deg, rgba(200, 80, 60, 0.23) 0 7px, rgba(70, 24, 18, 0.28) 7px 14px)",
+};
+
+export const screenCardStyle: CSSProperties = {
+  ...plate(true),
+  borderRadius: 14,
+  color: CREAM,
+  boxSizing: "border-box",
+};
+
+export function statusPatternStyle(tone: "active" | "warning" | "error" | "neutral"): CSSProperties {
+  if (tone === "active") return { borderColor: BRASS_LIT, background: "linear-gradient(180deg, rgba(216,173,99,.24), rgba(80,57,25,.18))" };
+  if (tone === "warning") return { borderColor: CANDLE, background: "repeating-linear-gradient(135deg, rgba(255,190,107,.18) 0 6px, transparent 6px 12px)" };
+  if (tone === "error") return { borderColor: ALARM, background: "repeating-linear-gradient(135deg, rgba(200,80,60,.22) 0 6px, transparent 6px 12px)" };
+  return { borderColor: "rgba(232,221,205,.4)" };
+}
+
 export function disabledButtonStyle(base: CSSProperties): CSSProperties {
   return {
     ...base,

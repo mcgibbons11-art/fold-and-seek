@@ -12,6 +12,7 @@ import {
   primaryButtonStyle,
 } from "./rounds/theme";
 import { FoldedObjectMark } from "./FoldedObjectMark";
+import { useScreenEntryFocus } from "./accessibility";
 
 const screenStyle: CSSProperties = {
   position: "fixed",
@@ -34,8 +35,9 @@ export interface StartScreenProps {
 
 /** The deliberate first input after the renderer has finished loading. */
 export function StartScreen({ onEnter }: StartScreenProps): ReactElement {
+  const screenRef = useScreenEntryFocus<HTMLDivElement>("start");
   return (
-    <div style={screenStyle} className="fs-start-screen" aria-label="Fold and Seek start screen">
+    <div ref={screenRef} style={screenStyle} className="fs-start-screen" aria-label="Fold and Seek start screen">
       <main className="fs-start-content">
         <FoldedObjectMark />
         <div className="fs-rise" style={{ maxWidth: 760 }}>
@@ -72,7 +74,7 @@ export function StartScreen({ onEnter }: StartScreenProps): ReactElement {
             className={`${PRESS_CLASS} fs-start-button`}
             style={{ ...primaryButtonStyle, minWidth: 250, padding: "13px 26px" }}
             onClick={onEnter}
-            autoFocus
+            data-entry-focus="true"
           >
             Enter the shop
           </button>

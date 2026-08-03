@@ -44,16 +44,35 @@ const INSPECTOR_HOTKEYS: readonly ControlHint[] = [
   { id: "pointer", keys: ["Esc"], label: "Release the mouse" },
 ];
 
-/** Canonical hotkey reference shared by the title and the live game menu. */
-export function HotkeyGuide(): ReactElement {
+export interface HotkeyGuideProps {
+  readonly role?: "mimic" | "inspector" | "spectator" | null;
+}
+
+const detailStyle: CSSProperties = {
+  borderBottom: "1px solid rgba(176, 138, 74, 0.22)",
+  padding: "8px 0",
+};
+
+/** Four-stage canonical guide; the live role opens first without hiding the rest. */
+export function HotkeyGuide({ role = null }: HotkeyGuideProps): ReactElement {
   return (
     <div aria-label="Hotkeys">
-      <div style={sectionStyle}>General hotkeys</div>
-      <ControlsLegend hints={GENERAL_HOTKEYS} title={null} />
-      <div style={sectionStyle}>Fast Forge hotkeys</div>
-      <ControlsLegend hints={FORGE_HOTKEYS} title={null} />
-      <div style={sectionStyle}>Inspector hotkeys</div>
-      <ControlsLegend hints={INSPECTOR_HOTKEYS} title={null} />
+      <details style={detailStyle} open={role === null || role === "spectator"}>
+        <summary style={sectionStyle}>Overview</summary>
+        <ControlsLegend hints={GENERAL_HOTKEYS} title={null} />
+      </details>
+      <details style={detailStyle} open={role === "mimic"}>
+        <summary style={sectionStyle}>Mimic</summary>
+        <ControlsLegend hints={[...GENERAL_HOTKEYS.filter((hint) => ["move", "climb", "taunt"].includes(hint.id))]} title={null} />
+      </details>
+      <details style={detailStyle} open={role === "inspector"}>
+        <summary style={sectionStyle}>Inspector</summary>
+        <ControlsLegend hints={INSPECTOR_HOTKEYS} title={null} />
+      </details>
+      <details style={detailStyle}>
+        <summary style={sectionStyle}>Forge & hotkeys</summary>
+        <ControlsLegend hints={FORGE_HOTKEYS} title={null} />
+      </details>
     </div>
   );
 }

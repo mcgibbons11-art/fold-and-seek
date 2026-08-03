@@ -77,7 +77,7 @@ const columnsStyle: CSSProperties = {
   gap: 14,
   minHeight: 0,
   padding: 14,
-  overflowX: "auto",
+  overflow: "hidden",
 };
 
 const columnStyle: CSSProperties = {
@@ -93,10 +93,23 @@ const rowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 10,
+  width: "100%",
+  boxSizing: "border-box",
   padding: "11px 8px",
+  color: "inherit",
+  font: "inherit",
+  textAlign: "left",
+  background: "transparent",
+  border: 0,
   borderTop: RULE,
   cursor: "pointer",
 };
+
+function noticeCategory(notice: string): "Network" | "Room" {
+  return /not connected|reconnect|network|transport|shared|publish|advertis|listing|multiplayer is unavailable/i.test(notice)
+    ? "Network"
+    : "Room";
+}
 
 const nameStyle: CSSProperties = {
   overflow: "hidden",
@@ -148,6 +161,12 @@ export interface RoomBrowserProps {
   readonly onForgePractice?: () => void;
   readonly busy?: boolean;
   readonly notice?: string | null;
+  /** Repeats the last room action after a recoverable refusal. */
+  readonly onRetryNotice?: () => void;
+  /** Rebuilds the live Portals room directory after a transport failure. */
+  readonly onReconnect?: () => void;
+  /** Clears the current notice without changing rooms. */
+  readonly onDismissNotice?: () => void;
   readonly onAcceptRequest?: (connectionId: string) => void;
   readonly onDeclineRequest?: (connectionId: string) => void;
   readonly onCancelRequest?: () => void;
@@ -168,6 +187,9 @@ export function RoomBrowser({
   onForgePractice,
   busy = false,
   notice = null,
+  onRetryNotice,
+  onReconnect,
+  onDismissNotice,
   onAcceptRequest,
   onDeclineRequest,
   onCancelRequest,
@@ -178,7 +200,13 @@ export function RoomBrowser({
   const [selectedCode, setSelectedCode] = useState<string | null>(rooms[0]?.code ?? null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [customOpen, setCustomOpen] = useState(false);
+  const [recoveryPending, setRecoveryPending] = useState(false);
+  const [dismissedNotice, setDismissedNotice] = useState<string | null>(null);
   const requestAudio = useRef<AudioPlayer | null>(null);
+  const recoveryPendingRef = useRef(false);
+  const dismissalHandledRef = useRef(false);
+  const roomRowRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const noticeActionRef = useRef<HTMLButtonElement | null>(null);
   const seenRequests = useRef(new Set<string>());
   const previousCurrentCode = useRef(currentCode);
   const previousNotice = useRef(notice);
@@ -207,6 +235,15 @@ export function RoomBrowser({
     if (notice === null || notice === previousNotice.current) return;
     requestAudio.current?.play(/declin|expir|cancel|fail|unavailable/i.test(notice) ? "ui_deny" : "ui_confirm");
     previousNotice.current = notice;
+  }, [notice]);
+
+  useEffect(() => {
+    recoveryPendingRef.current = false;
+    dismissalHandledRef.current = false;
+    setRecoveryPending(false);
+    if (notice !== dismissedNotice) setDismissedNotice(null);
+    if (notice === null) return;
+    window.requestAnimationFrame(() => noticeActionRef.current?.focus());
   }, [notice]);
 
   useEffect(() => {
@@ -241,6 +278,8 @@ export function RoomBrowser({
 
   const full = rooms.length >= MAX_CONCURRENT_ROOMS;
   const selected = rooms.find((room) => room.code === selectedCode) ?? rooms[0] ?? null;
+  const visibleNotice = notice === dismissedNotice ? null : notice;
+  const recoveryKind = visibleNotice === null ? null : noticeCategory(visibleNotice);
   const secondsLeft = (expiresAt: number): string => {
     const seconds = Math.max(0, Math.ceil((expiresAt - nowMs) / 1_000));
     return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
@@ -249,6 +288,30 @@ export function RoomBrowser({
     if (busy || full || currentCode !== null || outgoingRequest !== null) return;
     onCreate(name);
     setName("");
+  };
+  const moveRoomFocus = (index: number, direction: -1 | 1): void => {
+    if (rooms.length === 0) return;
+    const nextIndex = (index + direction + rooms.length) % rooms.length;
+    const next = rooms[nextIndex];
+    if (next === undefined) return;
+    setSelectedCode(next.code);
+    roomRowRefs.current[nextIndex]?.focus();
+  };
+  const recover = (action: (() => void) | undefined): void => {
+    if (recoveryPendingRef.current || action === undefined) return;
+    recoveryPendingRef.current = true;
+    setRecoveryPending(true);
+    action();
+  };
+  const dismissNotice = (): void => {
+    if (visibleNotice === null || dismissalHandledRef.current) return;
+    dismissalHandledRef.current = true;
+    setDismissedNotice(visibleNotice);
+    onDismissNotice?.();
+    window.requestAnimationFrame(() => {
+      const selectedIndex = rooms.findIndex((room) => room.code === selected?.code);
+      roomRowRefs.current[Math.max(0, selectedIndex)]?.focus();
+    });
   };
 
   return (
@@ -282,7 +345,7 @@ export function RoomBrowser({
       </header>
 
       <main style={columnsStyle} className="fs-matchmaking-columns">
-        <section style={columnStyle} aria-label="Open rooms">
+        <section style={columnStyle} className="fs-matchmaking-room-list" aria-label="Open rooms">
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
             <h2 style={{ margin: 0, font: `600 18px/1.2 ${FONT_DISPLAY}` }}>Open rooms</h2>
             <span style={metaStyle}>{rooms.length} found</span>
@@ -293,23 +356,51 @@ export function RoomBrowser({
               Nobody has opened a room yet. Open one and everyone in this Portals session will see it here.
             </p>
           ) : (
-            <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-              {rooms.map((room) => {
+            <ul role="listbox" aria-label="Available rooms" style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              {rooms.map((room, index) => {
                 const mine = room.code === currentCode;
                 const humans = Math.max(0, room.players - room.bots);
                 const selectedRow = room.code === selected?.code;
                 return (
-                  <li
-                    key={room.code}
-                    style={{
-                      ...rowStyle,
-                      background: selectedRow ? "rgba(176, 138, 74, 0.14)" : "transparent",
-                      borderLeft: selectedRow ? `3px solid ${BRASS_LIT}` : "3px solid transparent",
-                    }}
-                    onClick={() => {
-                      setSelectedCode(room.code);
-                    }}
-                  >
+                  <li key={room.code} role="presentation">
+                    <button
+                      ref={(node) => {
+                        roomRowRefs.current[index] = node;
+                      }}
+                      type="button"
+                      role="option"
+                      aria-selected={selectedRow}
+                      tabIndex={selectedRow ? 0 : -1}
+                      aria-label={`${room.name}, ${humans} of ${room.maxPlayers}, ${room.joinable ? roomStatus(room.phase) : "Full"}`}
+                      data-room-code={room.code}
+                      style={{
+                        ...rowStyle,
+                        background: selectedRow ? "rgba(176, 138, 74, 0.14)" : "transparent",
+                        borderLeft: selectedRow ? `3px solid ${BRASS_LIT}` : "3px solid transparent",
+                      }}
+                      onFocus={() => setSelectedCode(room.code)}
+                      onClick={() => setSelectedCode(room.code)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedCode(room.code);
+                        } else if (event.key === "ArrowDown" || event.key === "ArrowRight") {
+                          event.preventDefault();
+                          moveRoomFocus(index, 1);
+                        } else if (event.key === "ArrowUp" || event.key === "ArrowLeft") {
+                          event.preventDefault();
+                          moveRoomFocus(index, -1);
+                        } else if (event.key === "Home" || event.key === "End") {
+                          event.preventDefault();
+                          const targetIndex = event.key === "Home" ? 0 : rooms.length - 1;
+                          const target = rooms[targetIndex];
+                          if (target !== undefined) {
+                            setSelectedCode(target.code);
+                            roomRowRefs.current[targetIndex]?.focus();
+                          }
+                        }
+                      }}
+                    >
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={nameStyle}>{room.name}</div>
                       <div style={metaStyle}>
@@ -324,6 +415,7 @@ export function RoomBrowser({
                         {mine ? "Hosting" : outgoingRequest?.roomCode === room.code ? "Pending" : "Full"}
                       </span>
                     ) : null}
+                    </button>
                   </li>
                 );
               })}
@@ -340,6 +432,7 @@ export function RoomBrowser({
             background:
               "radial-gradient(100% 70% at 50% 36%, rgba(114, 78, 34, 0.28), rgba(18, 13, 8, 0.92)), linear-gradient(178deg, rgba(41, 30, 19, 0.9), rgba(13, 10, 7, 0.94))",
           }}
+          className="fs-matchmaking-selected"
           aria-label="Selected room"
         >
           {selected === null ? (
@@ -489,7 +582,7 @@ export function RoomBrowser({
           )}
         </section>
 
-        <section style={columnStyle} aria-label="Matchmaking actions">
+        <section style={columnStyle} className="fs-matchmaking-actions" aria-label="Matchmaking actions">
           <h2 style={{ margin: 0, font: `600 18px/1.2 ${FONT_DISPLAY}` }}>Matchmaking</h2>
           <div style={{ ...ornamentRuleStyle("100%"), margin: "10px 0 14px" }} aria-hidden />
           <button
@@ -573,13 +666,52 @@ export function RoomBrowser({
             </div>
           )}
 
-          {notice === null ? null : (
-            <p
+          {visibleNotice === null ? null : (
+            <div
               role="alert"
-              style={{ margin: "16px 0 0", color: "#e6a08e", fontSize: 12, lineHeight: 1.5 }}
+              aria-label={`${recoveryKind ?? "Room"} error`}
+              className="fs-matchmaking-recovery"
+              style={{ ...plate(true), marginTop: 16, padding: 12, borderRadius: 8 }}
             >
-              {notice}
-            </p>
+              <div style={{ ...labelStyle, color: "#e6a08e" }}>{recoveryKind} error</div>
+              <p style={{ margin: "6px 0 10px", color: "#f2c4b8", fontSize: 12, lineHeight: 1.5 }}>
+                {visibleNotice}
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 7 }}>
+                {recoveryKind === "Network" && onReconnect !== undefined ? (
+                  <button
+                    ref={noticeActionRef}
+                    type="button"
+                    className={PRESS_CLASS}
+                    style={smallButtonStyle}
+                    disabled={recoveryPending}
+                    onClick={() => recover(onReconnect)}
+                  >
+                    {recoveryPending ? "Reconnecting…" : "Reconnect"}
+                  </button>
+                ) : onRetryNotice !== undefined ? (
+                  <button
+                    ref={noticeActionRef}
+                    type="button"
+                    className={PRESS_CLASS}
+                    style={smallButtonStyle}
+                    disabled={recoveryPending}
+                    onClick={() => recover(onRetryNotice)}
+                  >
+                    {recoveryPending ? "Retrying…" : "Retry"}
+                  </button>
+                ) : null}
+                <button
+                  ref={onReconnect === undefined && onRetryNotice === undefined ? noticeActionRef : undefined}
+                  type="button"
+                  className={PRESS_CLASS}
+                  style={smallButtonStyle}
+                  onClick={dismissNotice}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
           )}
           {full ? (
             <p style={{ ...labelStyle, opacity: 0.6, marginTop: 16, letterSpacing: "0.08em" }}>
@@ -593,6 +725,8 @@ export function RoomBrowser({
         <aside
           role="alert"
           aria-live="assertive"
+          aria-label="Pending join request"
+          className="fs-matchmaking-request-sheet"
           style={{
             position: "fixed",
             zIndex: 35,

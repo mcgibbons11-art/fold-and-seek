@@ -2,6 +2,7 @@ import type { CSSProperties, ReactElement } from "react";
 
 import { huntStatusLabel } from "../../gameplay/copy";
 import type { RoundViewState } from "../../gameplay/roundView";
+import { AtomicLiveRegion, useCountdownMilestones } from "../accessibility";
 import { ALARM, BRASS, CREAM, FONT_NUMERIC, formatClock, headlineStyle, labelStyle, plate } from "./theme";
 
 /**
@@ -49,19 +50,25 @@ export function HuntStatus({ state }: HuntStatusProps): ReactElement {
   const hiderTotal = Math.max(state.reveal.entries.length, state.mimicsRemaining);
   const hidersLeft = Math.min(state.mimicsRemaining, hiderTotal);
   const found = hiderTotal - hidersLeft;
+  const countdownAnnouncement = useCountdownMilestones(
+    huntStatusLabel(state.phase),
+    state.timer.remainingMs,
+    state.timer.running,
+  );
 
   return (
     <div
+      data-persistent-plate="hunt-status"
       style={{
         ...plate(),
         borderRadius: 10,
         padding: "8px 22px 10px",
         textAlign: "center",
       }}
-      role="status"
-      aria-live="polite"
       aria-label={`${hidersLeft} still hidden, ${state.timer.secondsRemaining} seconds left`}
     >
+      <AtomicLiveRegion message={`${String(hidersLeft)} Mimics still hidden`} />
+      <AtomicLiveRegion message={countdownAnnouncement} />
       <div style={rowStyle}>
         <div style={{ textAlign: "right" }}>
           <div

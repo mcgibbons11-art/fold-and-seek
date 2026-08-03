@@ -1,21 +1,18 @@
-import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+  type RefObject,
+} from "react";
 
-import { AudioSettings } from "./AudioSettings";
-import {
-  getPlayerPreferences,
-  setPlayerPreferences,
-  subscribePlayerPreferences,
-} from "../gameplay/preferences";
-import { QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
-import { ControlsLegend } from "./ControlsLegend";
+import { type QualityTier } from "../rendering/quality";
 import { HotkeyGuide } from "./HotkeyGuide";
-import { KeyBindingPanel } from "./KeyBindingPanel";
+import { PlayerSettingsPanel } from "./PlayerSettingsPanel";
 import { REPLAY_ONBOARDING_EVENT } from "./FirstRoundGuide";
-import {
-  CORE_CONTROL_HINTS,
-  HIDER_CONTROL_HINTS,
-  INSPECTOR_ROLE_HINTS,
-} from "./rounds/huntControls";
 import {
   BRASS_LIT,
   CREAM,
@@ -28,15 +25,8 @@ import {
   primaryButtonStyle,
 } from "./rounds/theme";
 
-type MenuPage = "root" | "settings" | "howToPlay";
-
-const QUALITY_LABELS: Readonly<Record<QualityTier, string>> = {
-  light: "Lightest",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  ultra: "Ultra",
-};
+type MenuPage = "root" | "settings" | "howToPlay" | "confirmLeave";
+export const REQUEST_LEAVE_MATCH_EVENT = "foldseek:request-leave-match";
 
 const menuButtonStyle: CSSProperties = {
   ...buttonStyle,
@@ -51,51 +41,183 @@ const menuButtonStyle: CSSProperties = {
 };
 
 const pageButtonStyle: CSSProperties = { ...buttonStyle, width: "100%", marginBottom: 8 };
+const MENU_FOCUSABLE =
+  'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])';
+
+function focusableMenuItems(root: HTMLElement): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(MENU_FOCUSABLE)].filter(
+    (element) => !element.hidden && element.getAttribute("aria-hidden") !== "true",
+  );
+}
+
+function moveMenuFocus(root: HTMLElement, delta: number): void {
+  const items = focusableMenuItems(root);
+  if (items.length === 0) return;
+  const current = items.indexOf(document.activeElement as HTMLElement);
+  const next = current < 0 ? (delta > 0 ? 0 : items.length - 1) : (current + delta + items.length) % items.length;
+  items[next]?.focus({ preventScroll: true });
+}
+
+/** Native gamepads do not emit DOM key events, so the pause menu samples their edge presses. */
+function useGamepadMenu(
+  open: boolean,
+  dialogRef: RefObject<HTMLDivElement | null>,
+  onClose: () => void,
+): void {
+  useEffect(() => {
+    if (!open || typeof navigator.getGamepads !== "function") return undefined;
+    let lastDirection = 0;
+    let lastAccept = false;
+    let lastBack = false;
+    const timer = window.setInterval(() => {
+      const pad = [...navigator.getGamepads()].find((candidate) => candidate?.connected) ?? null;
+      if (pad === null) return;
+      const direction = pad.buttons[12]?.pressed || (pad.axes[1] ?? 0) < -0.55
+        ? -1
+        : pad.buttons[13]?.pressed || (pad.axes[1] ?? 0) > 0.55
+          ? 1
+          : 0;
+      const accept = pad.buttons[0]?.pressed ?? false;
+      const back = pad.buttons[1]?.pressed ?? false;
+      const dialog = dialogRef.current;
+      if (dialog !== null && direction !== 0 && lastDirection === 0) {
+        moveMenuFocus(dialog, direction);
+      }
+      if (accept && !lastAccept && document.activeElement instanceof HTMLElement) {
+        document.activeElement.click();
+      }
+      if (back && !lastBack) onClose();
+      lastDirection = direction;
+      lastAccept = accept;
+      lastBack = back;
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, [dialogRef, onClose, open]);
+}
 
 export interface GameMenuProps {
   readonly qualityTier: QualityTier;
   readonly onQualityTierChange: (tier: QualityTier) => void;
-  readonly onLeave: () => void;
+  readonly onLeave: () => void | Promise<void>;
   readonly role: "mimic" | "inspector" | "spectator" | null;
 }
 
 /** One quiet entry point for help, settings, and leaving instead of three permanent HUD buttons. */
 export function GameMenu(props: GameMenuProps): ReactElement {
   const [page, setPage] = useState<MenuPage | null>(null);
-  const [preferences, setPreferencesState] = useState(() => getPlayerPreferences());
+  const [leaving, setLeaving] = useState(false);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const leaveRequestedRef = useRef(false);
 
-  useEffect(() => subscribePlayerPreferences(setPreferencesState), []);
 
-  const open = (): void => {
-    if (document.pointerLockElement !== null) void document.exitPointerLock();
-    setPage("root");
-  };
+  const openTo = useCallback((nextPage: MenuPage): void => {
+    restoreFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : menuButtonRef.current;
+    if (document.pointerLockElement != null && typeof document.exitPointerLock === "function") {
+      void document.exitPointerLock();
+    }
+    setPage(nextPage);
+  }, []);
+  const open = useCallback((): void => openTo("root"), [openTo]);
+
+  const close = useCallback((): void => {
+    if (leaveRequestedRef.current) return;
+    setPage(null);
+  }, []);
+
+  useEffect(() => {
+    const onLeaveRequest = (): void => openTo("confirmLeave");
+    window.addEventListener(REQUEST_LEAVE_MATCH_EVENT, onLeaveRequest);
+    return () => window.removeEventListener(REQUEST_LEAVE_MATCH_EVENT, onLeaveRequest);
+  }, [openTo]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === "F1") {
         event.preventDefault();
         if (page === null) open();
-        else setPage(null);
+        else close();
       } else if (event.key === "Escape" && page !== null) {
         event.preventDefault();
-        setPage(null);
+        close();
+      } else if (page !== null && dialogRef.current !== null) {
+        const dialog = dialogRef.current;
+        if (event.key === "Tab") {
+          const items = focusableMenuItems(dialog);
+          if (items.length === 0) return;
+          const first = items[0];
+          const last = items.at(-1);
+          if (!dialog.contains(document.activeElement)) {
+            event.preventDefault();
+            (event.shiftKey ? last : first)?.focus();
+          } else if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last?.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first?.focus();
+          }
+        } else if (
+          !(event.target instanceof HTMLInputElement) &&
+          ["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(event.key)
+        ) {
+          event.preventDefault();
+          moveMenuFocus(dialog, event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : -1);
+        } else if (event.key === "Home" || event.key === "End") {
+          const items = focusableMenuItems(dialog);
+          event.preventDefault();
+          (event.key === "Home" ? items[0] : items.at(-1))?.focus();
+        }
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, [close, open, page]);
+
+  useLayoutEffect(() => {
+    if (page === null) {
+      const restore = restoreFocusRef.current;
+      restoreFocusRef.current = null;
+      restore?.focus({ preventScroll: true });
+      return;
+    }
+    const dialog = dialogRef.current;
+    const preferred = dialog?.querySelector<HTMLElement>('[data-menu-focus="true"]');
+    (preferred ?? (dialog === null ? null : focusableMenuItems(dialog)[0]))?.focus({
+      preventScroll: true,
+    });
   }, [page]);
+
+  useGamepadMenu(page !== null, dialogRef, close);
+
+  const leave = (): void => {
+    if (leaveRequestedRef.current) return;
+    leaveRequestedRef.current = true;
+    setLeaving(true);
+    try {
+      void Promise.resolve(props.onLeave()).catch(() => {
+        leaveRequestedRef.current = false;
+        setLeaving(false);
+      });
+    } catch {
+      leaveRequestedRef.current = false;
+      setLeaving(false);
+    }
+  };
 
   return (
     <>
-      <button type="button" className={PRESS_CLASS} style={menuButtonStyle} onClick={open}>
+      <button ref={menuButtonRef} type="button" className={PRESS_CLASS} style={menuButtonStyle} onClick={open}>
         Menu
       </button>
       {page === null ? null : (
         <div
+          ref={dialogRef}
           role="dialog"
           aria-modal="true"
-          aria-label="Game menu"
+          aria-labelledby="game-menu-title"
           style={{
             position: "fixed",
             inset: 0,
@@ -110,7 +232,7 @@ export function GameMenu(props: GameMenuProps): ReactElement {
             font: `13px/1.55 ${FONT_UI}`,
           }}
           onMouseDown={(event) => {
-            if (event.currentTarget === event.target) setPage(null);
+            if (event.currentTarget === event.target) close();
           }}
         >
           <div
@@ -126,13 +248,19 @@ export function GameMenu(props: GameMenuProps): ReactElement {
             }}
           >
             <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, marginBottom: 5 }}>Fold & Seek</div>
-            <div style={{ font: `600 25px/1.15 ${FONT_DISPLAY}`, marginBottom: 20 }}>
-              {page === "root" ? "Game menu" : page === "settings" ? "Settings" : "How to play"}
+            <div id="game-menu-title" style={{ font: `600 25px/1.15 ${FONT_DISPLAY}`, marginBottom: 20 }}>
+              {page === "root"
+                ? "Game menu"
+                : page === "settings"
+                  ? "Settings"
+                  : page === "howToPlay"
+                    ? "How to play"
+                    : "Leave match?"}
             </div>
 
             {page === "root" ? (
               <>
-                <button type="button" className={PRESS_CLASS} style={primaryButtonStyle} onClick={() => setPage(null)}>
+                <button type="button" className={PRESS_CLASS} style={primaryButtonStyle} onClick={close} data-menu-focus="true">
                   Resume
                 </button>
                 <button type="button" className={PRESS_CLASS} style={pageButtonStyle} onClick={() => setPage("settings")}>
@@ -145,75 +273,47 @@ export function GameMenu(props: GameMenuProps): ReactElement {
                   type="button"
                   className={PRESS_CLASS}
                   style={{ ...pageButtonStyle, marginTop: 18, color: "#ffc0a8" }}
-                  onClick={props.onLeave}
+                  onClick={() => setPage("confirmLeave")}
                 >
                   Leave match and return to menu
                 </button>
               </>
             ) : null}
 
-            {page === "settings" ? (
+            {page === "confirmLeave" ? (
               <>
-                <div style={{ ...labelStyle, marginBottom: 8 }}>Graphics quality</div>
-                <div role="group" aria-label="Graphics quality" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 5 }}>
-                  {[...QUALITY_TIER_ORDER].reverse().map((tier) => (
-                    <button
-                      key={tier}
-                      type="button"
-                      className={PRESS_CLASS}
-                      aria-pressed={props.qualityTier === tier}
-                      style={{
-                        ...buttonStyle,
-                        margin: 0,
-                        padding: "7px 4px",
-                        textAlign: "center",
-                        fontSize: 9,
-                        borderColor: props.qualityTier === tier ? BRASS_LIT : undefined,
-                        color: props.qualityTier === tier ? "#fff3df" : CREAM,
-                      }}
-                      onClick={() => props.onQualityTierChange(tier)}
-                    >
-                      {QUALITY_LABELS[tier]}
-                    </button>
-                  ))}
-                </div>
-                <p style={{ opacity: 0.68, margin: "10px 0 20px" }}>Quality changes apply immediately.</p>
-                <div style={{ marginBottom: 20 }}><AudioSettings /></div>
-                <div style={{ ...labelStyle, color: BRASS_LIT, margin: "18px 0 8px" }}>Camera and aiming</div>
-                <PreferenceSlider label="Horizontal sensitivity" value={preferences.sensitivityX} min={0.25} max={2.5} step={0.05} onChange={(sensitivityX) => setPlayerPreferences({ sensitivityX })} />
-                <PreferenceSlider label="Vertical sensitivity" value={preferences.sensitivityY} min={0.25} max={2.5} step={0.05} onChange={(sensitivityY) => setPlayerPreferences({ sensitivityY })} />
-                <PreferenceSlider label="Field of view" value={preferences.fov} min={50} max={90} step={1} suffix="°" onChange={(fov) => setPlayerPreferences({ fov })} />
-                <PreferenceSlider label="Camera motion" value={preferences.cameraMotion} min={0} max={1} step={0.05} percent onChange={(cameraMotion) => setPlayerPreferences({ cameraMotion })} />
-                <PreferenceSlider label="Impact shake" value={preferences.shake} min={0} max={1} step={0.05} percent onChange={(shake) => setPlayerPreferences({ shake })} />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, margin: "10px 0 20px" }}>
-                  <button
-                    type="button"
-                    className={PRESS_CLASS}
-                    aria-pressed={preferences.invertY}
-                    style={{ ...buttonStyle, borderColor: preferences.invertY ? BRASS_LIT : undefined }}
-                    onClick={() => setPlayerPreferences({ invertY: !preferences.invertY })}
-                  >
-                    Invert Y {preferences.invertY ? "on" : "off"}
-                  </button>
-                  <button
-                    type="button"
-                    className={PRESS_CLASS}
-                    aria-pressed={preferences.reducedMotion}
-                    style={{ ...buttonStyle, borderColor: preferences.reducedMotion ? BRASS_LIT : undefined }}
-                    onClick={() => setPlayerPreferences({ reducedMotion: !preferences.reducedMotion })}
-                  >
-                    Reduced motion {preferences.reducedMotion ? "on" : "off"}
-                  </button>
-                </div>
+                <p style={{ margin: "0 0 18px", opacity: 0.82 }}>
+                  You will leave this room and give up your place in the current round.
+                </p>
                 <button
                   type="button"
                   className={PRESS_CLASS}
-                  aria-pressed={preferences.showDiagnostics}
-                  style={{ ...buttonStyle, width: "100%", marginBottom: 20, borderColor: preferences.showDiagnostics ? BRASS_LIT : undefined }}
-                  onClick={() => setPlayerPreferences({ showDiagnostics: !preferences.showDiagnostics })}
+                  style={primaryButtonStyle}
+                  onClick={() => setPage("root")}
+                  disabled={leaving}
+                  data-menu-focus="true"
                 >
-                  Network diagnostics {preferences.showDiagnostics ? "shown" : "hidden"}
+                  Stay in match
                 </button>
+                <button
+                  type="button"
+                  className={PRESS_CLASS}
+                  style={{ ...pageButtonStyle, color: "#ffc0a8" }}
+                  onClick={leave}
+                  disabled={leaving}
+                  aria-busy={leaving}
+                >
+                  {leaving ? "Returning to menuâ€¦" : "Leave match"}
+                </button>
+              </>
+            ) : null}
+
+            {page === "settings" ? (
+              <>
+                <PlayerSettingsPanel
+                  qualityTier={props.qualityTier}
+                  onQualityTierChange={props.onQualityTierChange}
+                />
                 <button type="button" className={PRESS_CLASS} style={pageButtonStyle} onClick={() => setPage("root")}>
                   Back
                 </button>
@@ -225,13 +325,7 @@ export function GameMenu(props: GameMenuProps): ReactElement {
                 <p style={{ opacity: 0.82, marginTop: 0 }}>
                   Mimics reshape, panel, and paint themselves to blend into the room. The Inspector spends a limited warrant with every shot, so accuse only what does not belong.
                 </p>
-                <div style={{ ...labelStyle, color: BRASS_LIT, margin: "16px 0 7px" }}>
-                  {props.role === "inspector" ? "Inspector controls" : "Mimic controls"}
-                </div>
-                <ControlsLegend hints={props.role === "inspector" ? INSPECTOR_ROLE_HINTS : CORE_CONTROL_HINTS} />
-                {props.role === "inspector" ? null : <ControlsLegend hints={HIDER_CONTROL_HINTS} />}
-                <HotkeyGuide />
-                <KeyBindingPanel />
+                <HotkeyGuide role={props.role} />
                 <button
                   type="button"
                   className={PRESS_CLASS}
@@ -252,44 +346,5 @@ export function GameMenu(props: GameMenuProps): ReactElement {
         </div>
       )}
     </>
-  );
-}
-
-function PreferenceSlider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  suffix = "×",
-  percent = false,
-  onChange,
-}: {
-  readonly label: string;
-  readonly value: number;
-  readonly min: number;
-  readonly max: number;
-  readonly step: number;
-  readonly suffix?: string;
-  readonly percent?: boolean;
-  readonly onChange: (value: number) => void;
-}): ReactElement {
-  const reading = percent ? `${Math.round(value * 100)}%` : `${value.toFixed(step < 1 ? 2 : 0)}${suffix}`;
-  return (
-    <label style={{ display: "grid", gridTemplateColumns: "1fr 54px", gap: 10, marginBottom: 10 }}>
-      <span style={{ gridColumn: "1 / -1", display: "flex", justifyContent: "space-between", fontSize: 11 }}>
-        <span>{label}</span><span style={{ color: BRASS_LIT }}>{reading}</span>
-      </span>
-      <input
-        aria-label={label}
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        style={{ gridColumn: "1 / -1", width: "100%", accentColor: BRASS_LIT }}
-        onChange={(event) => onChange(Number(event.currentTarget.value))}
-      />
-    </label>
   );
 }

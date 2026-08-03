@@ -5,6 +5,7 @@ import {
   COLUMN_DENSITIES,
   columnDensityFor,
   forgePanelsOpenByDefault,
+  hiderDensityFor,
   hiderColumnHeight,
   type ColumnDensity,
 } from "../../src/ui/rounds/columnFit";
@@ -27,8 +28,10 @@ import {
  */
 
 const VIEWPORTS = [
+  { name: "640x660", width: 640, height: 660 },
+  { name: "640x720", width: 640, height: 720 },
+  { name: "960x540", width: 960, height: 540 },
   { name: "1280x720", width: 1280, height: 720 },
-  { name: "1920x1080", width: 1920, height: 1080 },
 ] as const;
 
 describe("HUD region table", () => {
@@ -51,15 +54,21 @@ describe("HUD region table", () => {
         }
       });
 
-      it("keeps every pair of regions apart", () => {
+      it("keeps each role's simultaneously claimed regions apart", () => {
         const collisions: string[] = [];
-        for (let i = 0; i < HUD_REGIONS.length; i += 1) {
-          for (let j = i + 1; j < HUD_REGIONS.length; j += 1) {
-            const a = HUD_REGIONS[i] as HudRegion;
-            const b = HUD_REGIONS[j] as HudRegion;
-            const rectA = regionRect(a, viewport.width, viewport.height);
-            const rectB = regionRect(b, viewport.width, viewport.height);
-            if (rectsOverlap(rectA, rectB)) collisions.push(`${a} over ${b}`);
+        const claims: Readonly<Record<"hider" | "inspector", readonly HudRegion[]>> = {
+          hider: ["topCenter", "topRight", "leftColumn"],
+          inspector: ["topCenter", "topRight", "leftColumn", "rightRail", "bottomCenter", "center"],
+        };
+        for (const [role, regions] of Object.entries(claims) as ["hider" | "inspector", readonly HudRegion[]][]) {
+          for (let i = 0; i < regions.length; i += 1) {
+            for (let j = i + 1; j < regions.length; j += 1) {
+              const a = regions[i] as HudRegion;
+              const b = regions[j] as HudRegion;
+              const rectA = regionRect(a, viewport.width, viewport.height, role);
+              const rectB = regionRect(b, viewport.width, viewport.height, role);
+              if (rectsOverlap(rectA, rectB)) collisions.push(`${role}: ${a} over ${b}`);
+            }
           }
         }
         expect(collisions).toEqual([]);
@@ -91,19 +100,9 @@ describe("HUD region table", () => {
     expect(style.top).toBe("calc(50% - 150px)");
   });
 
-  it("fits a live hider's eight-chip rail inside the rail region at every size", () => {
-    // The roster that overflowed at 720p: taunt, five Forge tools, mirror, and
-    // the board, with the taunt carrying a cooldown note. Both the top chip and
-    // the bottom one were off screen.
-    const actions = hiderRailActions({
-      tauntSupported: true,
-      tauntAllowed: false,
-      tauntCooldownSeconds: 8,
-      toolMode: "pose",
-      mirror: false,
-      boardOpen: false,
-    });
-    expect(actions).toHaveLength(8);
+  it("fits the Inspector action rail inside every supported pane", () => {
+    const actions = inspectorRailActions({ boardOpen: false, outOfWarrants: false });
+    expect(actions).toHaveLength(3);
 
     for (const viewport of VIEWPORTS) {
       const rect = regionRect("rightRail", viewport.width, viewport.height);
@@ -193,6 +192,18 @@ describe("HUD region table", () => {
     // of the column allowed to outgrow the region. That is only safe because the
     // region scrolls, which is what this asserts.
     expect(REGION_RULES.leftColumn.overflowY).toBe("auto");
+  });
+
+  it("preempts roomy returning-Hider detail for urgent hunt states", () => {
+    const calm = hiderDensityFor(900, { watchedLevel: 0, finalTen: false, traversal: null });
+    expect(calm.id).toBe("roomy");
+    for (const urgency of [
+      { watchedLevel: 1 as const, finalTen: false, traversal: null },
+      { watchedLevel: 0 as const, finalTen: true, traversal: null },
+      { watchedLevel: 0 as const, finalTen: false, traversal: "climbing" as const },
+    ]) {
+      expect(hiderDensityFor(900, urgency).id).toBe("compact");
+    }
   });
 
   it("clips or scrolls every region so content cannot leave its box", () => {

@@ -27,8 +27,10 @@ declare global {
 }
 
 const VIEWPORTS = [
+  { name: "640x660", width: 640, height: 660 },
+  { name: "640x720", width: 640, height: 720 },
+  { name: "960x540", width: 960, height: 540 },
   { name: "1280x720", width: 1280, height: 720 },
-  { name: "1920x1080", width: 1920, height: 1080 },
 ] as const;
 
 const GUN: InspectorGunView = {
@@ -45,6 +47,9 @@ function huntState(overrides: {
   readonly role: RoundViewState["self"]["role"];
   readonly lifeState?: RoundViewState["self"]["lifeState"];
   readonly tauntAllowed?: boolean;
+  readonly watchedLevel?: 0 | 1 | 2;
+  readonly finalTen?: boolean;
+  readonly warrantsRemaining?: number;
 }): RoundViewState {
   const gate = { allowed: false, reason: "wrong_role" as const };
   return {
@@ -59,7 +64,7 @@ function huntState(overrides: {
       secondsRemaining: 96,
       totalMs: 240_000,
       running: true,
-      finalTen: false,
+      finalTen: overrides.finalTen ?? false,
     },
     self: {
       transportId: "seat-1",
@@ -71,11 +76,11 @@ function huntState(overrides: {
       ready: true,
       ownDisguise: null,
       disguiseLocked: true,
-      warrantsRemaining: overrides.role === "inspector" ? 3 : null,
+      warrantsRemaining: overrides.role === "inspector" ? (overrides.warrantsRemaining ?? 3) : null,
       accusationReadyAtServerMs: null,
       accusationCooldownMs: 0,
       tauntCooldownMs: 0,
-      watchedLevel: 0,
+      watchedLevel: overrides.watchedLevel ?? 0,
     },
     roster: [
       {
@@ -256,7 +261,7 @@ describe("hunt HUD region ownership", () => {
     expect(new Set(claimed).size).toBe(claimed.length);
   });
 
-  it("keeps all eight hider actions behind one disclosure and fits them when opened", () => {
+  it("keeps one persistent Forge dock and no duplicate action rail in every Portals pane", () => {
     const restore = { width: window.innerWidth, height: window.innerHeight };
     for (const viewport of VIEWPORTS) {
       Object.defineProperty(window, "innerWidth", { value: viewport.width, configurable: true });
@@ -273,19 +278,14 @@ describe("hunt HUD region ownership", () => {
           onTaunt={() => undefined}
         />,
       );
-      // A window that changes size mid-round has to reach the rail too, so the
-      // viewport is announced rather than only read once at mount.
       act(() => {
         window.dispatchEvent(new Event("resize"));
       });
-      expect(container.querySelector("[data-rail-size]"), `${viewport.name} starts clean`).toBeNull();
-      openActions();
-      const rail = container.querySelector("[data-rail-size]");
-      expect(rail, viewport.name).not.toBeNull();
-      expect(rail?.children).toHaveLength(8);
-      expect(rail?.getAttribute("data-rail-size"), viewport.name).toBe(
-        viewport.height === 720 ? "compact" : "roomy",
-      );
+      expect(container.querySelectorAll('[data-hider-forge-dock="persistent"]'), viewport.name).toHaveLength(1);
+      expect(container.querySelectorAll('[data-forge-command-owner="hider-dock"]'), viewport.name).toHaveLength(1);
+      expect(container.querySelectorAll("[data-persistent-plate]").length, viewport.name).toBeLessThanOrEqual(3);
+      expect(container.querySelector('[data-hud-region="rightRail"]'), viewport.name).toBeNull();
+      expect(textOf("leftColumn"), viewport.name).toContain("Starter arrangements");
     }
     Object.defineProperty(window, "innerWidth", { value: restore.width, configurable: true });
     Object.defineProperty(window, "innerHeight", { value: restore.height, configurable: true });
@@ -323,7 +323,6 @@ describe("hunt HUD region ownership", () => {
     // whole. At 720p they would open onto a scrollbar, so the critic's folded
     // default keeps that case and the rail's keys remain the way in.
     const restore = { width: window.innerWidth, height: window.innerHeight };
-    const folded: Record<string, string | null> = {};
     for (const viewport of VIEWPORTS) {
       Object.defineProperty(window, "innerWidth", { value: viewport.width, configurable: true });
       Object.defineProperty(window, "innerHeight", { value: viewport.height, configurable: true });
@@ -341,16 +340,11 @@ describe("hunt HUD region ownership", () => {
       act(() => {
         window.dispatchEvent(new Event("resize"));
       });
-      folded[viewport.name] =
-        container.querySelector("[data-forge-panels]")?.getAttribute("data-forge-panels") ?? null;
-      // The header is always there, so the panels are always one press away.
-      expect(textOf("leftColumn"), viewport.name).toContain("Forge tools");
+      expect(container.querySelectorAll('[data-forge-command-owner="hider-dock"]'), viewport.name).toHaveLength(1);
+      expect(textOf("leftColumn"), viewport.name).toContain("Starter arrangements");
     }
     Object.defineProperty(window, "innerWidth", { value: restore.width, configurable: true });
     Object.defineProperty(window, "innerHeight", { value: restore.height, configurable: true });
-
-    expect(folded["1280x720"]).toBe("open");
-    expect(folded["1920x1080"]).toBe("open");
   });
 
   it("does not let the persistent panel be collapsed accidentally", () => {
@@ -370,17 +364,10 @@ describe("hunt HUD region ownership", () => {
     act(() => {
       window.dispatchEvent(new Event("resize"));
     });
-    const wrapper = container.querySelector("[data-forge-panels]");
-    expect(wrapper?.getAttribute("data-forge-panels")).toBe("open");
+    const wrapper = container.querySelector('[data-hider-forge-dock="persistent"]');
+    expect(wrapper).not.toBeNull();
     expect(textOf("leftColumn")).toContain("Starter arrangements");
-
-    const header = wrapper?.querySelector("button");
-    act(() => {
-      header?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    expect(
-      container.querySelector("[data-forge-panels]")?.getAttribute("data-forge-panels"),
-    ).toBe("open");
+    expect(wrapper?.querySelector("button[aria-expanded]")).toBeNull();
     expect(textOf("leftColumn")).toContain("Starter arrangements");
   });
 
@@ -401,14 +388,10 @@ describe("hunt HUD region ownership", () => {
     act(() => {
       window.dispatchEvent(new Event("resize"));
     });
-    expect(
-      container.querySelector("[data-forge-panels]")?.getAttribute("data-forge-panels"),
-    ).toBe("open");
+    expect(container.querySelector('[data-forge-command-owner="hider-dock"]')).not.toBeNull();
 
     render(<HuntHud {...props} forge={stubForge("shape")} />);
-    expect(
-      container.querySelector("[data-forge-panels]")?.getAttribute("data-forge-panels"),
-    ).toBe("open");
+    expect(container.querySelector('[data-forge-command-owner="hider-dock"]')).not.toBeNull();
   });
 
   it("renders nothing outside a region", () => {
@@ -492,9 +475,9 @@ describe("hunt HUD grammar", () => {
     );
     const claimed = claimedRegions();
     expect(claimed).toContain("topCenter");
-    expect(claimed).toContain("rightRail");
-    expect(claimed).toContain("bottomRight");
     expect(claimed).toContain("leftColumn");
+    expect(claimed).not.toContain("rightRail");
+    expect(claimed).not.toContain("bottomRight");
     // The reticle belongs to whoever is holding the gun.
     expect(claimed).not.toContain("center");
   });
@@ -523,7 +506,7 @@ describe("hunt HUD grammar", () => {
     }
   });
 
-  it("puts the hider's tools on the rail once each, and not in a second column", () => {
+  it("puts every Hider command in the persistent dock exactly once", () => {
     render(
       <HuntHud
         state={huntState({ role: "mimic" })}
@@ -535,18 +518,14 @@ describe("hunt HUD grammar", () => {
         onTaunt={() => undefined}
       />,
     );
-    expect(textOf("rightRail")).toBe("Actions ▸");
-    openActions();
-    const rail = container.querySelector('[data-hud-region="rightRail"]');
-    const chips = [...(rail?.querySelectorAll("button, [aria-label] > div > div") ?? [])];
+    const dock = container.querySelector('[data-hider-forge-dock="persistent"]');
+    const chips = [...(dock?.querySelectorAll("button") ?? [])];
     expect(chips.length).toBeGreaterThan(0);
-    for (const label of ["Pose", "Shape", "Panels", "Material", "Paint Mode", "Taunt"]) {
-      const matches = (rail?.textContent ?? "").split(label).length - 1;
-      expect(matches, `${label} on the rail`).toBe(1);
+    for (const label of ["Pose", "Shape", "Panels", "Material", "Paint", "Mirror", "Taunt", "Missed spots"]) {
+      const matches = chips.filter((button) => button.textContent?.includes(label)).length;
+      expect(matches, `${label} in the dock`).toBe(1);
     }
-    // The tool keys live in one place. "1 Pose" in the left column as well is
-    // exactly the duplication the collision came from.
-    expect(textOf("leftColumn")).not.toContain("Paint Mode");
+    expect(container.querySelector('[data-hud-region="rightRail"]')).toBeNull();
   });
 
   it("shows the taunt with its own chip, not stacked on its hint", () => {
@@ -561,8 +540,8 @@ describe("hunt HUD grammar", () => {
         onTaunt={() => undefined}
       />,
     );
-    openActions();
-    expect(textOf("rightRail")).toContain("Taunt");
+    expect(textOf("leftColumn")).toContain("Taunt");
+    expect(textOf("leftColumn").split("Taunt")).toHaveLength(2);
     expect(textOf("bottomCenter")).not.toContain("Taunt");
   });
 
@@ -600,6 +579,99 @@ describe("hunt HUD grammar", () => {
     );
     expect(textOf("bottomCenter")).toContain("Click to look around");
     expect(textOf("bottomCenter")).not.toContain("Walk");
+  });
+
+  it("lets danger and traversal preempt a returning Hider's low-priority hint", () => {
+    render(
+      <HuntHud
+        state={huntState({ role: "mimic", watchedLevel: 2, finalTen: true })}
+        gun={GUN}
+        forge={stubForge("pose")}
+        pointerLocked={false}
+        boardOpen={false}
+        onToggleBoard={() => undefined}
+        onTaunt={() => undefined}
+        traversal="climbing"
+        dangerBearingRad={0.5}
+      />,
+    );
+    const status = container.querySelector('[data-hider-urgency="danger"]');
+    expect(status?.getAttribute("data-hider-density")).toBe("compact");
+    expect(status?.textContent).toContain("Freeze");
+    expect(status?.textContent).not.toContain("Move slowly");
+    expect(container.querySelectorAll('[aria-label="Inspector direction"]')).toHaveLength(1);
+  });
+
+  it("makes every Inspector firing state distinct without relying on colour", () => {
+    const cases = [
+      { name: "normal", gun: GUN, state: huntState({ role: "inspector" }), shape: "open", symbol: false },
+      {
+        name: "target",
+        gun: { ...GUN, targetObjectId: "prop", targetDistanceM: 4, targetInRange: true },
+        state: huntState({ role: "inspector" }),
+        shape: "lock",
+        symbol: false,
+      },
+      {
+        name: "range",
+        gun: { ...GUN, targetObjectId: "prop", targetDistanceM: 40, targetInRange: false },
+        state: huntState({ role: "inspector" }),
+        shape: "broken",
+        symbol: true,
+      },
+      {
+        name: "cooldown",
+        gun: { ...GUN, state: "cooldown" as const, cooldownRemainingMs: 500 },
+        state: huntState({ role: "inspector" }),
+        shape: "cooldown",
+        symbol: true,
+      },
+      {
+        name: "empty",
+        gun: GUN,
+        state: huntState({ role: "inspector", warrantsRemaining: 0 }),
+        shape: "empty",
+        symbol: true,
+      },
+    ] as const;
+    const labels = new Set<string>();
+    for (const entry of cases) {
+      render(
+        <HuntHud
+          key={entry.name}
+          state={entry.state}
+          gun={entry.gun}
+          forge={null}
+          pointerLocked
+          boardOpen={false}
+          onToggleBoard={() => undefined}
+          onTaunt={() => undefined}
+        />,
+      );
+      const reticle = container.querySelector(`[data-reticle-shape="${entry.shape}"]`);
+      expect(reticle, entry.name).not.toBeNull();
+      labels.add(reticle?.getAttribute("aria-label") ?? "");
+      expect(reticle?.querySelector("[data-reticle-symbol]") !== null, entry.name).toBe(entry.symbol);
+    }
+    expect(labels.size).toBe(cases.length);
+  });
+
+  it("promotes the Inspector's warrant count and names empty state in text", () => {
+    render(
+      <HuntHud
+        state={huntState({ role: "inspector", warrantsRemaining: 0 })}
+        gun={GUN}
+        forge={null}
+        pointerLocked
+        boardOpen={false}
+        onToggleBoard={() => undefined}
+        onTaunt={() => undefined}
+      />,
+    );
+    const warrants = container.querySelector('[data-warrant-state="empty"]');
+    expect(warrants).not.toBeNull();
+    expect(warrants?.textContent).toContain("EMPTY");
+    expect(warrants?.textContent).toContain("WARRANT ROUNDS");
   });
 
   it("keeps a caught hider on the board and off the rail's tools", () => {

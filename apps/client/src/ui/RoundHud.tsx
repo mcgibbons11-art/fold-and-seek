@@ -1,6 +1,6 @@
 import type { MatchSettingsPatch } from "@foldseek/game-sim";
 import { MatchPhase, type MatchSettings, type ResultVoteCategory } from "@foldseek/shared";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 
 import type { RoundDirector } from "../gameplay/RoundDirector";
 import type { RoundSession } from "../gameplay/RoundSession";
@@ -8,7 +8,7 @@ import type { RoundViewState } from "../gameplay/roundView";
 import type { QualityTier } from "../rendering/quality";
 import { ForgeHud } from "./ForgeHud";
 import { FirstRoundGuide } from "./FirstRoundGuide";
-import { GameMenu } from "./GameMenu";
+import { GameMenu, REQUEST_LEAVE_MATCH_EVENT } from "./GameMenu";
 import { SoundCaptionHud } from "./SoundCaptionHud";
 import {
   BaselineHud,
@@ -25,7 +25,7 @@ import {
 } from "./rounds";
 import { MISSED_FINDS_KEY, TAUNT_KEY } from "./rounds/huntControls";
 import { HudLayout } from "./rounds/layout";
-import { ALARM, BRASS_LIT, CREAM, FONT_UI, labelStyle, overlayStyle, plate } from "./rounds/theme";
+import { overlayStyle } from "./rounds/theme";
 
 /**
  * The round's whole DOM layer: one HUD per phase, chosen from the single
@@ -99,6 +99,9 @@ export function RoundHud({
       void navigator.clipboard.writeText(session.roomCode);
     }
   }, [session]);
+  const onRequestLeave = useCallback(() => {
+    window.dispatchEvent(new Event(REQUEST_LEAVE_MATCH_EVENT));
+  }, []);
 
   const [boardOpen, setBoardOpen] = useState(false);
   const onToggleBoard = useCallback(() => {
@@ -150,6 +153,8 @@ export function RoundHud({
           boardOpen={boardOpen}
           onToggleBoard={onToggleBoard}
           onTaunt={onTaunt}
+          traversal={engine.hiderTraversal}
+          dangerBearingRad={engine.dangerBearingRad}
         />
         <GameMenu
           qualityTier={qualityTier}
@@ -158,7 +163,6 @@ export function RoundHud({
           role={state.self.role}
         />
         <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
-        <MovementAwarenessCue state={state} traversal={engine.hiderTraversal} dangerBearingRad={engine.dangerBearingRad} />
         <SoundCaptionHud captions={engine.soundCaptions} />
       </>
     );
@@ -171,7 +175,7 @@ export function RoundHud({
           engine.forge === null ? null : (
             <ForgeHud
               controller={engine.forge}
-              onExit={onLeave}
+              onExit={onRequestLeave}
               exitLabel="Leave the round"
               showHeader={false}
             />
@@ -206,71 +210,8 @@ export function RoundHud({
         role={state.self.role}
       />
       <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
-      <MovementAwarenessCue state={state} traversal={engine.hiderTraversal} dangerBearingRad={engine.dangerBearingRad} />
       <SoundCaptionHud captions={engine.soundCaptions} />
     </>
-  );
-}
-
-function MovementAwarenessCue({
-  state,
-  traversal,
-  dangerBearingRad,
-}: {
-  readonly state: RoundViewState;
-  readonly traversal: "climbing" | "topout" | "airborne" | null;
-  readonly dangerBearingRad: number | null;
-}): ReactElement | null {
-  if (state.self.role !== "mimic") return null;
-  const traversalCopy =
-    traversal === "climbing"
-      ? "Climbing · keep moving forward to top out"
-      : traversal === "topout"
-        ? "Top reached · release Space to dismount"
-        : null;
-  if (traversalCopy === null && (state.self.watchedLevel === 0 || dangerBearingRad === null)) return null;
-  const root: CSSProperties = {
-    position: "absolute",
-    zIndex: 104,
-    left: "50%",
-    top: 142,
-    transform: "translateX(-50%)",
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-    padding: "7px 11px",
-    borderRadius: 9,
-    ...plate(),
-    color: CREAM,
-    font: `11px/1.35 ${FONT_UI}`,
-    pointerEvents: "none",
-  };
-  return (
-    <div aria-live="polite" style={root}>
-      {dangerBearingRad === null || state.self.watchedLevel === 0 ? null : (
-        <span
-          aria-label="Inspector direction"
-          title="Inspector direction"
-          style={{
-            display: "inline-grid",
-            placeItems: "center",
-            width: 24,
-            height: 24,
-            color: state.self.watchedLevel === 2 ? ALARM : BRASS_LIT,
-            fontSize: 19,
-            transform: `rotate(${dangerBearingRad}rad)`,
-            transition: "transform 100ms linear",
-          }}
-        >
-          ↑
-        </span>
-      )}
-      <span>
-        {traversalCopy ?? (
-          <><span style={{ ...labelStyle, color: state.self.watchedLevel === 2 ? ALARM : BRASS_LIT }}>Danger</span> · Inspector watching from this direction</>
-        )}
-      </span>
-    </div>
   );
 }
 

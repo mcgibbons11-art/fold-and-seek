@@ -1,20 +1,12 @@
-import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
+import { useState, type CSSProperties, type ReactElement } from "react";
 
-import { AudioSettings } from "./AudioSettings";
-import { getPlayerPreferences, setPlayerPreferences, subscribePlayerPreferences } from "../gameplay/preferences";
-import { QUALITY_TIER_ORDER, type QualityTier } from "../rendering/quality";
-import { ControlsLegend } from "./ControlsLegend";
+import { type QualityTier } from "../rendering/quality";
 import { CommandMenu } from "./CommandMenu";
 import { HotkeyGuide } from "./HotkeyGuide";
-import { KeyBindingPanel } from "./KeyBindingPanel";
+import { PlayerSettingsPanel } from "./PlayerSettingsPanel";
 import { RoomBrowser, type RoomBrowserProps } from "./RoomBrowser";
+import { useScreenEntryFocus } from "./accessibility";
 import {
-  CORE_CONTROL_HINTS,
-  HIDER_CONTROL_HINTS,
-  INSPECTOR_ROLE_HINTS,
-} from "./rounds/huntControls";
-import {
-  BRASS_LIT,
   CREAM,
   FONT_UI,
   PRESS_CLASS,
@@ -76,14 +68,6 @@ const rulesCardStyle: CSSProperties = {
   overflowY: "auto",
 };
 
-const rulesHeadingStyle: CSSProperties = {
-  margin: "18px 0 6px",
-  font: `600 13px/1.3 ${FONT_UI}`,
-  letterSpacing: "0.14em",
-  textTransform: "uppercase",
-  color: BRASS_LIT,
-};
-
 const rulesBodyStyle: CSSProperties = {
   margin: 0,
   fontSize: 13,
@@ -100,52 +84,11 @@ function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
         <div style={{ ...ornamentRuleStyle(180), margin: "0 auto" }} aria-hidden />
       </div>
 
-      <h3 style={rulesHeadingStyle}>The setup</h3>
-      <p style={rulesBodyStyle}>
-        Each round, one player is the Inspector. Everyone else is a Mimic: a small mechanical
-        body loose in a shop full of clutter, whose only defence is looking like it belongs
-        there.
-      </p>
-
-      <h3 style={rulesHeadingStyle}>The forge</h3>
-      <p style={rulesBodyStyle}>
-        While the Inspector waits behind the office door, Mimics have a few minutes to build a
-        disguise. Drag your limbs to fold into the shape of something on the shelves, stretch
-        and reshape your parts, then paint yourself to match — the eyedropper copies any colour
-        in the room, and the brush covers you in it. Lock your disguise before the timer runs
-        out, and stand where a thing like you would stand.
-      </p>
-
-      <h3 style={rulesHeadingStyle}>The hunt</h3>
-      <p style={rulesBodyStyle}>
-        The office door opens and the Inspector steps out carrying a gun and a handful of
-        warrants. Every shot is an accusation: hit a hiding Mimic and they are caught, hit an
-        innocent object and a warrant is gone. Mimics are not frozen — you can creep between
-        hiding spots, climb the shelves, and taunt the Inspector for the nerve of it. Move only
-        while unwatched. Movement is how they catch you.
-      </p>
-
-      <h3 style={rulesHeadingStyle}>Winning</h3>
-      <p style={rulesBodyStyle}>
-        Mimics score for surviving the inspection, for every sweep that passes them by, and for
-        bold taunts. The Inspector scores for each catch and keeps points for unspent warrants.
-        Roles rotate, so everyone gets a turn with the gun.
-      </p>
-
-      <h3 style={rulesHeadingStyle}>Mimic controls</h3>
-      <ControlsLegend hints={CORE_CONTROL_HINTS} />
-      <ControlsLegend hints={HIDER_CONTROL_HINTS} />
-
-      <h3 style={rulesHeadingStyle}>Inspector controls</h3>
-      <ControlsLegend hints={INSPECTOR_ROLE_HINTS} />
-
-      <h3 style={rulesHeadingStyle}>Hotkeys</h3>
-      <p style={rulesBodyStyle}>
-        Fast switching is part of hiding well: use the Forge keys directly instead of reopening
-        a panel for every change.
+      <p style={{ ...rulesBodyStyle, marginTop: 16 }}>
+        One Inspector hunts the Mimics hidden among the shop clutter. Roles rotate each round,
+        and the four sections below let you learn only what you need next.
       </p>
       <HotkeyGuide />
-      <KeyBindingPanel />
 
       <button
         type="button"
@@ -158,22 +101,6 @@ function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
     </div>
   );
 }
-
-const QUALITY_TIER_LABELS: Readonly<Record<QualityTier, string>> = {
-  light: "Lightest",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  ultra: "Ultra",
-};
-
-const qualityChipStyle: CSSProperties = {
-  ...buttonStyle,
-  padding: "7px 9px",
-  fontSize: 10,
-  letterSpacing: "0.08em",
-  flex: 1,
-};
 
 function Settings({
   tier,
@@ -184,9 +111,6 @@ function Settings({
   readonly onTierChange: (tier: QualityTier) => void;
   readonly onBack: () => void;
 }): ReactElement {
-  const [preferences, setPreferencesState] = useState(() => getPlayerPreferences());
-  useEffect(() => subscribePlayerPreferences(setPreferencesState), []);
-
   return (
     <div style={{ ...rulesCardStyle, width: 430 }} className="fs-rise">
       <div style={{ textAlign: "center" }}>
@@ -194,54 +118,7 @@ function Settings({
         <div style={{ ...ornamentRuleStyle(180), margin: "0 auto" }} aria-hidden />
       </div>
 
-      <h3 style={rulesHeadingStyle}>Camera and aiming</h3>
-      <MenuPreferenceSlider label="Horizontal sensitivity" value={preferences.sensitivityX} min={0.25} max={2.5} step={0.05} onChange={(sensitivityX) => setPlayerPreferences({ sensitivityX })} />
-      <MenuPreferenceSlider label="Vertical sensitivity" value={preferences.sensitivityY} min={0.25} max={2.5} step={0.05} onChange={(sensitivityY) => setPlayerPreferences({ sensitivityY })} />
-      <MenuPreferenceSlider label="Field of view" value={preferences.fov} min={50} max={90} step={1} onChange={(fov) => setPlayerPreferences({ fov })} />
-      <MenuPreferenceSlider label="Camera motion" value={preferences.cameraMotion} min={0} max={1} step={0.05} onChange={(cameraMotion) => setPlayerPreferences({ cameraMotion })} />
-      <MenuPreferenceSlider label="Impact shake" value={preferences.shake} min={0} max={1} step={0.05} onChange={(shake) => setPlayerPreferences({ shake })} />
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
-        <button type="button" className={PRESS_CLASS} aria-pressed={preferences.invertY} style={{ ...buttonStyle, borderColor: preferences.invertY ? BRASS_LIT : undefined }} onClick={() => setPlayerPreferences({ invertY: !preferences.invertY })}>
-          Invert Y {preferences.invertY ? "on" : "off"}
-        </button>
-        <button type="button" className={PRESS_CLASS} aria-pressed={preferences.reducedMotion} style={{ ...buttonStyle, borderColor: preferences.reducedMotion ? BRASS_LIT : undefined }} onClick={() => setPlayerPreferences({ reducedMotion: !preferences.reducedMotion })}>
-          Reduced motion {preferences.reducedMotion ? "on" : "off"}
-        </button>
-      </div>
-
-      <h3 style={rulesHeadingStyle}>Graphics quality</h3>
-      <div role="group" aria-label="Graphics quality" style={{ display: "flex", gap: 5 }}>
-        {[...QUALITY_TIER_ORDER].reverse().map((value) => (
-          <button
-            key={value}
-            type="button"
-            className={PRESS_CLASS}
-            aria-pressed={tier === value}
-            style={
-              tier === value
-                ? {
-                    ...qualityChipStyle,
-                    borderColor: BRASS_LIT,
-                    color: "#fff3df",
-                    background:
-                      "linear-gradient(180deg, rgba(194, 151, 79, 0.45), rgba(122, 93, 46, 0.3))",
-                  }
-                : qualityChipStyle
-            }
-            onClick={() => {
-              onTierChange(value);
-            }}
-          >
-            {QUALITY_TIER_LABELS[value]}
-          </button>
-        ))}
-      </div>
-      <p style={{ ...rulesBodyStyle, marginTop: 8 }}>
-        Changes apply immediately. Lightest removes the most expensive room effects.
-      </p>
-
-      <h3 style={rulesHeadingStyle}>Sound</h3>
-      <AudioSettings />
+      <PlayerSettingsPanel qualityTier={tier} onQualityTierChange={onTierChange} />
 
       <button
         type="button"
@@ -252,15 +129,6 @@ function Settings({
         Back
       </button>
     </div>
-  );
-}
-
-function MenuPreferenceSlider({ label, value, min, max, step, onChange }: { readonly label: string; readonly value: number; readonly min: number; readonly max: number; readonly step: number; readonly onChange: (value: number) => void }): ReactElement {
-  return (
-    <label style={{ display: "block", marginBottom: 9 }}>
-      <span style={{ display: "flex", justifyContent: "space-between", fontSize: 11 }}><span>{label}</span><span style={{ color: BRASS_LIT }}>{step >= 1 ? Math.round(value) : value.toFixed(2)}</span></span>
-      <input aria-label={label} type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.currentTarget.value))} style={{ width: "100%", accentColor: BRASS_LIT }} />
-    </label>
   );
 }
 
@@ -289,17 +157,22 @@ export function MainMenu({
   browser = null,
 }: MainMenuProps): ReactElement {
   const [page, setPage] = useState<"main" | "rules" | "settings" | "matchmaking">("main");
+  const pageRef = useScreenEntryFocus<HTMLDivElement>(page);
 
   if (page === "matchmaking" && browser !== null) {
-    return <RoomBrowser {...browser} onBack={() => {
-      browser.onBack?.();
-      setPage("main");
-    }} />;
+    return (
+      <div ref={pageRef} style={{ display: "contents" }}>
+        <RoomBrowser {...browser} onBack={() => {
+          browser.onBack?.();
+          setPage("main");
+        }} />
+      </div>
+    );
   }
 
   if (page === "rules") {
     return (
-      <div style={overlayStyle}>
+      <div ref={pageRef} style={overlayStyle}>
         <HowToPlay onBack={() => setPage("main")} />
       </div>
     );
@@ -307,7 +180,7 @@ export function MainMenu({
 
   if (page === "settings") {
     return (
-      <div style={overlayStyle}>
+      <div ref={pageRef} style={overlayStyle}>
         <Settings
           tier={qualityTier}
           onTierChange={onQualityTierChange}
@@ -318,14 +191,16 @@ export function MainMenu({
   }
 
   return (
-    <CommandMenu
-      starting={starting}
-      notice={notice}
-      browser={browser}
-      onPlay={onPlayRound}
-      onMatchmaking={() => setPage("matchmaking")}
-      onHowToPlay={() => setPage("rules")}
-      onSettings={() => setPage("settings")}
-    />
+    <div ref={pageRef} style={{ display: "contents" }}>
+      <CommandMenu
+        starting={starting}
+        notice={notice}
+        browser={browser}
+        onPlay={onPlayRound}
+        onMatchmaking={() => setPage("matchmaking")}
+        onHowToPlay={() => setPage("rules")}
+        onSettings={() => setPage("settings")}
+      />
+    </div>
   );
 }

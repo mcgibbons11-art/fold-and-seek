@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PortalsNetAdapter } from "../../src/networking/PortalsNetAdapter";
 import { MAX_CONCURRENT_ROOMS } from "../../src/networking/roomRegistry";
@@ -89,6 +89,12 @@ function rows(): HTMLLIElement[] {
 function click(button: HTMLButtonElement): void {
   act(() => {
     button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+}
+
+function press(element: HTMLElement, key: string): void {
+  act(() => {
+    element.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   });
 }
 
@@ -223,6 +229,31 @@ describe("the room browser", () => {
     expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Request to join")).toBe(false);
   });
 
+  it("offers semantic room options with roving arrow, Enter, and Space selection", async () => {
+    const firstHost = await browsingClient("a", "Ada");
+    const secondHost = await browsingClient("b", "Bex");
+    const reader = await browsingClient("c", "Cal");
+    expect(firstHost.createRoom("Amber Room").ok).toBe(true);
+    expect(secondHost.createRoom("Blue Room").ok).toBe(true);
+    advance();
+    render(reader, () => undefined);
+
+    const listbox = container.querySelector('[role="listbox"]');
+    const options = [...container.querySelectorAll<HTMLButtonElement>('[role="option"]')];
+    expect(listbox?.getAttribute("aria-label")).toBe("Available rooms");
+    expect(options).toHaveLength(2);
+
+    options[0]?.focus();
+    press(options[0] as HTMLButtonElement, "ArrowDown");
+    expect(document.activeElement).toBe(options[1]);
+    expect(options[1]?.getAttribute("aria-selected")).toBe("true");
+
+    press(options[0] as HTMLButtonElement, "Enter");
+    expect(options[0]?.getAttribute("aria-selected")).toBe("true");
+    press(options[1] as HTMLButtonElement, " ");
+    expect(options[1]?.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("lets the host retire their advertised room without leaving matchmaking", async () => {
     const host = await browsingClient("a", "Ada");
     const opened = host.createRoom("The Attic");
@@ -318,6 +349,14 @@ describe("the room browser", () => {
     const packedRow = rows().find((row) => row.textContent?.includes("Two Seats"));
     if (packedRow === undefined) throw new Error("the full room should still be listed");
     expect(packedRow.textContent).toContain("Full");
+    const packedOption = packedRow.querySelector<HTMLButtonElement>('[role="option"]');
+    if (packedOption === null) throw new Error("the full room should remain selectable");
+    press(packedOption, " ");
+    expect(packedOption.getAttribute("aria-selected")).toBe("true");
+    const join = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Room full",
+    );
+    expect(join?.disabled).toBe(true);
     expect(container.textContent).toContain(`${MAX_CONCURRENT_ROOMS} of ${MAX_CONCURRENT_ROOMS}`);
     expect(container.textContent).toContain(`holds ${MAX_CONCURRENT_ROOMS} rooms at once`);
 
@@ -329,5 +368,115 @@ describe("the room browser", () => {
       (button) => button.textContent === "New room",
     );
     expect(newRoom?.disabled).toBe(true);
+  });
+
+  it("keeps selected-room and host request controls reachable in the narrow composition", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 640 });
+    Object.defineProperty(window, "innerHeight", { configurable: true, value: 660 });
+    const host = await browsingClient("a", "Ada");
+    const guest = await browsingClient("b", "Bex");
+    const opened = host.createRoom("Narrow Room");
+    if (!opened.ok) throw new Error(opened.reason);
+    advance();
+    expect(guest.requestRoom(opened.code).ok).toBe(true);
+    advance();
+
+    act(() => {
+      root.render(
+        <RoomBrowser
+          rooms={host.listRooms()}
+          currentCode={opened.code}
+          pendingRequests={host.pendingJoinRequests()}
+          onJoin={() => undefined}
+          onCreate={() => undefined}
+          onQuickJoin={() => undefined}
+          onAcceptRequest={() => undefined}
+          onDeclineRequest={() => undefined}
+          onCancelHostedRoom={() => undefined}
+        />,
+      );
+    });
+
+    const screen = container.querySelector<HTMLElement>(".fs-matchmaking-screen");
+    const columns = container.querySelector<HTMLElement>(".fs-matchmaking-columns");
+    expect(screen?.style.inset).toBe("0px");
+    expect(columns?.style.overflow).toBe("hidden");
+    expect(container.querySelector('[aria-label="Selected room"]')?.textContent).toContain("Narrow Room");
+    expect(container.querySelector('[aria-label="Pending join request"]')).not.toBeNull();
+    expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual(
+      expect.arrayContaining(["Accept", "Decline", "Cancel hosted room"]),
+    );
+  });
+
+  it("runs one recovery action, categorizes it, and returns focus after dismissal", async () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    const retry = vi.fn();
+    const reconnect = vi.fn();
+    const dismiss = vi.fn();
+    const host = await browsingClient("a", "Ada");
+    const reader = await browsingClient("b", "Bex");
+    expect(host.createRoom("Focus Room").ok).toBe(true);
+    advance();
+    act(() => {
+      root.render(
+        <RoomBrowser
+          rooms={reader.listRooms()}
+          notice="That room has closed. Pick another."
+          onJoin={() => undefined}
+          onCreate={() => undefined}
+          onQuickJoin={() => undefined}
+          onRetryNotice={retry}
+          onReconnect={reconnect}
+          onDismissNotice={dismiss}
+        />,
+      );
+    });
+
+    const alert = container.querySelector('[aria-label="Room error"]');
+    expect(alert?.textContent).toContain("Retry");
+    const retryButton = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Retry",
+    );
+    if (retryButton === undefined) throw new Error("retry control is missing");
+    click(retryButton);
+    click(retryButton);
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(reconnect).not.toHaveBeenCalled();
+
+    act(() => {
+      root.render(
+        <RoomBrowser
+          rooms={reader.listRooms()}
+          notice="The room listing could not be shared. Reconnect to the session."
+          onJoin={() => undefined}
+          onCreate={() => undefined}
+          onQuickJoin={() => undefined}
+          onRetryNotice={retry}
+          onReconnect={reconnect}
+          onDismissNotice={dismiss}
+        />,
+      );
+    });
+    expect(container.querySelector('[aria-label="Network error"]')?.textContent).toContain("Reconnect");
+    const reconnectButton = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Reconnect",
+    );
+    if (reconnectButton === undefined) throw new Error("reconnect control is missing");
+    click(reconnectButton);
+    click(reconnectButton);
+    expect(reconnect).toHaveBeenCalledTimes(1);
+    const dismissButton = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Dismiss",
+    );
+    if (dismissButton === undefined) throw new Error("dismiss control is missing");
+    click(dismissButton);
+    click(dismissButton);
+    expect(dismiss).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[aria-label="Network error"]')).toBeNull();
+    expect((document.activeElement as HTMLElement | null)?.dataset.roomCode).toBeDefined();
+    vi.unstubAllGlobals();
   });
 });

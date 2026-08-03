@@ -50,6 +50,7 @@ import { MainMenu } from "../ui/MainMenu";
 import { StartScreen } from "../ui/StartScreen";
 import type { RoomBrowserProps } from "../ui/RoomBrowser";
 import { RoundHud } from "../ui/RoundHud";
+import { AtomicLiveRegion, useScreenEntryFocus } from "../ui/accessibility";
 
 type BootState =
   | { kind: "detecting" }
@@ -202,6 +203,25 @@ function NoticeMark(): ReactElement {
   );
 }
 
+function ReturningToMenu(): ReactElement {
+  const screenRef = useScreenEntryFocus<HTMLDivElement>("returning-to-menu");
+  return (
+    <div ref={screenRef} style={noticeStyle}>
+      <AtomicLiveRegion message="Returning to menu" />
+      <div style={{ textAlign: "center" }}>
+        <NoticeMark />
+        <p
+          style={{ ...labelStyle, opacity: 0.78, margin: 0 }}
+          tabIndex={-1}
+          data-entry-focus="true"
+        >
+          Returning to menuâ€¦
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function App(): ReactElement {
   const [boot, setBoot] = useState<BootState>({ kind: "detecting" });
   const [tier, setTier] = useState<QualityTier>("high");
@@ -228,6 +248,8 @@ export function App(): ReactElement {
   const [lobbyBusy, setLobbyBusy] = useState(false);
   /** The boot hands off to one deliberate start input before opening navigation. */
   const [menuEntered, setMenuEntered] = useState(false);
+  /** True while the old room is released and the menu relay session is restored. */
+  const [returningToMenu, setReturningToMenu] = useState(false);
   /** Incrementing this disposes and rebuilds the complete GPU-owned tree. */
   const [bootAttempt, setBootAttempt] = useState(0);
   const hostRef = useRef<GameHost | null>(null);
@@ -235,6 +257,8 @@ export function App(): ReactElement {
   const roundRef = useRef<ActiveRound | null>(null);
   /** Read inside the click handler, where the loading state itself is stale. */
   const loadingRef = useRef(false);
+  /** Synchronous once-only guard for repeated leave confirmation inputs. */
+  const returningToMenuRef = useRef(false);
   /** Cancels whichever join/build currently owns the loading screen. */
   const cancelOpeningRef = useRef<(() => void) | null>(null);
   /** The menu session owns this listener until that session is replaced. */
@@ -245,6 +269,10 @@ export function App(): ReactElement {
   const lastDeviceFaultRef = useRef<DeviceEvent | null>(null);
   /** Logical room to re-enter after the GPU-owned tree has been rebuilt. */
   const recoveryRoomCodeRef = useRef<string | null>(null);
+  /** Last recoverable directory action, retained for the notice's Retry control. */
+  const lastRoomActionRef = useRef<(() => void) | null>(null);
+  /** Prevents a rapid double press from starting two complete renderer boots. */
+  const bootRetryPendingRef = useRef(false);
 
   useEffect(() => {
     // Playwright's headless Edge session does not expose the WebGL device the
@@ -381,6 +409,10 @@ export function App(): ReactElement {
   }, [bootAttempt]);
 
   useEffect(() => {
+    if (boot.kind === "failed") bootRetryPendingRef.current = false;
+  }, [boot.kind]);
+
+  useEffect(() => {
     if (boot.kind !== "ready" || deviceFault !== null) return undefined;
     const timer = window.setTimeout(() => {
       graphicsRecoveryRef.current.markStable();
@@ -409,7 +441,12 @@ export function App(): ReactElement {
    * They close again as soon as anything else opens, and the fade is short
    * enough that the shop is never heard twice over.
    */
-  const atMenu = boot.kind === "ready" && round === null && forge === null && loading === null;
+  const atMenu =
+    boot.kind === "ready" &&
+    round === null &&
+    forge === null &&
+    loading === null &&
+    !returningToMenu;
   useEffect(() => {
     if (atMenu) menuAmbience.start();
     else menuAmbience.stop();
@@ -709,6 +746,31 @@ export function App(): ReactElement {
     cancelOpeningRef.current?.();
   }, []);
 
+  const reconnectLobby = useCallback((): void => {
+    if (portals === null || lobbyBusy) return;
+    const previous = lobbyRef.current;
+    lobbyRef.current = null;
+    lobbyRejectionRef.current?.();
+    lobbyRejectionRef.current = null;
+    setLobby(null);
+    setRooms([]);
+    setRoomRequests([]);
+    setOutgoingRoomRequest(null);
+    setRoundError(null);
+    setLobbyBusy(true);
+    void (async () => {
+      if (previous !== null) {
+        try {
+          await previous.adapter.disconnect();
+        } catch (error) {
+          console.warn("[rooms] reconnect cleanup was not clean", error);
+        }
+        previous.dispose();
+      }
+      await openSession(portals);
+    })();
+  }, [lobbyBusy, openSession, portals]);
+
   useEffect(() => {
     if (lobby === null) {
       setRoomRequests([]);
@@ -724,7 +786,11 @@ export function App(): ReactElement {
     const stopDecision = lobby.adapter.onRoomDecision((decision) => {
       refresh();
       if (decision.accepted) {
-        onEnterRoom((opened) => opened.adapter.enterRoom(decision.roomCode));
+        const enterAcceptedRoom = (): void => {
+          onEnterRoom((opened) => opened.adapter.enterRoom(decision.roomCode));
+        };
+        lastRoomActionRef.current = enterAcceptedRoom;
+        enterAcceptedRoom();
         return;
       }
       const copy = {
@@ -790,11 +856,19 @@ export function App(): ReactElement {
     recoverGraphics();
   }, [recoverGraphics]);
 
-  const onLeaveRound = useCallback(() => {
+  const retryBoot = useCallback((): void => {
+    if (bootRetryPendingRef.current) return;
+    bootRetryPendingRef.current = true;
+    setBoot({ kind: "detecting" });
+    setBootAttempt((attempt) => attempt + 1);
+  }, []);
+
+  const onLeaveRound = useCallback(async (): Promise<void> => {
+    if (returningToMenuRef.current) return;
     const active = roundRef.current;
-    if (active === null) {
-      return;
-    }
+    if (active === null) return;
+    returningToMenuRef.current = true;
+    setReturningToMenu(true);
     roundRef.current = null;
     setRound(null);
     // Order matters: the host disposes the session, which is what unhooks the
@@ -802,7 +876,12 @@ export function App(): ReactElement {
     hostRef.current?.exitRoundMode();
 
     if (active.round !== lobbyRef.current) {
-      active.round.dispose();
+      try {
+        active.round.dispose();
+      } finally {
+        returningToMenuRef.current = false;
+        setReturningToMenu(false);
+      }
       return;
     }
     // A round played in a Portals room is torn down whole and the session
@@ -821,24 +900,28 @@ export function App(): ReactElement {
     // session the SDK only has one of.
     setLobbyBusy(true);
     const previous = active.round;
-    void (async () => {
-      try {
-        await previous.adapter.disconnect();
-      } catch (error) {
-        console.warn("[rooms] leaving the session was not clean", error);
-      }
+    try {
+      await previous.adapter.disconnect();
+    } catch (error) {
+      console.warn("[rooms] leaving the session was not clean", error);
+    }
+    try {
       previous.dispose();
       if (portals !== null) await openSession(portals);
-    })();
+    } finally {
+      returningToMenuRef.current = false;
+      setReturningToMenu(false);
+    }
   }, [portals, openSession]);
 
   // A device loss outranks the boot state: the renderer came up, so `boot` still
   // reads "ready" while nothing can actually be drawn.
   if (deviceFault !== null) {
     return (
-      <div style={noticeStyle} role="alert">
+      <div style={noticeStyle} role="alert" aria-label="Graphics error">
         <div style={{ ...plate(true), borderRadius: 14, padding: "30px 34px", maxWidth: 540 }}>
           <NoticeMark />
+          <div style={{ ...labelStyle, color: ALARM, marginBottom: 7 }}>Graphics error</div>
           <p style={{ margin: "0 0 10px", font: `17px/1.5 ${FONT_DISPLAY}`, color: ALARM }}>
             {graphicsRecoveryRef.current.exhausted
               ? "The graphics device was lost twice. The automatic rebuild has paused."
@@ -872,13 +955,33 @@ export function App(): ReactElement {
 
   if (boot.kind === "failed") {
     return (
-      <div style={noticeStyle} role="alert">
+      <div style={noticeStyle} role="alert" aria-label="Startup error">
         <div style={{ ...plate(true), borderRadius: 14, padding: "30px 34px", maxWidth: 540 }}>
           <NoticeMark />
+          <div style={{ ...labelStyle, color: ALARM, marginBottom: 7 }}>Startup error</div>
           <p style={{ margin: "0 0 10px", font: `17px/1.5 ${FONT_DISPLAY}`, color: ALARM }}>
             {boot.headline}
           </p>
           <p style={{ margin: 0, fontSize: 13, opacity: 0.8 }}>{boot.detail}</p>
+          <div style={{ display: "flex", justifyContent: "center", gap: 8, marginTop: 20 }}>
+            <button
+              type="button"
+              autoFocus
+              className={PRESS_CLASS}
+              style={{ ...primaryButtonStyle, width: "auto", minWidth: 150 }}
+              onClick={retryBoot}
+            >
+              Retry startup
+            </button>
+            <button
+              type="button"
+              className={PRESS_CLASS}
+              style={{ ...buttonStyle, width: "auto", margin: 0 }}
+              onClick={() => window.location.reload()}
+            >
+              Reload page
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -908,6 +1011,8 @@ export function App(): ReactElement {
       />
     );
   }
+
+  if (returningToMenu) return <ReturningToMenu />;
 
   if (forge !== null) {
     return <ForgeHud controller={forge} onExit={onLeaveForge} />;
@@ -940,20 +1045,39 @@ export function App(): ReactElement {
           busy: lobbyBusy,
           notice: roundError,
           onJoin: (code) => {
-            const result = lobby.adapter.requestRoom(code);
-            if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
-            else setRoundError(null);
+            const attempt = (): void => {
+              const result = lobby.adapter.requestRoom(code);
+              if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
+              else setRoundError(null);
+            };
+            lastRoomActionRef.current = attempt;
+            attempt();
           },
           onCreate: (name) => {
-            const result = lobby.adapter.createRoom(name);
-            if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
-            else setRoundError(null);
+            const attempt = (): void => {
+              const result = lobby.adapter.createRoom(name);
+              if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
+              else setRoundError(null);
+            };
+            lastRoomActionRef.current = attempt;
+            attempt();
           },
           onQuickJoin: () => {
-            const result = lobby.adapter.requestQuickRoom();
-            if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
-            else setRoundError(null);
+            const attempt = (): void => {
+              const result = lobby.adapter.requestQuickRoom();
+              if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
+              else setRoundError(null);
+            };
+            lastRoomActionRef.current = attempt;
+            attempt();
           },
+          onRetryNotice: () => {
+            const retry = lastRoomActionRef.current;
+            setRoundError(null);
+            if (retry !== null) window.setTimeout(retry, 0);
+          },
+          onReconnect: reconnectLobby,
+          onDismissNotice: () => setRoundError(null),
           onForgePractice: onEnterForge,
           onAcceptRequest: (connectionId) => {
             const result = lobby.adapter.acceptRoomRequest(connectionId);
@@ -961,6 +1085,9 @@ export function App(): ReactElement {
               setRoundError(ROOM_FAILURE_COPY[result.reason]);
               return;
             }
+            lastRoomActionRef.current = () => {
+              onEnterRoom((opened) => opened.adapter.enterRoom(result.code));
+            };
             onEnterRoom(() => result);
           },
           onDeclineRequest: (connectionId) => {

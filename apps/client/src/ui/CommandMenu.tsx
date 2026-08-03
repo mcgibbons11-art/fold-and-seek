@@ -2,6 +2,7 @@ import type { CSSProperties, ReactElement } from "react";
 
 import type { RoomBrowserProps } from "./RoomBrowser";
 import { FoldedObjectMark } from "./FoldedObjectMark";
+import { useScreenEntryFocus } from "./accessibility";
 import {
   ALARM,
   BRASS_LIT,
@@ -89,8 +90,9 @@ export function CommandMenu({
 }: CommandMenuProps): ReactElement {
   const joinable = browser?.rooms.filter((room) => room.joinable).length ?? 0;
   const primary = browser === null ? onPlay : onMatchmaking;
+  const screenRef = useScreenEntryFocus<HTMLDivElement>("command-menu");
   return (
-    <div style={screenStyle} aria-label="Main menu">
+    <div ref={screenRef} style={screenStyle} aria-label="Main menu">
       <header style={headerStyle}>
         <h1
           style={{
@@ -114,6 +116,7 @@ export function CommandMenu({
             style={{ ...navButtonStyle, borderLeftColor: BRASS_LIT, color: CREAM }}
             onClick={primary}
             disabled={starting}
+            data-entry-focus="true"
           >
             {browser === null ? "Start game" : "Matchmaking"}
           </button>
