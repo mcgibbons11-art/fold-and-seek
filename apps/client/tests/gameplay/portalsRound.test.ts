@@ -6,8 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBotDisguisePayload } from "../../src/gameplay/botDisguises";
 import { DisguiseTheatre } from "../../src/gameplay/disguiseTheatre";
 import { createPortalsRound, PORTALS_ROUND_CHANNEL, type PortalsRound } from "../../src/gameplay/portalsRound";
+import { InspectableSet } from "../../src/inspector/FocusSystem";
+import { createInspectorSystem } from "../../src/inspector/index";
+import { DEFAULT_SHOULDER_OFFSET_M } from "../../src/inspector/InspectorCamera";
+import { INSPECTOR_EYE_HEIGHT_M } from "../../src/inspector/navData";
 import { FLUSH_INTERVAL_MS } from "../../src/networking/PortalsNetAdapter";
 import { qualitySettingsFor } from "../../src/rendering/quality";
+import { box, openNavData, testSettings } from "../inspector/navFixture";
 import { FakePortalsRelay } from "../networking/fakePortals";
 
 /**
@@ -156,6 +161,39 @@ function eyeBeside(bounds: THREE.Box3, metres: number): { x: number; y: number; 
   return { x: centre.x + metres, y: centre.y, z: centre.z };
 }
 
+/**
+ * Minimal DOM seam for InspectorInput. The production input class still owns
+ * the mousedown listener and consumes its press edge; the test does not call a
+ * weapon or command method directly.
+ */
+function lockedTriggerElement(): HTMLElement {
+  const view = new EventTarget();
+  const ownerDocument = new EventTarget() as EventTarget & {
+    defaultView: EventTarget;
+    pointerLockElement: Element | null;
+    exitPointerLock(): void;
+  };
+  ownerDocument.defaultView = view;
+  ownerDocument.pointerLockElement = null;
+  ownerDocument.exitPointerLock = () => undefined;
+
+  const element = new EventTarget() as EventTarget & {
+    ownerDocument: typeof ownerDocument;
+    dataset: Record<string, string>;
+    requestPointerLock(): void;
+  };
+  element.ownerDocument = ownerDocument;
+  element.dataset = {};
+  element.requestPointerLock = () => undefined;
+  return element as unknown as HTMLElement;
+}
+
+function pressPrimary(element: HTMLElement): void {
+  const press = new Event("mousedown");
+  Object.defineProperty(press, "button", { value: 0 });
+  element.dispatchEvent(press);
+}
+
 /** Two seats, readied, started, and carried to the hunt with a disguise standing. */
 async function huntingRoom(): Promise<PortalsRoom> {
   const room = new PortalsRoom();
@@ -298,6 +336,95 @@ describe("a Portals round", () => {
     ).toHaveLength(1);
     expect(inspector.events.some((event) => event.type === "mimic_caught")).toBe(true);
 
+    room.dispose();
+  });
+
+  it("carries a real reticle click through raycast, authority, and hider death", async () => {
+    vi.useFakeTimers();
+    const room = await huntingRoom();
+    const inspector = room.inspector();
+    const mimic = room.mimic();
+    const objectId =
+      inspector.round.adapter.getSync().publicState?.disguises[0]?.publicObjectId ?? "";
+    const renderedBounds = inspector.theatre.boundsOf(objectId);
+    expect(renderedBounds).not.toBeNull();
+
+    const bounds = renderedBounds as THREE.Box3;
+    const centre = bounds.getCenter(new THREE.Vector3());
+    const proxyBounds = box(
+      bounds.min.x,
+      bounds.min.y,
+      bounds.min.z,
+      bounds.max.x,
+      bounds.max.y,
+      bounds.max.z,
+    );
+    const nav = openNavData();
+    nav.floors = [
+      {
+        id: "shot-floor",
+        bounds: box(centre.x - 4, -0.1, centre.z - 4, centre.x + 4, 0, centre.z + 4),
+        level: 0,
+      },
+    ];
+    nav.blockers = [];
+    const element = lockedTriggerElement();
+    const selfId = inspector.round.adapter.getSelfId() ?? "";
+    const shots: { outcome: string; targetObjectId: string | null }[] = [];
+    const system = createInspectorSystem({
+      scene: new THREE.Scene(),
+      camera: new THREE.PerspectiveCamera(),
+      navData: nav,
+      inspectables: new InspectableSet([
+        {
+          objectId,
+          categoryId: "disguise",
+          bounds: proxyBounds,
+          pickProxy: { kind: "box", box: proxyBounds },
+          accusationPolicy: "allowed",
+        },
+      ]),
+      settings: testSettings(),
+      domElement: element,
+      sendCommand: (command) => inspector.round.adapter.sendCommand(command),
+      onEye: (eye) => inspector.round.spatial.setInspectorEye(selfId, eye),
+      onShot: (outcome, targetObjectId) => shots.push({ outcome, targetObjectId }),
+    });
+    system.setAmmo(
+      inspector.round.adapter.getSync().privateState?.warrantsRemaining ?? 0,
+    );
+
+    // Face -X from beside the target. Offset the body by the camera's shoulder
+    // so the screen-centre ray, not merely the gameplay eye, crosses its centre.
+    system.spawnAt({
+      position: {
+        x: bounds.max.x + 0.4,
+        y: 0,
+        z: centre.z + DEFAULT_SHOULDER_OFFSET_M,
+      },
+      yaw: Math.PI / 2,
+    });
+    system.input!.locked = true;
+    system.update(16, 0);
+    const horizontal = Math.abs(system.cameraRig.origin.x - centre.x);
+    system.controller.pitch = Math.atan2(centre.y - INSPECTOR_EYE_HEIGHT_M, horizontal);
+    system.update(16, 16);
+    expect(system.focusSystem.current).toMatchObject({ objectId, accusable: true });
+
+    pressPrimary(element);
+    system.update(16, 32);
+    room.advance(2);
+
+    expect(shots).toEqual([{ outcome: "hit", targetObjectId: objectId }]);
+    expect(inspector.events).toContainEqual(
+      expect.objectContaining({ type: "accusation_resolved", correct: true, targetObjectId: objectId }),
+    );
+    expect(inspector.events).toContainEqual(
+      expect.objectContaining({ type: "mimic_caught", publicObjectId: objectId }),
+    );
+    expect(mimic.round.adapter.getSync().privateState?.lifeState).toBe("caught");
+
+    system.dispose();
     room.dispose();
   });
 
