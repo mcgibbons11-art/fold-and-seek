@@ -2,6 +2,7 @@ import * as THREE from "three/webgpu";
 
 import { LocomotionRig } from "../forge/LocomotionRig";
 import type { LocomotionSample } from "../forge/BodyLanguage";
+import { InspectorAvatar } from "./InspectorAvatar";
 import { WORLD_SCALE } from "./navData";
 
 /**
@@ -205,6 +206,9 @@ export class InspectorBody {
   private readonly meshList: THREE.Mesh[] = [];
   private readonly materials: THREE.Material[] = [];
   private readonly geometries: THREE.BufferGeometry[] = [];
+  private readonly avatar: InspectorAvatar | null;
+  /** Resolves true when the authored GLB has replaced the fallback body. */
+  readonly authoredReady: Promise<boolean>;
 
   private readonly sample = {
     speedFraction: 0,
@@ -244,6 +248,17 @@ export class InspectorBody {
     this.setCastShadow(castShadow);
     parent.add(this.root);
     world.add(this.hand);
+
+    // Unit tests deliberately exercise the deterministic primitive fallback.
+    // Shipping builds replace it once the authored Blender/Mixamo rig arrives;
+    // a failed fetch leaves a complete playable character instead of nothing.
+    this.avatar =
+      import.meta.env.MODE === "test"
+        ? null
+        : new InspectorAvatar(this.root, this.hand, () => {
+            this.bob.visible = false;
+          });
+    this.authoredReady = this.avatar?.load() ?? Promise.resolve(false);
   }
 
   /** Every drawable in the body, for a test that counts what it costs to draw. */
@@ -304,6 +319,12 @@ export class InspectorBody {
     this.skirt.rotation.z = angles.pelvisRoll * COAT_ROLL_SHARE;
 
     this.reachForGun();
+    this.avatar?.update(dtSeconds, frame);
+  }
+
+  /** Plays the authored trigger performance alongside the warrant-gun recoil. */
+  fire(): void {
+    this.avatar?.fire();
   }
 
   /**
@@ -371,6 +392,7 @@ export class InspectorBody {
   /** Casting is the light tier's call; receiving never is, see the header. */
   setCastShadow(enabled: boolean): void {
     for (const mesh of this.meshList) mesh.castShadow = enabled;
+    this.avatar?.setCastShadow(enabled);
   }
 
   /**
@@ -385,6 +407,7 @@ export class InspectorBody {
   }
 
   dispose(): void {
+    this.avatar?.dispose();
     this.root.removeFromParent();
     this.hand.removeFromParent();
     for (const geometry of this.geometries) geometry.dispose();

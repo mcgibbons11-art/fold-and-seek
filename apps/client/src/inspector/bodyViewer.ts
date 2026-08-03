@@ -104,6 +104,7 @@ async function main(): Promise<void> {
   const gun = new GunView(scene);
   const body = new InspectorBody(root, scene, settings.dynamicShadows);
   gun.attachToHand(body.hand);
+  await body.authoredReady;
 
   // Walked forward through `t` seconds at the requested speed, so a stride is
   // caught mid-swing rather than at whatever phase the first frame lands on.

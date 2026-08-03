@@ -401,6 +401,19 @@ describe("rooms over one channel", () => {
 
     expect(bex.adapter.getRoomCode()).toBe(opened.code);
     expect(ada.adapter.getRoster().map((entry) => entry.displayName).sort()).toEqual(["Ada", "Bex"]);
+
+    // Ready is a public change, but the button reads the player's own private
+    // slice as well. The accepted guest must receive that refreshed slice
+    // after its command travels through the host.
+    expect(bex.adapter.getSync().privateState?.ready).toBe(false);
+    bex.adapter.sendCommand({ type: "player_ready", ready: true });
+    session.advance(6);
+    expect(bex.adapter.getSync().privateState?.ready).toBe(true);
+    expect(
+      bex.adapter.getSync().publicState?.players.find(
+        (player) => player.seatId === bex.adapter.getSelfId(),
+      )?.ready,
+    ).toBe(true);
     expect(session.relay.violations).toEqual([]);
     session.dispose();
   });

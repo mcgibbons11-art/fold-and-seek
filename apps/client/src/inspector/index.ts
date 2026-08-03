@@ -266,6 +266,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
       const state = weapon.state;
       if (state.shotsFired > shownShots) {
         shownShots = state.shotsFired;
+        body.fire();
         gun.fire(
           state.lastShot ?? "miss",
           state.lastShot === "empty" ? null : impactPoint(focus),

@@ -1,6 +1,6 @@
 import { inspectorCountFor, type MatchSettingsPatch } from "@foldseek/game-sim";
 import type { MatchSettings } from "@foldseek/shared";
-import { useState, type CSSProperties, type ReactElement } from "react";
+import { useEffect, useState, type CSSProperties, type ReactElement } from "react";
 
 import type { RoundViewState } from "../../gameplay/roundView";
 import {
@@ -173,8 +173,13 @@ export function LobbyHud({
   onRemoveBot,
 }: LobbyHudProps): ReactElement {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // A remote player's command has to visit the host before the authoritative
+  // ready flag comes back. Keep the button tactile during that round trip: the
+  // old control looked as though it had missed the click for every non-host.
+  const [readyIntent, setReadyIntent] = useState<boolean | null>(null);
   const startGate = state.actions.startMatch;
   const readyGate = state.actions.ready;
+  const displayedReady = readyIntent ?? state.self.ready;
   const readyCount = state.roster.filter((player) => player.ready).length;
   const bots = state.botSeats;
   // Offered to the host of a transport that can hold bot seats, and to nobody
@@ -183,6 +188,21 @@ export function LobbyHud({
   const roomIsFull = state.roster.length >= bots.maxSeats;
   const blockedCopy = startGate.reason === null ? null : (START_BLOCKED_COPY[startGate.reason] ?? null);
   const canEditSettings = state.self.isHost && onSettingsChange !== undefined;
+
+  useEffect(() => {
+    if (readyIntent === state.self.ready) setReadyIntent(null);
+  }, [readyIntent, state.self.ready]);
+
+  useEffect(() => {
+    setReadyIntent(null);
+  }, [state.phase, state.self.transportId]);
+
+  useEffect(() => {
+    if (readyIntent === null) return undefined;
+    // A refusal or lost host must not leave a locally-lit button stuck forever.
+    const timeout = window.setTimeout(() => setReadyIntent(null), 4_000);
+    return () => window.clearTimeout(timeout);
+  }, [readyIntent]);
 
   return (
     <div style={overlayStyle}>
@@ -256,17 +276,21 @@ export function LobbyHud({
               className={PRESS_CLASS}
               style={
                 readyGate.allowed
-                  ? state.self.ready
+                  ? displayedReady
                     ? primaryButtonStyle
                     : buttonStyle
                   : disabledButtonStyle(buttonStyle)
               }
               disabled={!readyGate.allowed}
+              aria-pressed={displayedReady}
+              aria-busy={readyIntent !== null}
               onClick={() => {
-                onReady(!state.self.ready);
+                const next = !displayedReady;
+                setReadyIntent(next);
+                onReady(next);
               }}
             >
-              {state.self.ready ? "Ready" : "Ready up"}
+              {displayedReady ? "Ready" : "Ready up"}
             </button>
             <button
               type="button"

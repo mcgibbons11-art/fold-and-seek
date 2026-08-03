@@ -102,6 +102,83 @@ function buttonWithText(text: string): HTMLButtonElement {
 }
 
 describe("readying up in a Portals lobby", () => {
+  it("lights an accepted guest's button immediately, then confirms it from the host", async () => {
+    vi.useFakeTimers();
+    let clock = 1_700_000_000_000;
+    const relay = new FakePortalsRelay();
+    const host = createPortalsRound({
+      sdk: relay.createPeer({ id: "peer-a", displayName: "Ada", playerId: "peer-a" }),
+      seed: 5,
+      settings: FAST_SETTINGS,
+      now: () => clock,
+    });
+    const guest = createPortalsRound({
+      sdk: relay.createPeer({ id: "peer-b", displayName: "Bex", playerId: "peer-b" }),
+      seed: 5,
+      settings: FAST_SETTINGS,
+      now: () => clock,
+    });
+    await host.adapter.connect();
+    await guest.adapter.connect();
+    await host.adapter.joinSession(PORTALS_ROUND_CHANNEL, "Ada");
+    await guest.adapter.joinSession(PORTALS_ROUND_CHANNEL, "Bex");
+
+    const advance = (steps = 1): void => {
+      act(() => {
+        for (let index = 0; index < steps; index += 1) {
+          clock += STEP_MS;
+          host.adapter.tick();
+          guest.adapter.tick();
+        }
+      });
+    };
+
+    const opened = host.adapter.createRoom("Ada's room");
+    if (!opened.ok) throw new Error(opened.reason);
+    advance(2);
+    let acceptedCode: string | null = null;
+    guest.adapter.onRoomDecision((decision) => {
+      if (decision.accepted) acceptedCode = decision.roomCode;
+    });
+    expect(guest.adapter.requestRoom(opened.code).ok).toBe(true);
+    const request = host.adapter.pendingJoinRequests()[0];
+    if (request === undefined) throw new Error("host did not receive guest request");
+    expect(host.adapter.acceptRoomRequest(request.id).ok).toBe(true);
+    expect(acceptedCode).toBe(opened.code);
+    expect(guest.adapter.enterRoom(acceptedCode as string).ok).toBe(true);
+    advance(4);
+
+    const actions = new RoundActions(guest.adapter, guest.director);
+    act(() => {
+      root.render(<SubscribedLobby director={guest.director} actions={actions} />);
+    });
+    expect(guest.director.getState().self.ready).toBe(false);
+
+    act(() => {
+      buttonWithText("Ready up").click();
+    });
+
+    // The relay acknowledgment has not been flushed yet, but the pressed
+    // control is already gold and legibly says what this player requested.
+    expect(guest.director.getState().self.ready).toBe(false);
+    expect(buttonWithText("Ready").getAttribute("aria-pressed")).toBe("true");
+    expect(buttonWithText("Ready").getAttribute("aria-busy")).toBe("true");
+
+    advance(3);
+    expect(guest.director.getState().self.ready).toBe(true);
+    expect(buttonWithText("Ready").getAttribute("aria-busy")).toBe("false");
+
+    // The roster is the lower-frequency room snapshot; it follows the private
+    // acknowledgment without controlling the button's responsiveness.
+    advance(3);
+    expect(
+      guest.director.getState().roster.find((player) => player.isSelf)?.ready,
+    ).toBe(true);
+
+    host.dispose();
+    guest.dispose();
+  });
+
   it("flips the host's own row and unlocks the start", async () => {
     vi.useFakeTimers();
     let clock = 1_700_000_000_000;

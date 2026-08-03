@@ -9,12 +9,20 @@ import { resolve } from "node:path";
  * the OS scratch area; hosted builds pass an explicit `--outDir portals`.
  */
 const verificationOutDir = resolve(tmpdir(), "foldseek-client-build");
+// Dropbox applies reparse/placeholder semantics inside node_modules. Vite's
+// optimizer finalizes a dependency batch by renaming deps_temp_* to deps; in
+// this workspace that rename can remain permanently half-finished and every
+// browser then receives 504 Outdated Optimize Dep. The build already uses OS
+// scratch space for the same reason, so keep the disposable dev cache there as
+// well.
+const dependencyCacheDir = resolve(tmpdir(), "foldseek-client-vite-cache");
 
 // base: "./" is required for the Portals hosted-game bundle: Portals serves the
 // processed build from a nested path and injects ./_portals/sdk.js, so every
 // asset reference must be relative.
 export default defineConfig({
   base: "./",
+  cacheDir: dependencyCacheDir,
   plugins: [react()],
   resolve: {
     // Exactly one three.js build may exist at runtime. The renderer uses

@@ -1951,7 +1951,15 @@ export class PortalsNetAdapter implements NetworkAdapter {
     const result = this.applySim(`command ${command.type}`, (sim) =>
       sim.handleCommand(seatId, command),
     );
-    if (result === null || result.accepted) return;
+    if (result === null) return;
+    if (result.accepted) {
+      // Public events describe the room, but controls such as Ready read the
+      // sender's private slice too. Refresh it after every accepted remote
+      // command so a guest does not remain visually stale until an unrelated
+      // private event happens to be delivered.
+      if (seatId !== this.selfSeatId && !isBotSeat(seatId)) this.pendingSync.add(seatId);
+      return;
+    }
     this.reportRejection(seatId, rejectionOf(command.type, result.reason, result.detail));
   }
 

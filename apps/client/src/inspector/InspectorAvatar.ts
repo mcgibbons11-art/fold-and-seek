@@ -1,0 +1,268 @@
+import * as THREE from "three/webgpu";
+import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+import type { InspectorBodyFrame } from "./InspectorBody";
+import { WORLD_SCALE } from "./navData";
+
+const ASSET_PATH = "assets/characters/inspector-curator.glb";
+/** Blender master is just over two metres from boot sole to head loop. */
+const AUTHORED_HEIGHT_M = 2.05;
+const CROSS_FADE_SECONDS = 0.1;
+const FIRE_FADE_SECONDS = 0.045;
+
+type BaseAction = "rifle-idle" | "run" | "jump" | "climb";
+type InspectorAction = BaseAction | "rifle-fire" | "hit" | "death";
+
+/** Locomotion choice is kept pure so the gameplay thresholds stay testable. */
+export function inspectorActionForFrame(frame: InspectorBodyFrame): BaseAction {
+  if (frame.climbing) return "climb";
+  if (frame.airborne) return "jump";
+  const speedFraction = frame.speedCapMps > 0 ? frame.speedMps / frame.speedCapMps : 0;
+  return speedFraction > 0.055 ? "run" : "rifle-idle";
+}
+
+/**
+ * Authored Blender/Mixamo presentation for InspectorBody.
+ *
+ * The game still owns movement, collision, camera and the warrant gun. This
+ * layer owns only the visible performance and solves its right arm onto the
+ * gun hand after Mixamo has posed the skeleton, so animation can never make
+ * the weapon float away from the character.
+ */
+export class InspectorAvatar {
+  private readonly parent: THREE.Object3D;
+  private readonly gunHand: THREE.Object3D;
+  private readonly onReady: () => void;
+  private readonly loader = new GLTFLoader();
+  private readonly actions = new Map<string, THREE.AnimationAction>();
+  private readonly geometries = new Set<THREE.BufferGeometry>();
+  private readonly materials = new Set<THREE.Material>();
+
+  private model: THREE.Group | null = null;
+  private mixer: THREE.AnimationMixer | null = null;
+  private currentAction: InspectorAction | null = null;
+  private oneShotSeconds = 0;
+  private lastFrame: InspectorBodyFrame | null = null;
+  private rightArm: THREE.Bone | null = null;
+  private rightForeArm: THREE.Bone | null = null;
+  private rightHand: THREE.Bone | null = null;
+  private disposed = false;
+  private castShadow = true;
+
+  private readonly target = new THREE.Vector3();
+  private readonly jointPoint = new THREE.Vector3();
+  private readonly handPoint = new THREE.Vector3();
+  private readonly currentVector = new THREE.Vector3();
+  private readonly targetVector = new THREE.Vector3();
+  private readonly worldDelta = new THREE.Quaternion();
+  private readonly limitedDelta = new THREE.Quaternion();
+  private readonly parentWorld = new THREE.Quaternion();
+  private readonly parentWorldInverse = new THREE.Quaternion();
+  private readonly localDelta = new THREE.Quaternion();
+  private readonly identity = new THREE.Quaternion();
+
+  constructor(parent: THREE.Object3D, gunHand: THREE.Object3D, onReady: () => void) {
+    this.parent = parent;
+    this.gunHand = gunHand;
+    this.onReady = onReady;
+  }
+
+  async load(): Promise<boolean> {
+    try {
+      const url = new URL(ASSET_PATH, document.baseURI).href;
+      const gltf = await this.loader.loadAsync(url);
+      if (this.disposed) {
+        disposeTree(gltf.scene);
+        return false;
+      }
+
+      const model = gltf.scene;
+      model.name = "inspector-curator-avatar";
+      model.scale.setScalar(WORLD_SCALE.playerHeight / AUTHORED_HEIGHT_M);
+      // The Blender character faces -Y; the glTF conversion maps that to +Z,
+      // while an Inspector at yaw zero travels along -Z.
+      model.rotation.y = Math.PI;
+      this.parent.add(model);
+      this.model = model;
+      this.mixer = new THREE.AnimationMixer(model);
+
+      model.traverse((object) => {
+        if (object instanceof THREE.Bone) {
+          if (object.name === "RightArm") this.rightArm = object;
+          if (object.name === "RightForeArm") this.rightForeArm = object;
+          if (object.name === "RightHand") this.rightHand = object;
+        }
+        if (!(object instanceof THREE.Mesh)) return;
+        object.castShadow = this.castShadow;
+        object.receiveShadow = false;
+        this.geometries.add(object.geometry);
+        const material = object.material;
+        if (Array.isArray(material)) material.forEach((entry) => this.materials.add(entry));
+        else this.materials.add(material);
+      });
+
+      for (const clip of gltf.animations) {
+        this.actions.set(clip.name, this.mixer.clipAction(clip));
+      }
+      for (const required of [
+        "rifle-idle",
+        "run",
+        "jump",
+        "climb",
+        "rifle-fire",
+        "hit",
+        "death",
+      ]) {
+        if (!this.actions.has(required)) throw new Error(`missing ${required} action`);
+      }
+
+      this.play("rifle-idle", 0);
+      this.onReady();
+      return true;
+    } catch (error) {
+      if (!this.disposed) console.warn("[inspector] authored avatar unavailable; using fallback", error);
+      this.disposeModel();
+      return false;
+    }
+  }
+
+  update(dtSeconds: number, frame: InspectorBodyFrame): void {
+    this.lastFrame = frame;
+    const mixer = this.mixer;
+    if (mixer === null) return;
+
+    if (this.oneShotSeconds > 0) {
+      this.oneShotSeconds = Math.max(0, this.oneShotSeconds - dtSeconds);
+      if (this.oneShotSeconds === 0) this.play(inspectorActionForFrame(frame));
+    } else {
+      this.play(inspectorActionForFrame(frame));
+    }
+
+    const run = this.actions.get("run");
+    if (run !== undefined) {
+      const fraction = frame.speedCapMps > 0 ? Math.min(1, frame.speedMps / frame.speedCapMps) : 0;
+      run.timeScale = THREE.MathUtils.lerp(0.78, 1.42, fraction);
+    }
+    mixer.update(Math.min(dtSeconds, 0.1));
+    this.solveGunArm();
+  }
+
+  fire(): void {
+    const action = this.actions.get("rifle-fire");
+    if (action === undefined) return;
+    this.play("rifle-fire", FIRE_FADE_SECONDS, true);
+    this.oneShotSeconds = Math.max(0.12, action.getClip().duration - FIRE_FADE_SECONDS);
+  }
+
+  setCastShadow(enabled: boolean): void {
+    this.castShadow = enabled;
+    this.model?.traverse((object) => {
+      if (object instanceof THREE.Mesh) object.castShadow = enabled;
+    });
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.disposeModel();
+  }
+
+  private play(name: InspectorAction, fadeSeconds = CROSS_FADE_SECONDS, restart = false): void {
+    if (!restart && this.currentAction === name) return;
+    const next = this.actions.get(name);
+    if (next === undefined) return;
+    const previous = this.currentAction === null ? undefined : this.actions.get(this.currentAction);
+
+    next.enabled = true;
+    next.setEffectiveWeight(1);
+    if (name === "rifle-fire" || name === "hit" || name === "death") {
+      next.setLoop(THREE.LoopOnce, 1);
+      next.clampWhenFinished = name === "death";
+    } else {
+      next.setLoop(THREE.LoopRepeat, Number.POSITIVE_INFINITY);
+      next.clampWhenFinished = false;
+    }
+    if (restart) next.reset();
+    next.play();
+    if (previous !== undefined && previous !== next && fadeSeconds > 0) {
+      next.crossFadeFrom(previous, fadeSeconds, true);
+    }
+    this.currentAction = name;
+  }
+
+  /** Small CCD solve, applied after the animation mixer has posed the arm. */
+  private solveGunArm(): void {
+    const model = this.model;
+    const arm = this.rightArm;
+    const foreArm = this.rightForeArm;
+    const hand = this.rightHand;
+    if (model === null || arm === null || foreArm === null || hand === null) return;
+    this.gunHand.getWorldPosition(this.target);
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      this.rotateJointToward(foreArm, hand, this.target);
+      this.rotateJointToward(arm, hand, this.target);
+    }
+  }
+
+  private rotateJointToward(joint: THREE.Bone, effector: THREE.Bone, target: THREE.Vector3): void {
+    joint.updateWorldMatrix(true, true);
+    joint.getWorldPosition(this.jointPoint);
+    effector.getWorldPosition(this.handPoint);
+    this.currentVector.copy(this.handPoint).sub(this.jointPoint);
+    this.targetVector.copy(target).sub(this.jointPoint);
+    if (this.currentVector.lengthSq() < 1e-10 || this.targetVector.lengthSq() < 1e-10) return;
+    this.currentVector.normalize();
+    this.targetVector.normalize();
+    this.worldDelta.setFromUnitVectors(this.currentVector, this.targetVector);
+
+    // A bad first loaded frame should bend toward the target, never snap an
+    // elbow through the torso in one solve.
+    const angle = this.identity.angleTo(this.worldDelta);
+    if (angle > 0.72) {
+      this.limitedDelta.slerpQuaternions(this.identity, this.worldDelta, 0.72 / angle);
+    } else {
+      this.limitedDelta.copy(this.worldDelta);
+    }
+
+    const parent = joint.parent;
+    if (parent === null) return;
+    parent.getWorldQuaternion(this.parentWorld);
+    this.parentWorldInverse.copy(this.parentWorld).invert();
+    this.localDelta
+      .copy(this.parentWorldInverse)
+      .multiply(this.limitedDelta)
+      .multiply(this.parentWorld);
+    joint.quaternion.premultiply(this.localDelta).normalize();
+    joint.updateWorldMatrix(false, true);
+  }
+
+  private disposeModel(): void {
+    this.mixer?.stopAllAction();
+    if (this.model !== null) this.model.removeFromParent();
+    for (const geometry of this.geometries) geometry.dispose();
+    for (const material of this.materials) material.dispose();
+    this.geometries.clear();
+    this.materials.clear();
+    this.actions.clear();
+    this.mixer = null;
+    this.model = null;
+    this.currentAction = null;
+    this.rightArm = null;
+    this.rightForeArm = null;
+    this.rightHand = null;
+    this.lastFrame = null;
+  }
+}
+
+function disposeTree(root: THREE.Object3D): void {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+  root.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    geometries.add(object.geometry);
+    if (Array.isArray(object.material)) object.material.forEach((material) => materials.add(material));
+    else materials.add(object.material);
+  });
+  for (const geometry of geometries) geometry.dispose();
+  for (const material of materials) material.dispose();
+}
