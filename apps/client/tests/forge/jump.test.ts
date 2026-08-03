@@ -2,6 +2,7 @@ import { DEFAULT_MATCH_SETTINGS, HIDER_FORGE_RUN_SPEED, JUMP_HEIGHT_M } from "@f
 import { describe, expect, it } from "vitest";
 
 import { HiderLocomotion } from "../../src/forge/HiderLocomotion";
+import { humanMimicSpawn } from "../../src/gameplay/botDisguises";
 import {
   CharacterController,
   createMoveInput,
@@ -15,7 +16,13 @@ import {
   type MutableVec3,
   type NavData,
 } from "../../src/inspector/navData";
-import { CLIMB_LINKS, CLUTTER_BLOCKERS, NAV_DATA, WALKABLE_SURFACES } from "../../src/world/maps/nav";
+import {
+  CLIMB_LINKS,
+  CLUTTER_BLOCKERS,
+  MIMIC_NAV_DATA,
+  NAV_DATA,
+  WALKABLE_SURFACES,
+} from "../../src/world/maps/nav";
 import { box, openNavData, surface, testSettings, SHOP_FLOOR } from "../inspector/navFixture";
 
 /**
@@ -227,6 +234,52 @@ describe("the hop", () => {
     // The rack's frame is a taller solid than its first published board. The
     // contextual route takes the actual solid top, not the lower nav shelf.
     expect(root.y).toBeCloseTo(apexY, 5);
+  });
+
+  it("stays grounded after the live Hider spawn route tops out with Space held", () => {
+    const spawn = humanMimicSpawn();
+    const root = at(spawn.position.x, spawn.position.y, spawn.position.z);
+    const locomotion = new HiderLocomotion(MIMIC_NAV_DATA);
+    locomotion.press("w");
+    for (let frame = 0; frame < 0.9 / FRAME_SECONDS; frame += 1) {
+      locomotion.update(FRAME_SECONDS, 0.7, root);
+    }
+    locomotion.press(" ");
+
+    let sawClimb = false;
+    let toppedOut = false;
+    for (let frame = 0; frame < 8 / FRAME_SECONDS; frame += 1) {
+      locomotion.update(FRAME_SECONDS, 0.7, root);
+      sawClimb ||= locomotion.motion.climbState !== null;
+      if (sawClimb && locomotion.motion.climbState === null && locomotion.motion.grounded) {
+        toppedOut = true;
+        break;
+      }
+    }
+    expect(sawClimb).toBe(true);
+    expect(toppedOut).toBe(true);
+
+    // The next held-key frame was the live failure: it converted the climb's
+    // Space press into a fresh jump and left the Forge body at its ceiling.
+    const topY = root.y;
+    locomotion.update(FRAME_SECONDS, 0.7, root);
+    expect(locomotion.motion.climbState).toBeNull();
+    expect(root.y).toBeLessThanOrEqual(topY);
+    let landedBelow = false;
+    for (let frame = 0; frame < 4 / FRAME_SECONDS; frame += 1) {
+      locomotion.update(FRAME_SECONDS, 0.7, root);
+      if (locomotion.motion.grounded && root.y < topY) {
+        landedBelow = true;
+        break;
+      }
+    }
+    expect(
+      locomotion.motion.grounded,
+      JSON.stringify({ root, surfaceId: locomotion.motion.surfaceId, resolution: locomotion.motion.lastResolution }),
+    ).toBe(true);
+    expect(landedBelow).toBe(true);
+    expect(root.y).toBeLessThan(topY);
+    locomotion.releaseAll();
   });
 
   it("does not launch a second time in mid-air", () => {

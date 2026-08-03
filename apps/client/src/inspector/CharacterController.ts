@@ -531,7 +531,18 @@ export class CharacterController {
       z,
       this.position.y + INSPECTOR_STEP_HEIGHT_M,
     );
-    if (destination === null) return false;
+    if (destination === null) {
+      // Contextual climbs may finish on a blocker top that is intentionally
+      // absent from the authored floor graph. Let a grounded body traverse that
+      // flat top; once its centre clears the footprint, the ordinary floor
+      // below becomes the destination and vertical resolution performs the
+      // drop. A surface-locked Hider can cross the same top but still cannot
+      // step down to a different published surface below.
+      if (!this.grounded || this.supportingBlockerTopAt(x, z) === null) return false;
+      this.position.x = x;
+      this.position.z = z;
+      return true;
+    }
     // A creep may not step off the surface it settled on, in either direction:
     // an edge it would fall from and a lip it would rise onto both move the body
     // vertically, and vertical distance spends the same budget as horizontal.
@@ -583,6 +594,21 @@ export class CharacterController {
     const ceilingY = this.position.y + INSPECTOR_STEP_HEIGHT_M;
     const below = surfaceAt(this.navData.floors, this.position.x, this.position.z, ceilingY);
     if (below === null) {
+      // A procedural top has no published walkable surface of its own. While
+      // the body is still over that blocker's footprint, the room floor below
+      // also fails `surfaceAt`'s headroom test. Null therefore does not mean
+      // gravity stops: sweep the blocker top exactly as the ordinary descent
+      // path does, then keep falling once the body clears its edge.
+      this.applyGravity(dtSeconds);
+      const nextY = this.position.y + this.verticalVelocity * dtSeconds;
+      const landedOn = this.descentBlockedAt(this.position.y, nextY);
+      if (landedOn !== null) {
+        this.position.y = landedOn;
+        this.land();
+        this.surfaceId = null;
+        return;
+      }
+      this.position.y = nextY;
       this.grounded = false;
       this.surfaceId = null;
       return;
@@ -662,6 +688,17 @@ export class CharacterController {
       if (blockerTop > feetY || blockerTop <= lowY) continue;
       if (!containsXZ(blocker, this.position.x, this.position.z)) continue;
       if (top === null || blockerTop > top) top = blockerTop;
+    }
+    return top;
+  }
+
+  /** A flat blocker top at the body's current standing height, if one exists. */
+  private supportingBlockerTopAt(x: number, z: number): number | null {
+    let top: number | null = null;
+    for (const blocker of this.navData.blockers) {
+      if (!containsXZ(blocker, x, z)) continue;
+      if (Math.abs(blocker.max.y - this.position.y) > WORLD_SCALE.groundSnap) continue;
+      if (top === null || blocker.max.y > top) top = blocker.max.y;
     }
     return top;
   }
