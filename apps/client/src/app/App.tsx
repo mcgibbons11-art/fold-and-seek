@@ -494,9 +494,14 @@ export function App(): ReactElement {
         session.player.displayName ?? DEFAULT_PLAYER_NAME,
       );
     } catch {
-      console.warn("[rooms] relay unavailable; solo play remains available");
-      lobbyRef.current = null;
-      opened.dispose();
+      console.warn("[rooms] relay unavailable; matchmaking is waiting for reconnect");
+      // Portals players asked for matchmaking, not an automatic demotion to a
+      // private bot game. Keep the browser and its Reconnect control mounted
+      // with this reusable failed adapter; reconnectLobby replaces it with a
+      // fresh session when the player asks.
+      setRooms([]);
+      setRoundError("Portals matchmaking could not connect. Open Matchmaking and reconnect.");
+      setLobby(opened);
       setLobbyBusy(false);
       return;
     }
