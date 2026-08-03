@@ -247,6 +247,8 @@ describe("a Portals round", () => {
     vi.useFakeTimers();
     const room = await huntingRoom();
     const inspector = room.inspector();
+    expect(inspector.round.adapter.isAuthority()).toBe(false);
+    expect(inspector.round.adapter.getSync().privateState?.warrantsRemaining).toBeGreaterThan(0);
     const objectId =
       inspector.round.adapter.getSync().publicState?.disguises[0]?.publicObjectId ?? "";
     expect(objectId).not.toBe("");

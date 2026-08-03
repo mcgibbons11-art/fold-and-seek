@@ -2099,6 +2099,21 @@ export class PortalsNetAdapter implements NetworkAdapter {
         }
       }
     }
+    // Warrants are minted by the authority on the Inspection transition, not
+    // by an Inspector command and not by a private event. Without an explicit
+    // refresh, a remote Inspector keeps the zero-round private slice they had
+    // during Forge even while the public room correctly reports three rounds.
+    if (output.public.some((event) => event.type === "inspection_started")) {
+      for (const player of this.sim?.getPublicState().players ?? []) {
+        if (
+          player.rolePublicState === "inspector" &&
+          player.seatId !== this.selfSeatId &&
+          !isBotSeat(player.seatId)
+        ) {
+          this.pendingSync.add(player.seatId);
+        }
+      }
+    }
     for (const [seatId, events] of output.private) {
       if (seatId === this.selfSeatId || events.length === 0) continue;
       // A bot's private stream is read by the driver straight off the
