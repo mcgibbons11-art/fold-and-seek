@@ -125,6 +125,38 @@ describe("the room browser", () => {
     );
   });
 
+  it("opens a room without a native form submission that Portals sandboxes block", async () => {
+    const reader = await browsingClient("b", "Bex");
+    let creates = 0;
+    act(() => {
+      root.render(
+        <RoomBrowser
+          rooms={reader.listRooms()}
+          onJoin={() => undefined}
+          onCreate={() => {
+            creates += 1;
+          }}
+          onQuickJoin={() => undefined}
+        />,
+      );
+    });
+
+    expect(container.querySelector("form")).toBeNull();
+    const newRoom = [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "New room",
+    );
+    if (newRoom === undefined) throw new Error("new-room control is missing");
+    click(newRoom);
+    expect(creates).toBe(1);
+
+    const input = container.querySelector<HTMLInputElement>('[aria-label="Room name"]');
+    if (input === null) throw new Error("room-name control is missing");
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(creates).toBe(2);
+  });
+
   it("draws another client's room and joins it when the row is pressed", async () => {
     const host = await browsingClient("a", "Ada");
     const reader = await browsingClient("b", "Bex");

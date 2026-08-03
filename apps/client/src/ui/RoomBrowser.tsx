@@ -168,6 +168,11 @@ export function RoomBrowser({
   const full = rooms.length >= MAX_CONCURRENT_ROOMS;
   const anyJoinable = rooms.some((room) => room.joinable);
   const selected = rooms.find((room) => room.code === selectedCode) ?? rooms[0] ?? null;
+  const submitRoom = (): void => {
+    if (busy || full) return;
+    onCreate(name);
+    setName("");
+  };
 
   return (
     <div style={screenStyle} className="fs-matchmaking-screen" aria-label="Matchmaking lobby">
@@ -354,14 +359,8 @@ export function RoomBrowser({
             Quick join
           </button>
 
-          <form
+          <div
             style={{ marginTop: 22, paddingTop: 16, borderTop: RULE }}
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (busy || full) return;
-              onCreate(name);
-              setName("");
-            }}
           >
             <div style={{ ...labelStyle, marginBottom: 8 }}>Host a room</div>
             <input
@@ -373,9 +372,14 @@ export function RoomBrowser({
               onChange={(event) => {
                 setName(event.target.value);
               }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                submitRoom();
+              }}
             />
             <button
-              type="submit"
+              type="button"
               className={PRESS_CLASS}
               style={
                 busy || full
@@ -383,10 +387,11 @@ export function RoomBrowser({
                   : { ...buttonStyle, width: "100%", marginTop: 9 }
               }
               disabled={busy || full}
+              onClick={submitRoom}
             >
               New room
             </button>
-          </form>
+          </div>
 
           {notice === null ? null : (
             <p
