@@ -36,6 +36,14 @@ export function isStaleReadyRejection(
     phase !== MatchPhase.Lobby
   );
 }
+
+/** Focus is gaze telemetry; a dropped sample is never a failed player action. */
+export function isPlayerFacingRejection(
+  rejection: CommandRejection,
+  phase: MatchPhase | null,
+): boolean {
+  return rejection.type !== "focus" && !isStaleReadyRejection(rejection, phase);
+}
 import { correctAccusationStamp, phaseLabel, wrongAccusationStamp } from "./copy";
 import type {
   AccusationFeedEntry,
@@ -469,7 +477,7 @@ export class RoundDirector {
   }
 
   private applyRejection(rejection: CommandRejection): void {
-    if (isStaleReadyRejection(rejection, this.sync.publicState?.phase ?? null)) return;
+    if (!isPlayerFacingRejection(rejection, this.sync.publicState?.phase ?? null)) return;
     if (rejection.type === "taunt" && !KNOWN_TAUNT_REFUSALS.has(rejection.reason)) {
       this.tauntSupported = false;
     }

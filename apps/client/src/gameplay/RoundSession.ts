@@ -44,7 +44,7 @@ import {
   WRONG_ACCUSATION_SOUND,
 } from "./huntCues";
 import { RoundActions } from "./RoundActions";
-import { isStaleReadyRejection, type RoundDirector } from "./RoundDirector";
+import { isPlayerFacingRejection, type RoundDirector } from "./RoundDirector";
 import { RemoteInspectorPresentation } from "./RemoteInspectorPresentation";
 import type { RoundSpatialBridge } from "./roundSpatial";
 import type { RoundViewState } from "./roundView";
@@ -289,7 +289,7 @@ export class RoundSession {
         // noise would deny something nobody tried to do.
         if (
           rejection.reason !== "unsupported" &&
-          !isStaleReadyRejection(rejection, this.state().phase)
+          isPlayerFacingRejection(rejection, this.state().phase)
         ) {
           this.audio.play(rejection.reason === "no_warrants" ? "gun_dry_click" : "ui_deny");
         }

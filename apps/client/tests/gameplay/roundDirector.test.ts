@@ -314,6 +314,18 @@ describe("RoundDirector", () => {
     fixture.dispose();
   });
 
+  it("does not show rejected focus telemetry as a failed player action", async () => {
+    vi.useFakeTimers();
+    const fixture = await startedFixture();
+    fixture.runTo(MatchPhase.Inspection);
+
+    fixture.adapter.sendCommand({ type: "focus", targetObjectId: "not-a-real-object" });
+    fixture.advance(1);
+
+    expect(fixture.state().rejections).toHaveLength(0);
+    fixture.dispose();
+  });
+
   it("corrects the countdown for a server clock that leads this machine's", async () => {
     vi.useFakeTimers();
     const lead = 5_000;
