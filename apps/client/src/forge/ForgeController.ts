@@ -223,18 +223,6 @@ export interface ForgePanelSelection {
   readonly panel: PanelState | null;
 }
 
-/** Read-only movement telemetry used by browser-level traversal checks. */
-export interface ForgeMovementDiagnostics {
-  readonly position: readonly [number, number, number];
-  /** World yaw of the Mimic's authored +Z face. */
-  readonly facingYaw: number;
-  /** World yaw the character controller is actually travelling toward. */
-  readonly travelYaw: number;
-  readonly speedFraction: number;
-  readonly climbing: boolean;
-  readonly grounded: boolean;
-}
-
 export interface ForgeHudState {
   readonly mode: ForgeToolMode;
   readonly locked: boolean;
@@ -253,7 +241,6 @@ export interface ForgeHudState {
   readonly preview: ForgePreviewMode;
   readonly silhouette: boolean;
   readonly status: string;
-  readonly movement: ForgeMovementDiagnostics | null;
   /**
    * Bumped only when something other than the player's own slider changes the
    * selected values: a different selection, an undo, a starter arrangement. The
@@ -884,6 +871,7 @@ export class ForgeController {
     this.captureTargets();
     this.refreshAll(true);
     this.attachInput();
+    this.writeMovementDiagnostics();
   }
 
   /** A brass seal for a met anchor, a warm red for one the pose cannot reach. */
@@ -935,12 +923,48 @@ export class ForgeController {
     this.flushPointerGesture();
     this.flushPendingValueRefresh();
     this.stepLocomotion(dtMs);
+    this.writeMovementDiagnostics();
     this.stepBodyMotion(dtMs / 1_000);
     this.stepCameraFollow(dtMs / 1_000);
     this.layoutHandles();
     // Cheap when nothing was painted: a reference check per part and an upload
     // only while the atlas is dirty.
     this.paintTool.update();
+  }
+
+  /**
+   * Keeps browser-level traversal checks on the render surface rather than in
+   * React state. Walking redraws every frame but deliberately does not rerender
+   * the HUD every frame; canvas data therefore reports the live controller
+   * without turning diagnostics into input lag.
+   */
+  private writeMovementDiagnostics(): void {
+    const dataset = (this.canvas as HTMLCanvasElement & { dataset?: DOMStringMap }).dataset;
+    if (dataset === undefined) return;
+    const locomotion = this.locomotion;
+    if (locomotion === null) {
+      delete dataset["hiderPosition"];
+      delete dataset["hiderFacingYaw"];
+      delete dataset["hiderTravelYaw"];
+      delete dataset["hiderSpeed"];
+      delete dataset["hiderClimbing"];
+      delete dataset["hiderGrounded"];
+      return;
+    }
+    const rotation = this.pose.rootRotation;
+    const faceX = 2 * (rotation.x * rotation.z + rotation.w * rotation.y);
+    const faceZ = 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y);
+    const sample = locomotion.sample;
+    dataset["hiderPosition"] = [
+      this.pose.rootPosition.x,
+      this.pose.rootPosition.y,
+      this.pose.rootPosition.z,
+    ].join(",");
+    dataset["hiderFacingYaw"] = String(Math.atan2(-faceX, -faceZ));
+    dataset["hiderTravelYaw"] = String(sample.travelYaw);
+    dataset["hiderSpeed"] = String(sample.speedFraction);
+    dataset["hiderClimbing"] = String(locomotion.motion.climbState !== null);
+    dataset["hiderGrounded"] = String(locomotion.motion.grounded);
   }
 
   /**
@@ -1442,11 +1466,6 @@ export class ForgeController {
             swatchId: resolvedSwatchFor(this.state.materials, bone, DEFAULT_BODY_SWATCH_ID),
           };
     const panelState = this.selectedSocket === null ? null : this.findPanel(this.selectedSocket);
-    const rotation = this.pose.rootRotation;
-    const faceX = 2 * (rotation.x * rotation.z + rotation.w * rotation.y);
-    const faceZ = 1 - 2 * (rotation.x * rotation.x + rotation.y * rotation.y);
-    const locomotion = this.locomotion;
-    const sample = locomotion?.sample;
     return {
       mode: this.mode,
       locked: this.locked,
@@ -1472,21 +1491,6 @@ export class ForgeController {
       preview: this.preview,
       silhouette: this.silhouette,
       status: this.status,
-      movement:
-        locomotion === null || sample === undefined
-          ? null
-          : {
-              position: [
-                this.pose.rootPosition.x,
-                this.pose.rootPosition.y,
-                this.pose.rootPosition.z,
-              ],
-              facingYaw: Math.atan2(-faceX, -faceZ),
-              travelYaw: sample.travelYaw,
-              speedFraction: sample.speedFraction,
-              climbing: locomotion.motion.climbState !== null,
-              grounded: locomotion.motion.grounded,
-            },
       formEpoch: this.formEpoch,
     };
   }

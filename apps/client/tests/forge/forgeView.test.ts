@@ -54,6 +54,7 @@ class Harness {
     };
     const canvas = {
       style: { cursor: "default" },
+      dataset: {} as Record<string, string>,
       getBoundingClientRect: () => ({ left: 0, top: 0, ...VIEWPORT }),
       setPointerCapture: () => undefined,
       releasePointerCapture: () => undefined,
@@ -457,13 +458,12 @@ describe("running the Mimic about the room", () => {
     const authoredFace = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation).setY(0).normalize();
 
     expect(authoredFace.dot(travel)).toBeGreaterThan(0.9);
-    const diagnostic = walker.controller.snapshot().movement;
-    expect(diagnostic).not.toBeNull();
-    expect(diagnostic?.position).toEqual(moving.root.position);
-    expect(Math.cos((diagnostic?.facingYaw ?? 0) - (diagnostic?.travelYaw ?? 0))).toBeGreaterThan(
-      0.9,
-    );
-    expect(diagnostic?.speedFraction).toBeGreaterThan(0);
+    const diagnostic = (walker.canvas as { dataset: Record<string, string> }).dataset;
+    expect(diagnostic["hiderPosition"]?.split(",").map(Number)).toEqual(moving.root.position);
+    expect(
+      Math.cos(Number(diagnostic["hiderFacingYaw"]) - Number(diagnostic["hiderTravelYaw"])),
+    ).toBeGreaterThan(0.9);
+    expect(Number(diagnostic["hiderSpeed"])).toBeGreaterThan(0);
   });
 
   it("finishes a 180-degree facing correction before the run reads backward", () => {
