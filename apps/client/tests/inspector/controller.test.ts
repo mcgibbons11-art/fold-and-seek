@@ -241,6 +241,14 @@ describe("InspectorController climbing", () => {
       (current) => current.surfaceId === "solid_top_0" && current.climbState === null,
     );
 
+    const topY = controller.position.y;
+    walk(controller, 1, { jump: true });
+    expect(controller.position.y).toBeCloseTo(topY, 6);
+    expect(controller.grounded).toBe(true);
+    walk(controller, 1, { jump: false });
+    expect(controller.position.y).toBeCloseTo(topY, 6);
+    expect(controller.grounded).toBe(true);
+
     walk(controller, 120, { forward: 1, jump: true });
     expect(controller.climbState).toBeNull();
     // Forward remains live after the dismount; the player walks off the far

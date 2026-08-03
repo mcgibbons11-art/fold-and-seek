@@ -325,7 +325,13 @@ export class CharacterController {
 
     this.justLanded = false;
     this.sinceJumpRequest = input.jump ? 0 : this.sinceJumpRequest + dtSeconds;
-    if (!input.jump) this.solidClimbRequiresJumpRelease = false;
+    if (!input.jump && this.solidClimbRequiresJumpRelease) {
+      this.solidClimbRequiresJumpRelease = false;
+      // The held press that powered the climb is spent. Leaving it in the jump
+      // buffer launches the body on the release frame and can pin a Forge body
+      // against its workspace ceiling immediately after a top-out.
+      this.consumeJump();
+    }
 
     this.yaw = wrapAngle(this.yaw + input.lookYawDelta);
     this.pitch = clamp(this.pitch + input.lookPitchDelta, -MAX_PITCH_RAD, MAX_PITCH_RAD);
@@ -394,6 +400,9 @@ export class CharacterController {
    * both, so neither can stack into a second launch in mid-air.
    */
   private wantsJump(): boolean {
+    // A procedural climb ends while the same Space press is commonly still
+    // held. It must not become an ordinary hop until the player releases it.
+    if (this.solidClimbRequiresJumpRelease) return false;
     if (this.sinceJumpRequest > JUMP_BUFFER_SECONDS) return false;
     return this.grounded || this.coyoteSeconds > 0;
   }
