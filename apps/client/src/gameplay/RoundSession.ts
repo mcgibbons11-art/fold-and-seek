@@ -92,6 +92,8 @@ export const INSPECTION_PHASES: ReadonlySet<MatchPhase> = new Set([
  * `maxForgeCommandHz`.
  */
 const POSE_PUBLISH_INTERVAL_MS = 500;
+/** Paint feels immediate without competing with pose packets for the authority budget. */
+const PAINT_PUBLISH_INTERVAL_MS = 150;
 
 /** Survey camera: a slow turn about the middle of the sales floor. */
 const SURVEY_TARGET = new THREE.Vector3(-0.5, 0.8, 0);
@@ -240,6 +242,8 @@ export class RoundSession {
   private officeDoorAngleRad = 0;
   private publishedRevision = -1;
   private sincePublishMs = 0;
+  private publishedPaintRevision = 0;
+  private sincePaintPublishMs = 0;
   private lastPhase: MatchPhase | null = null;
   /** Countdown second last ticked, so one tick is heard per second and no more. */
   private lastTickSecond = -1;
@@ -367,6 +371,7 @@ export class RoundSession {
     this.stepOfficeDoor(dtMs, state);
 
     this.publishPose(dtMs, state);
+    this.publishPaint(dtMs, state);
     this.publishEngineState();
     this.stepCountdown(state);
     this.stepDeceptionTally(state);
@@ -666,6 +671,8 @@ export class RoundSession {
     this.forge = forge;
     this.forgeLocked = false;
     this.publishedRevision = -1;
+    this.publishedPaintRevision = 0;
+    this.sincePaintPublishMs = 0;
     this.forgeSubscription = forge.subscribe((hud) => {
       if (hud.locked === this.forgeLocked) return;
       this.forgeLocked = hud.locked;
@@ -706,19 +713,40 @@ export class RoundSession {
   }
 
   /**
-   * Publishes the disguise the Forge just froze. Paint travels first so the
-   * authority carries it onto the record it is about to create; the lock itself
-   * is what makes the object appear in the room.
+   * Publishes the disguise the Forge just froze. Paint is published by the
+   * coalescer below, after the lock, so it cannot collide with a pose packet
+   * sent just before the button press. The authority accepts post-lock paint.
    */
   private sendLock(): void {
     const locked = this.forge?.lockedDisguise ?? null;
     if (locked === null || this.state().self.disguiseLocked) return;
 
-    if (locked.encodedPaint.length > 0) {
-      this.options.adapter.sendPaintUpdate({ encodedPaint: locked.encodedPaint, revision: 1 });
-    }
     this.actions.lockDisguise(encodeDisguiseState(locked.disguise), locked.disguise.revision);
     this.publishedRevision = locked.disguise.revision;
+  }
+
+  /**
+   * Sends no paint for an untouched body and one coalesced layer for actual
+   * brush work. Pose and paint share the authority limiter, so either send
+   * resets the other's clock instead of racing two packets into one window.
+   */
+  private publishPaint(dtMs: number, state: RoundViewState): void {
+    const forge = this.forge;
+    if (forge === null || state.self.role !== "mimic" || state.self.lifeState !== "active") return;
+    if (!POSE_PUBLISH_PHASES.has(state.phase)) return;
+
+    this.sincePaintPublishMs += dtMs;
+    if (forge.paintRevision <= this.publishedPaintRevision) return;
+    if (this.sincePaintPublishMs < PAINT_PUBLISH_INTERVAL_MS) return;
+    const paint = forge.paintSnapshot;
+
+    this.publishedPaintRevision = paint.revision;
+    this.sincePaintPublishMs = 0;
+    this.sincePublishMs = 0;
+    this.options.adapter.sendPaintUpdate({
+      encodedPaint: paint.encodedPaint,
+      revision: paint.revision,
+    });
   }
 
   /**
@@ -744,6 +772,7 @@ export class RoundSession {
     const disguise = forge.disguise;
     if (disguise.revision <= this.publishedRevision) return;
     this.publishedRevision = disguise.revision;
+    this.sincePaintPublishMs = 0;
     this.options.adapter.sendForgeSnapshot({
       encodedPose: encodeDisguiseState(disguise),
       revision: disguise.revision,

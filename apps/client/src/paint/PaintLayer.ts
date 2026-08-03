@@ -191,6 +191,14 @@ export class PaintLayer {
   /** Open undo batch, collecting what to take back when the drag ends. */
   private batch: { added: PaintStrokeWire[]; evicted: PaintStrokeWire[] } | null = null;
 
+  /**
+   * Monotonic authoring revision. Stroke count cannot serve this purpose: an
+   * undo, clear, or capped log can change the painted image without increasing
+   * its length. The round publisher watches this cheap integer and only
+   * serializes the layer when the image actually changed.
+   */
+  private changeRevision = 0;
+
   private dirty = true;
 
   constructor(options: PaintLayerOptions = {}) {
@@ -230,6 +238,10 @@ export class PaintLayer {
 
   get strokeCount(): number {
     return this.strokes.length;
+  }
+
+  get revision(): number {
+    return this.changeRevision;
   }
 
   /**
@@ -368,12 +380,14 @@ export class PaintLayer {
       this.strokes.push(wire);
       this.batch?.evicted.push(...evicted);
       this.batch?.added.push(wire);
+      this.changeRevision += 1;
       this.rebuild();
       return;
     }
 
     this.strokes.push(wire);
     this.batch?.added.push(wire);
+    this.changeRevision += 1;
     this.rasterize(wire);
   }
 
@@ -423,6 +437,7 @@ export class PaintLayer {
     // they were, so undoing a stamp painted at the ceiling restores the image
     // the painter had rather than one missing its oldest marks.
     if (batch.evicted.length > 0) this.strokes.unshift(...batch.evicted);
+    this.changeRevision += 1;
     this.rebuild();
   }
 
@@ -438,13 +453,16 @@ export class PaintLayer {
       }
       this.strokes.push(stroke);
     }
+    if (batch.added.length > 0) this.changeRevision += 1;
     this.rebuild();
   }
 
   /** Drops every stamp and returns the body to its materials. */
   clear(): void {
+    if (this.strokes.length === 0) return;
     this.strokes.length = 0;
     this.batch = null;
+    this.changeRevision += 1;
     this.fillAllTiles();
   }
 
@@ -460,6 +478,7 @@ export class PaintLayer {
       if (stroke.emissive > 0 && this.emissivePixels === null) this.allocateEmissiveAtlas();
       this.strokes.push(stroke);
     }
+    this.changeRevision += 1;
     this.rebuild();
   }
 
@@ -477,6 +496,7 @@ export class PaintLayer {
       if (stroke.emissive > 0 && this.emissivePixels === null) this.allocateEmissiveAtlas();
       this.strokes.push(stroke);
     }
+    this.changeRevision += 1;
     this.rebuild();
     return true;
   }

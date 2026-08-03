@@ -65,6 +65,18 @@ function centerPixel(layer: PaintLayer, target: number): [number, number, number
 }
 
 describe("paint layer determinism", () => {
+  it("advances a cheap revision only when the wire-visible stroke log changes", () => {
+    const layer = makeLayer();
+    expect(layer.revision).toBe(0);
+    layer.clear();
+    expect(layer.revision).toBe(0);
+
+    layer.applyStroke(stroke(1));
+    expect(layer.revision).toBe(1);
+    layer.clear();
+    expect(layer.revision).toBe(2);
+  });
+
   it("paints identical pixels from identical stroke logs", () => {
     const strokes = Array.from({ length: 60 }, (_, index) => stroke(index));
     const first = makeLayer();

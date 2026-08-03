@@ -254,6 +254,36 @@ describe("the room browser", () => {
     expect(host.listRooms()).toHaveLength(0);
   });
 
+  it("selects a newly hosted room so cancellation cannot hide behind an older listing", async () => {
+    const other = await browsingClient("a", "Ada");
+    const host = await browsingClient("b", "Bex");
+    const first = other.createRoom("Older room");
+    if (!first.ok) throw new Error(first.reason);
+    advance();
+    render(host, () => undefined);
+
+    const opened = host.createRoom("Fresh room");
+    if (!opened.ok) throw new Error(opened.reason);
+    advance();
+    act(() => {
+      root.render(
+        <RoomBrowser
+          rooms={host.listRooms()}
+          currentCode={host.getRoomCode()}
+          onJoin={() => undefined}
+          onCreate={() => undefined}
+          onQuickJoin={() => undefined}
+          onCancelHostedRoom={() => undefined}
+        />,
+      );
+    });
+
+    expect(container.querySelector('[aria-label="Selected room"]')?.textContent).toContain(
+      "Fresh room",
+    );
+    expect(container.textContent).toContain("Cancel hosted room");
+  });
+
   it("refuses a full room and says the session is out of slots", async () => {
     const first = await browsingClient("a", "Ada");
     const second = await browsingClient("b", "Bex");

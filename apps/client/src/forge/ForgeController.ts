@@ -261,6 +261,12 @@ export interface LockedDisguise {
   readonly encodedPaint: string;
 }
 
+export interface ForgePaintSnapshot {
+  readonly encodedPaint: string;
+  readonly revision: number;
+  readonly strokeCount: number;
+}
+
 export interface ForgeControllerOptions {
   readonly scene: THREE.Scene;
   readonly canvas: HTMLCanvasElement;
@@ -2086,6 +2092,21 @@ export class ForgeController {
     // do this), so it is also a synchronization boundary for queued controls.
     this.flushPendingValueRefresh();
     return serializeDisguiseState(this.state);
+  }
+
+  /** Cheap dirty check used every frame; reading it never serializes the log. */
+  get paintRevision(): number {
+    return this.paintTool.layer.revision;
+  }
+
+  /** Encoded only after `paintRevision` says a real edit is ready to publish. */
+  get paintSnapshot(): ForgePaintSnapshot {
+    const layer = this.paintTool.layer;
+    return {
+      encodedPaint: layer.toDataForWire(),
+      revision: layer.revision,
+      strokeCount: layer.strokeCount,
+    };
   }
 
   // --- Internals -----------------------------------------------------------

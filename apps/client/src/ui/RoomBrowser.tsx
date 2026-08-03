@@ -186,10 +186,15 @@ export function RoomBrowser({
   useEffect(() => {
     if (rooms.length === 0) {
       setSelectedCode(null);
+    } else if (currentCode !== null && rooms.some((room) => room.code === currentCode)) {
+      // Hosting is an active state, not merely another directory result. Keep
+      // its controls in reach even when an older room happened to be selected
+      // before this room advertisement arrived from the relay.
+      setSelectedCode(currentCode);
     } else if (!rooms.some((room) => room.code === selectedCode)) {
       setSelectedCode(rooms[0]?.code ?? null);
     }
-  }, [rooms, selectedCode]);
+  }, [currentCode, rooms, selectedCode]);
 
   useEffect(() => {
     if (onBack === undefined) return undefined;
