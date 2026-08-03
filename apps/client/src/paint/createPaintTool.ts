@@ -121,6 +121,11 @@ export function createPaintTool(deps: PaintToolDeps): PaintTool {
       return false;
     }
     store.setColor(sample.color);
+    // The panel reads from the store, but strokes read from the brush's own
+    // hot-path state. Keeping only the former made the swatch visibly change
+    // while every following dab remained the constructor's default red.
+    brush.setColor(store.getState().color);
+    brush.setEraser(false);
     store.patch({ eyedropperArmed: false, status: "Colour copied. Drag to paint with it." });
     deps.onSample?.(true);
     return true;

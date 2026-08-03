@@ -290,6 +290,25 @@ describe("paint in the forge history", () => {
     expect(harness.controller.paint.layer.strokeLog.every((stroke) => !stroke.continued)).toBe(true);
   }
 
+  it("uses the sampled room colour on the very next spray dab", () => {
+    harness.controller.setToolMode("paint");
+    const at = harness.pointOnBody();
+    expect(at).not.toBeNull();
+
+    harness.controller.paint.armEyedropper(true);
+    harness.drag([at ?? [0, 0]]);
+    const sampled = harness.controller.paint.getState().color;
+    expect(harness.controller.paint.layer.strokeCount).toBe(0);
+    expect(sampled).not.toEqual([0.85, 0.27, 0.2]);
+
+    harness.drag([at ?? [0, 0]]);
+    const dab = harness.controller.paint.layer.strokeLog[0];
+    expect(dab).toBeDefined();
+    expect(dab?.color[0]).toBeCloseTo(sampled[0], 5);
+    expect(dab?.color[1]).toBeCloseTo(sampled[1], 5);
+    expect(dab?.color[2]).toBeCloseTo(sampled[2], 5);
+  });
+
   it("paints only the newest cursor position once per rendered frame", () => {
     harness.controller.setToolMode("paint");
     const at = harness.pointOnBody();
