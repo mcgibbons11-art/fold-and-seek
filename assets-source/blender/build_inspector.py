@@ -391,11 +391,79 @@ def retarget_clip(source_path: Path) -> bpy.types.Action:
 
 
 ANIMATION_ACTIONS = []
-for clip_name in ("idle", "run", "jump", "climb", "rifle-idle", "rifle-fire", "hit", "death"):
+for clip_name in ("idle", "run", "jump", "climb", "hit", "death"):
     source_path = MIXAMO_DIR / f"{clip_name}.fbx"
     if not source_path.exists():
         raise FileNotFoundError(source_path)
     ANIMATION_ACTIONS.append(retarget_clip(source_path))
+
+
+def build_gun_ready_action() -> bpy.types.Action:
+    """Bake a restrained two-hand firing stance authored for this body.
+
+    The Mixamo clips labelled rifle-idle and rifle-fire are a stylized lateral
+    stretch with one arm overhead and crossed legs. They are valid animations,
+    but completely wrong for this character and were the source of the broken
+    silhouette seen in game. A tiny IK bake gives the Inspector a stable,
+    readable gun stance while the first-person weapon supplies recoil.
+    """
+    armature.animation_data_create()
+    armature.animation_data.action = None
+    for pose_bone in armature.pose.bones:
+        pose_bone.matrix_basis.identity()
+
+    def target(name: str, location: tuple[float, float, float]) -> bpy.types.Object:
+        value = bpy.data.objects.new(name, None)
+        value.location = Vector(location)
+        RIG.objects.link(value)
+        return value
+
+    targets = [
+        target("GunReady_RightHand", (-0.10, -0.48, 1.31)),
+        target("GunReady_LeftHand", (0.10, -0.58, 1.28)),
+        target("GunReady_RightElbow", (-0.56, -0.20, 1.23)),
+        target("GunReady_LeftElbow", (0.56, -0.26, 1.18)),
+    ]
+    for bone_name, hand_target, elbow_target in (
+        ("RightHand", targets[0], targets[2]),
+        ("LeftHand", targets[1], targets[3]),
+    ):
+        constraint = armature.pose.bones[bone_name].constraints.new("IK")
+        constraint.target = hand_target
+        constraint.pole_target = elbow_target
+        constraint.chain_count = 3
+
+    bpy.context.view_layer.objects.active = armature
+    armature.select_set(True)
+    bpy.ops.object.mode_set(mode="POSE")
+    bpy.ops.pose.select_all(action="SELECT")
+    bpy.ops.nla.bake(
+        frame_start=1,
+        frame_end=2,
+        step=1,
+        only_selected=True,
+        visual_keying=True,
+        clear_constraints=True,
+        use_current_action=False,
+        clean_curves=True,
+        bake_types={"POSE"},
+        channel_types={"LOCATION", "ROTATION", "SCALE"},
+    )
+    bpy.ops.object.mode_set(mode="OBJECT")
+    action = armature.animation_data.action
+    action.name = "rifle-idle"
+    action.use_fake_user = True
+    armature.animation_data.action = None
+    for value in targets:
+        bpy.data.objects.remove(value, do_unlink=True)
+    return action
+
+
+gun_ready = build_gun_ready_action()
+gun_fire = gun_ready.copy()
+gun_fire.name = "rifle-fire"
+gun_fire.use_fake_user = True
+ANIMATION_ACTIONS.extend((gun_ready, gun_fire))
 
 scene.frame_start = 1
 scene.frame_end = max(int(action.frame_range[1]) for action in ANIMATION_ACTIONS)

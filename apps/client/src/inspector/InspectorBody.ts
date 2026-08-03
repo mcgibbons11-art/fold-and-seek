@@ -39,7 +39,7 @@ import { WORLD_SCALE } from "./navData";
 
 /** The one scale knob. Every length below is a share of it. */
 const H = WORLD_SCALE.playerHeight;
-const AUTHORED_INSPECTOR_ENABLED = false;
+const AUTHORED_INSPECTOR_ENABLED = true;
 
 /**
  * Joint heights, as shares of standing height, measured from the floor. They
@@ -253,10 +253,8 @@ export class InspectorBody {
     // Unit tests deliberately exercise the deterministic primitive fallback.
     // Shipping builds replace it once the authored Blender/Mixamo rig arrives;
     // a failed fetch leaves a complete playable character instead of nothing.
-    // The current Mixamo export contains a bad retarget (crossed legs and an
-    // arm over the head). Keep the fully playable procedural body visible until
-    // the authored rig passes its Blender pose audit; never expose a broken
-    // silhouette merely because the GLB loaded successfully.
+    // The authored rig is preferred in shipping builds. A failed fetch still
+    // leaves the complete procedural character available beneath it.
     this.avatar =
       !AUTHORED_INSPECTOR_ENABLED || import.meta.env.MODE === "test"
         ? null
