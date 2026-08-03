@@ -39,4 +39,7 @@ pnpm dev
 - `pnpm typecheck` / `pnpm test` / `pnpm build` — the standard gate
 - `pnpm check` — all of the above
 
+- `pnpm build:portals` â€” build in OS temp space and update the tracked bundle Portals serves
+- `pnpm portals:check` â€” fail if the tracked Portals bundle is older than the current source
+
 See `docs/STATUS.md` for current progress and known gaps.
