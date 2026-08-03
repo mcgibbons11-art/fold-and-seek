@@ -243,6 +243,9 @@ export class MimicVisual {
   private readonly panelGeometries: ReadonlyMap<PanelProfileId, THREE.BufferGeometry>;
   private readonly eyeGroup: THREE.Object3D;
   private readonly eyes: readonly THREE.Mesh[];
+  private readonly eyeBezels: readonly THREE.Mesh[];
+  private readonly crownRing: THREE.Mesh;
+  private readonly crownSignal: THREE.Mesh;
   private readonly shutter: THREE.Mesh;
   private panelStates: readonly PanelState[] = [];
   private locked = false;
@@ -389,14 +392,31 @@ export class MimicVisual {
     this.eyeGroup.name = "mimic_head_pod";
     this.root.add(this.eyeGroup);
     const eyeGeometry = this.bag.add(new THREE.SphereGeometry(0.5, 14, 10));
+    const bezelGeometry = this.bag.add(new THREE.TorusGeometry(0.5, 0.1, 8, 20));
     const eyes: THREE.Mesh[] = [];
+    const eyeBezels: THREE.Mesh[] = [];
     for (const side of [-1, 1]) {
       const eye = new THREE.Mesh(eyeGeometry, this.pool.eyeLit);
       eye.name = `mimic_eye_${side < 0 ? "R" : "L"}`;
       this.eyeGroup.add(eye);
       eyes.push(eye);
+
+      const bezel = new THREE.Mesh(bezelGeometry, brass);
+      bezel.name = `mimic_eye_bezel_${side < 0 ? "R" : "L"}`;
+      bezel.castShadow = true;
+      this.eyeGroup.add(bezel);
+      eyeBezels.push(bezel);
     }
     this.eyes = eyes;
+    this.eyeBezels = eyeBezels;
+    this.crownRing = new THREE.Mesh(bezelGeometry, brass);
+    this.crownRing.name = "mimic_crown_ring";
+    this.crownRing.rotation.x = Math.PI / 2;
+    this.crownRing.castShadow = true;
+    this.eyeGroup.add(this.crownRing);
+    this.crownSignal = new THREE.Mesh(eyeGeometry, this.pool.eyeLit);
+    this.crownSignal.name = "mimic_crown_signal";
+    this.eyeGroup.add(this.crownSignal);
     this.shutter = new THREE.Mesh(this.bag.add(createPuckGeometry(0.5, 0.16)), graphite);
     this.shutter.name = "mimic_eye_shutter";
     this.shutter.rotation.x = Math.PI / 2;
@@ -504,7 +524,20 @@ export class MimicVisual {
       if (eye === undefined) continue;
       eye.scale.setScalar(eyeRadius * 2);
       eye.position.set((i === 0 ? -1 : 1) * spread, height, front);
+      const bezel = this.eyeBezels[i];
+      if (bezel !== undefined) {
+        bezel.scale.setScalar(eyeRadius * 2.2);
+        bezel.position.set(eye.position.x, height, front + eyeRadius * 0.2);
+      }
     }
+
+    // A brass crown loop and small status jewel carry the authored Blender
+    // Hider's identity into the deformable runtime body. Both remain inside the
+    // head shell, so the decoration never changes shot bounds or player height.
+    this.crownRing.scale.setScalar(head.width * 0.42);
+    this.crownRing.position.set(0, head.length * 0.82, 0);
+    this.crownSignal.scale.setScalar(eyeRadius * 0.52);
+    this.crownSignal.position.set(0, head.length * 0.94, front * 0.16);
 
     // The shutter is a graphite band that stays inside the pod at both ends of
     // its travel: parked in the brow while the Mimic is awake, drawn down over
@@ -640,7 +673,13 @@ export class MimicVisual {
     for (const segment of this.segments) {
       const bone = SEGMENT_BONES[segment.slot];
       const swatchId = (bone !== undefined ? bySlot.get(bone) : undefined) ?? bodySwatch;
-      segment.mesh.material = this.pool.swatches.get(swatchId);
+      const defaultShoulderAccent =
+        swatchId === PORCELAIN_SWATCH_ID &&
+        (bone === "shoulder_L" || bone === "shoulder_R") &&
+        !bySlot.has(bone);
+      segment.mesh.material = defaultShoulderAccent
+        ? this.pool.brass
+        : this.pool.swatches.get(swatchId);
     }
 
     const stateBySocket = new Map<string, PanelState>();
@@ -704,6 +743,7 @@ export class MimicVisual {
     for (const eye of this.eyes) {
       eye.material = eyeMaterial;
     }
+    this.crownSignal.material = eyeMaterial;
     this.layoutHeadPod();
   }
 
@@ -717,6 +757,9 @@ export class MimicVisual {
     for (const panel of this.panels) {
       panel.plate.castShadow = enabled;
     }
+    for (const bezel of this.eyeBezels) bezel.castShadow = enabled;
+    this.crownRing.castShadow = enabled;
+    this.crownSignal.castShadow = enabled;
   }
 
   dispose(): void {

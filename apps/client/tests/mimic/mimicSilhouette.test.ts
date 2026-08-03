@@ -134,4 +134,26 @@ describe("the standing Mimic reads as a body", () => {
     // The crown is the head shell's own tip: nothing else may overrun past it.
     expect(shell("head").max.y).toBeCloseTo(box.max.y, 6);
   });
+
+  it("carries the authored brass face and shoulder identity without changing its bounds", () => {
+    const decorated = new MimicVisual();
+    decorated.applyForms(pose);
+    decorated.applyPanels(state.panels);
+    decorated.applyMaterials(state.materials);
+    decorated.applyPose(pose);
+    decorated.root.updateMatrixWorld(true);
+
+    expect(decorated.root.getObjectByName("mimic_eye_bezel_L")).toBeDefined();
+    expect(decorated.root.getObjectByName("mimic_crown_ring")).toBeDefined();
+    const shoulder = decorated.segmentMeshes[SEGMENT_BONES.indexOf("shoulder_L")];
+    expect((shoulder?.material as THREE.Material | undefined)?.name).toBe("mimic_socket_brass");
+    expect(new THREE.Box3().setFromObject(decorated.root).max.y).toBeCloseTo(PLAYER_HEIGHT_M, 6);
+
+    decorated.applyMaterials([
+      ...state.materials,
+      { slotId: "shoulder_L", swatchId: "wood_walnut" },
+    ]);
+    expect((shoulder?.material as THREE.Material | undefined)?.name).toBe("swatch:wood_walnut");
+    decorated.dispose();
+  });
 });

@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { ForgeController } from "../../src/forge/ForgeController";
 import { PANEL_PROFILE_IDS } from "../../src/mimic/panels";
+import { SEGMENT_BONES, type SegmentBoneName } from "../../src/mimic/rig";
 import { createPanelGeometry } from "../../src/mimic/visual/mimicGeometry";
+import { mirroredPaintTarget } from "../../src/paint/paintTargets";
 import { qualitySettingsFor } from "../../src/rendering/quality";
 
 /**
@@ -105,6 +107,18 @@ class Harness {
       found = [((point.x + 1) / 2) * 800, ((1 - point.y) / 2) * 600];
     });
     return found;
+  }
+
+  pointOnSegment(bone: SegmentBoneName): [number, number] | null {
+    this.scene.updateMatrixWorld(true);
+    this.controller.camera.updateMatrixWorld(true);
+    const slot = SEGMENT_BONES.indexOf(bone);
+    const mesh = this.controller.mimic.segmentMeshes[slot];
+    if (mesh === undefined) return null;
+    const point = new THREE.Vector3();
+    mesh.getWorldPosition(point).project(this.controller.camera);
+    if (Math.abs(point.x) > 1 || Math.abs(point.y) > 1) return null;
+    return [((point.x + 1) / 2) * 800, ((1 - point.y) / 2) * 600];
   }
 
   /** Runs a pointer event through the Forge's window handlers. */
@@ -308,6 +322,23 @@ describe("paint in the forge history", () => {
 
     harness.windowListeners.dispatch("pointerup", make(x + 6, y + 3));
     expect(harness.controller.paint.layer.strokeCount).toBe(2);
+  });
+
+  it("sprays the paired body part immediately while Mirror is engaged", () => {
+    harness.controller.setToolMode("paint");
+    harness.controller.setMirror(true);
+    const at = harness.pointOnSegment("hand_L");
+    expect(at).not.toBeNull();
+    harness.drag([at ?? [0, 0]]);
+
+    const log = harness.controller.paint.layer.strokeLog;
+    expect(log).toHaveLength(2);
+    const first = log[0];
+    const second = log[1];
+    expect(first).toBeDefined();
+    expect(second?.target).toBe(mirroredPaintTarget(first?.target ?? -1));
+    expect([second?.u, second?.v]).toEqual([first?.u, first?.v]);
+    expect(log.every((stroke) => !stroke.continued)).toBe(true);
   });
 
   it("offers an undo for the drag rather than for the pose before it", () => {
