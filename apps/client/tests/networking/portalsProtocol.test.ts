@@ -277,6 +277,21 @@ describe("envelope validation", () => {
     expect(parseEnvelope({ v: PORTALS_PROTOCOL_VERSION, t: "resync" })).toBeNull();
   });
 
+  it("keeps a current finite eye paired with a remote accusation", () => {
+    const shot = {
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "cmd",
+      r: "ABCD",
+      to: "host-1",
+      term: 2,
+      cmd: { type: "accuse", targetObjectId: "obj-hider" },
+      eye: [1.25, 0.31, -2.5],
+    } as const;
+
+    expect(parseEnvelope(shot)).toEqual(shot);
+    expect(parseEnvelope({ ...shot, eye: [1.25, Infinity, -2.5] })).toBeNull();
+  });
+
   it("normalizes carrier shapes used by Portals editor hosts", () => {
     const envelope = { v: PORTALS_PROTOCOL_VERSION, t: "resync", r: "ABCD" } as const;
     expect(parseEnvelope(JSON.stringify(envelope))).toEqual(envelope);

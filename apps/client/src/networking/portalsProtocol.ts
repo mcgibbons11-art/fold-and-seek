@@ -180,6 +180,8 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     to: connectionId,
     term: authorityTerm,
     cmd: MatchCommandSchema,
+    /** Current shot origin, paired atomically with an accusation. */
+    eye: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).optional(),
   }),
   /** Public event batch from the host. */
   z.object({

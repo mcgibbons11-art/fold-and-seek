@@ -275,6 +275,32 @@ describe("a Portals round", () => {
     room.dispose();
   });
 
+  it("resolves a direct shot before the next telemetry flush", async () => {
+    vi.useFakeTimers();
+    const room = await huntingRoom();
+    const inspector = room.inspector();
+    expect(inspector.round.adapter.isAuthority()).toBe(false);
+    const objectId =
+      inspector.round.adapter.getSync().publicState?.disguises[0]?.publicObjectId ?? "";
+    const bounds = inspector.theatre.boundsOf(objectId);
+    expect(bounds).not.toBeNull();
+    const selfId = inspector.round.adapter.getSelfId() ?? "";
+
+    // A real trigger can land between the relay's 100 ms telemetry flushes.
+    // Publishing the current eye and firing in the same frame must not make a
+    // direct hit race the older eye sample to the authority.
+    inspector.round.spatial.setInspectorEye(selfId, eyeBeside(bounds as THREE.Box3, 0.4));
+    inspector.round.adapter.sendCommand({ type: "accuse", targetObjectId: objectId });
+    room.advance(2);
+
+    expect(
+      inspector.events.filter((event) => event.type === "accusation_resolved"),
+    ).toHaveLength(1);
+    expect(inspector.events.some((event) => event.type === "mimic_caught")).toBe(true);
+
+    room.dispose();
+  });
+
   it("refuses the same shot when the Inspector's eye never reaches the host", async () => {
     vi.useFakeTimers();
     const room = await huntingRoom();

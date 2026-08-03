@@ -86,6 +86,12 @@ export interface InspectorSystemDeps {
    */
   readonly domElement?: HTMLElement | null;
   readonly onCameraSample?: (sample: CameraSample) => void;
+  /**
+   * Current gameplay eye, emitted after the camera follows movement and before
+   * the weapon can send a shot in that frame. Network authorities must learn
+   * this sample before judging the accusation it belongs to.
+   */
+  readonly onEye?: (eye: Readonly<{ x: number; y: number; z: number }>) => void;
   /** One call per round fired, for the muzzle flash and the impact effect. */
   readonly onShot?: (outcome: ShotOutcome, targetObjectId: string | null) => void;
   /** Gun state for the HUD: aiming, ammo, reticle target, cooldown phase. */
@@ -252,6 +258,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
       }
 
       cameraRig.update(dtSeconds, controller, aiming);
+      deps.onEye?.(cameraRig.eye);
       focusSystem.update(dtMs, cameraRig.origin, cameraRig.forward, cameraRig.eye, aiming);
 
       const focus = focusSystem.current;

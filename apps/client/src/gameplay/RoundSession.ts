@@ -974,6 +974,10 @@ export class RoundSession {
       onCameraSample: (sample) => {
         this.options.adapter.sendCameraSample?.(sample);
       },
+      onEye: (eye) => {
+        const selfId = this.options.adapter.getSelfId();
+        if (selfId !== null) this.options.spatial.setInspectorEye(selfId, eye);
+      },
       // A round that never becomes an accusation is heard here and nowhere
       // else. The report of a real shot is played from the weapon's own state
       // in `stepGun`, so this is only the trigger clicking on nothing: no
@@ -1082,10 +1086,10 @@ export class RoundSession {
     this.footsteps.update(dtMs, inspector.controller, false);
     this.stepGun();
 
-    // The authority checks range and line of sight itself, and the eye it
-    // checks from is this one: without it every accusation is refused.
-    const selfId = this.options.adapter.getSelfId();
-    if (selfId !== null) this.options.spatial.setInspectorEye(selfId, inspector.cameraRig.eye);
+    // The eye is published inside InspectorSystem immediately after its camera
+    // follows this frame's movement and before its weapon can send a shot. Do
+    // not move that report back here: a remote authority would otherwise judge
+    // the command against the previous telemetry flush.
   }
 
 
@@ -1148,7 +1152,14 @@ export class RoundSession {
 
   private readonly sendInspectorCommand = (command: MatchCommand): void => {
     if (command.type === "accuse") {
-      this.actions.accuse(command.targetObjectId);
+      const outcome = this.actions.accuse(command.targetObjectId);
+      if (!outcome.sent) {
+        // A local gate refusal never reaches the adapter's rejection stream.
+        // Feed it back into the weapon immediately so the gun cannot sit in a
+        // five-second pending state after a command that was never sent.
+        this.inspector?.handleRejection({ type: "accuse", reason: outcome.reason });
+        this.audio.play(outcome.reason === "no_warrants" ? "gun_dry_click" : "ui_deny");
+      }
       return;
     }
     if (command.type === "focus") {

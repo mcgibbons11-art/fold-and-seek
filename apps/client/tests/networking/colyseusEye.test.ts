@@ -56,6 +56,16 @@ describe("ColyseusAdapter eye reports", () => {
     expect(sent).toEqual([{ type: "eye", payload: { eye: [1, 2, 3] } }]);
   });
 
+  it("can put the current eye on the wire before its accusation", () => {
+    adapter.reportInspectorEye([1, 2, 3]);
+    adapter.sendCommand({ type: "accuse", targetObjectId: "obj-hider" });
+
+    expect(sent).toEqual([
+      { type: "eye", payload: { eye: [1, 2, 3] } },
+      { type: "accuse", payload: { type: "accuse", targetObjectId: "obj-hider" } },
+    ]);
+  });
+
   it("says nothing when the Inspector has not moved far enough to matter", () => {
     adapter.reportInspectorEye([1, 2, 3]);
     // Well inside the epsilon: a step this small cannot change a range or a

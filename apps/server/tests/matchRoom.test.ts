@@ -98,7 +98,6 @@ class TestRoom {
 const FAST_SETTINGS: MatchSettingsPatch = {
   mapIntroMs: 200,
   roleRevealMs: 200,
-  baselineScanMs: 200,
   forgeMs: 600,
   lockGraceMs: 200,
   inspectionIntroMs: 200,

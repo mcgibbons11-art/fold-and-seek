@@ -1052,6 +1052,9 @@ export class PortalsNetAdapter implements NetworkAdapter {
       to: this.authoritySeatId,
       term: this.authorityTerm,
       cmd: command,
+      ...(command.type === "accuse" && this.eyeReported && this.pendingEye !== null
+        ? { eye: this.pendingEye }
+        : {}),
     });
   }
 
@@ -1408,7 +1411,16 @@ export class PortalsNetAdapter implements NetworkAdapter {
           );
           return;
         }
-        if (fromSeat !== undefined) this.applyCommandFrom(fromSeat, envelope.cmd);
+        if (fromSeat !== undefined) {
+          // An accusation and the eye it left from are one authoritative fact.
+          // Periodic telemetry remains useful for observation, but it may be up
+          // to one flush old; applying this paired sample first prevents a
+          // direct shot from racing its own position report to the host.
+          if (envelope.cmd.type === "accuse" && envelope.eye !== undefined) {
+            this.options.onInspectorEye?.(fromSeat, envelope.eye);
+          }
+          this.applyCommandFrom(fromSeat, envelope.cmd);
+        }
         return;
 
       case "ev": {
