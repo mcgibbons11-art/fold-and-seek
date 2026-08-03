@@ -1,13 +1,15 @@
 import * as THREE from "three/webgpu";
 
 import { GunView, InspectorBody } from "../inspector";
+import { CameraSampleInterpolationBuffer } from "../inspector/cameraSamples";
 import { INSPECTOR_EYE_HEIGHT_M, WORLD_SCALE } from "../inspector/navData";
 import type { InspectorCameraSample } from "../networking/NetworkAdapter";
+import {
+  clientPerformanceTelemetry,
+  type PerformanceTelemetry,
+} from "../engine/performanceTelemetry";
 import type { RemoteInspectorFootsteps } from "./footsteps";
 
-/** Sparse relay samples should catch up briskly without snapping on arrival. */
-const POSITION_RESPONSE_PER_SECOND = 18;
-const ROTATION_RESPONSE_PER_SECOND = 22;
 const TELEPORT_DISTANCE_M = WORLD_SCALE.playerHeight * 8;
 
 /**
@@ -23,11 +25,8 @@ export class RemoteInspectorPresentation {
 
   private readonly body: InspectorBody;
   private readonly gun: GunView;
-  private readonly targetEye = new THREE.Vector3();
+  private readonly samples = new CameraSampleInterpolationBuffer();
   private readonly renderedEye = new THREE.Vector3();
-  private lastSample: InspectorCameraSample | null = null;
-  private targetYaw = 0;
-  private targetPitch = 0;
   private renderedYaw = 0;
   private renderedPitch = 0;
   /** Achieved horizontal velocity inferred from sparse peer presentation samples. */
@@ -52,7 +51,12 @@ export class RemoteInspectorPresentation {
     return [this.velocityX, this.velocityZ];
   }
 
-  constructor(scene: THREE.Scene, readonly seatId: string, castShadow = true) {
+  constructor(
+    scene: THREE.Scene,
+    readonly seatId: string,
+    castShadow = true,
+    private readonly telemetry: PerformanceTelemetry = clientPerformanceTelemetry,
+  ) {
     this.root.name = `remote-inspector-${seatId}`;
     scene.add(this.root);
     this.body = new InspectorBody(this.root, scene, castShadow);
@@ -61,38 +65,14 @@ export class RemoteInspectorPresentation {
   }
 
   push(sample: InspectorCameraSample): void {
-    const previous = this.lastSample;
-    this.lastSample = sample;
-    this.targetEye.set(sample.x, sample.y, sample.z);
-    this.targetYaw = sample.yaw;
-    this.targetPitch = sample.pitch;
-
-    if (previous !== null) {
-      const elapsedSeconds = Math.max((sample.atMs - previous.atMs) / 1000, 1 / 120);
-      const dx = sample.x - previous.x;
-      const dz = sample.z - previous.z;
-      const maxSpeed = WORLD_SCALE.playerHeight * 12;
-      const measuredX = dx / elapsedSeconds;
-      const measuredZ = dz / elapsedSeconds;
-      const measuredSpeed = Math.hypot(measuredX, measuredZ);
-      const scale = measuredSpeed > maxSpeed ? maxSpeed / measuredSpeed : 1;
-      this.velocityX = measuredX * scale;
-      this.velocityZ = measuredZ * scale;
-      this.speedMps = Math.hypot(this.velocityX, this.velocityZ);
-      if (previous.airborne && !sample.airborne) {
-        this.landingSpeed = Math.max(0, (previous.y - sample.y) / elapsedSeconds);
-      }
-    }
-    this.airborne = sample.airborne;
-    this.climbing = sample.climbing;
-
-    if (
-      !this.initialized ||
-      this.renderedEye.distanceToSquared(this.targetEye) > TELEPORT_DISTANCE_M * TELEPORT_DISTANCE_M
-    ) {
-      this.renderedEye.copy(this.targetEye);
-      this.renderedYaw = this.targetYaw;
-      this.renderedPitch = this.targetPitch;
+    const insertion = this.samples.push(sample);
+    this.telemetry.recordRemoteInsertion(insertion);
+    if (!this.initialized && insertion !== "duplicate" && insertion !== "stale") {
+      this.renderedEye.set(sample.x, sample.y, sample.z);
+      this.renderedYaw = sample.yaw;
+      this.renderedPitch = sample.pitch;
+      this.airborne = sample.airborne;
+      this.climbing = sample.climbing;
       this.initialized = true;
       this.placeRoot();
     }
@@ -129,11 +109,35 @@ export class RemoteInspectorPresentation {
   update(dtMs: number): void {
     if (!this.initialized || !this.visible) return;
     const dtSeconds = Math.max(0, dtMs / 1000);
-    const positionBlend = 1 - Math.exp(-POSITION_RESPONSE_PER_SECOND * dtSeconds);
-    const rotationBlend = 1 - Math.exp(-ROTATION_RESPONSE_PER_SECOND * dtSeconds);
-    this.renderedEye.lerp(this.targetEye, positionBlend);
-    this.renderedYaw = dampAngle(this.renderedYaw, this.targetYaw, rotationBlend);
-    this.renderedPitch = dampAngle(this.renderedPitch, this.targetPitch, rotationBlend);
+    const frame = this.samples.advance(dtMs);
+    if (frame === null) return;
+    this.telemetry.recordRemotePresentation(frame.mode);
+    const previousY = this.renderedEye.y;
+    const wasAirborne = this.airborne;
+    const next = frame.sample;
+    const dx = next.x - this.renderedEye.x;
+    const dz = next.z - this.renderedEye.z;
+    if (Math.hypot(dx, next.y - previousY, dz) > TELEPORT_DISTANCE_M) {
+      this.velocityX = 0;
+      this.velocityZ = 0;
+    } else if (dtSeconds > 0) {
+      const maxSpeed = WORLD_SCALE.playerHeight * 12;
+      const measuredX = dx / dtSeconds;
+      const measuredZ = dz / dtSeconds;
+      const measuredSpeed = Math.hypot(measuredX, measuredZ);
+      const scale = measuredSpeed > maxSpeed ? maxSpeed / measuredSpeed : 1;
+      this.velocityX = measuredX * scale;
+      this.velocityZ = measuredZ * scale;
+    }
+    this.speedMps = Math.hypot(this.velocityX, this.velocityZ);
+    this.renderedEye.set(next.x, next.y, next.z);
+    this.renderedYaw = next.yaw;
+    this.renderedPitch = next.pitch;
+    this.airborne = next.airborne;
+    this.climbing = next.climbing;
+    if (wasAirborne && !this.airborne && dtSeconds > 0) {
+      this.landingSpeed = Math.max(0, (previousY - next.y) / dtSeconds);
+    }
     this.placeRoot();
 
     this.gun.update(dtMs, {
@@ -164,12 +168,6 @@ export class RemoteInspectorPresentation {
       visible: this.visible,
     });
 
-    // A stopped sender has no new distance interval to reduce the measured
-    // speed, so decay it locally and let the gait settle instead of moonwalking.
-    const velocityDecay = Math.exp(-8 * dtSeconds);
-    this.velocityX *= velocityDecay;
-    this.velocityZ *= velocityDecay;
-    this.speedMps = Math.hypot(this.velocityX, this.velocityZ);
     this.landingSpeed = 0;
   }
 
@@ -188,9 +186,4 @@ export class RemoteInspectorPresentation {
     );
     this.root.rotation.y = this.renderedYaw;
   }
-}
-
-function dampAngle(current: number, target: number, blend: number): number {
-  const delta = Math.atan2(Math.sin(target - current), Math.cos(target - current));
-  return current + delta * blend;
 }

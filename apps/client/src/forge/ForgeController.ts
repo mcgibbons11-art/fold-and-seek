@@ -2232,6 +2232,11 @@ export class ForgeController {
     return this.paintTool.layer.revision;
   }
 
+  /** Live layer for revision-gated transport publication and diagnostics. */
+  get paintLayer() {
+    return this.paintTool.layer;
+  }
+
   /** Encoded only after `paintRevision` says a real edit is ready to publish. */
   get paintSnapshot(): ForgePaintSnapshot {
     const layer = this.paintTool.layer;

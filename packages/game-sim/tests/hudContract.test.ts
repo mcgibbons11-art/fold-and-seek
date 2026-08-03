@@ -344,7 +344,7 @@ describe("9: round numbering", () => {
     for (const playerId of harness.playerIds) {
       harness.command(playerId, { type: "vote_rematch", yes: true });
     }
-    harness.tickUntil(MatchPhase.BaselineScan);
+    harness.tickUntil(MatchPhase.Forge);
     expect(harness.sim.getPublicState().round).toBe(1);
   });
 });

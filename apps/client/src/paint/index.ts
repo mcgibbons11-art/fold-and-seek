@@ -1,4 +1,12 @@
-export { PaintLayer, type PaintStroke, type PaintLayerOptions, type PaintPixelSource } from "./PaintLayer";
+export {
+  PaintLayer,
+  type PaintStroke,
+  type PaintLayerOptions,
+  type PaintPixelSource,
+  type PaintUploadStats,
+  type PaintUploadStatsSink,
+} from "./PaintLayer";
+export * from "./paintSync";
 export {
   PaintBrushController,
   DEFAULT_BRUSH_RADIUS,

@@ -11,7 +11,6 @@ import { FirstRoundGuide } from "./FirstRoundGuide";
 import { GameMenu, REQUEST_LEAVE_MATCH_EVENT } from "./GameMenu";
 import { SoundCaptionHud } from "./SoundCaptionHud";
 import {
-  BaselineHud,
   ForgePhaseHud,
   HuntHud,
   LobbyHud,
@@ -257,9 +256,9 @@ function phaseHud(state: RoundViewState, handlers: PhaseHandlers): ReactElement 
     case MatchPhase.RoleReveal:
       return <RoleRevealHud state={state} />;
 
+    // Old persisted snapshots can still name this wire phase. They receive the
+    // Forge immediately rather than resurrecting the removed memorize screen.
     case MatchPhase.BaselineScan:
-      return <BaselineHud state={state} />;
-
     case MatchPhase.Forge:
     case MatchPhase.Locking:
       return <ForgePhaseHud state={state}>{handlers.forgeTools}</ForgePhaseHud>;

@@ -546,7 +546,14 @@ export class CharacterController {
     // A creep may not step off the surface it settled on, in either direction:
     // an edge it would fall from and a lip it would rise onto both move the body
     // vertically, and vertical distance spends the same budget as horizontal.
-    if (this.surfaceLocked && destination.id !== this.surfaceId) return false;
+    if (this.surfaceLocked && destination.id !== this.surfaceId) {
+      // A body standing on an un-authored blocker top has to be able to cross
+      // its lip onto the real floor below. That explicit dismount ends the
+      // initial hiding-surface lock; ordinary floor-to-floor creep stays
+      // protected until a climb/top-out or this edge crossing occurs.
+      if (this.supportingBlockerTopAt(this.position.x, this.position.z) === null) return false;
+      this.surfaceLocked = false;
+    }
 
     this.position.x = x;
     this.position.z = z;
@@ -581,7 +588,17 @@ export class CharacterController {
     this.applyGravity(dtSeconds);
     const nextY = this.position.y + this.verticalVelocity * dtSeconds;
     if (this.verticalVelocity <= 0 && nextY <= baseY) {
-      this.position.y = baseY;
+      const below = surfaceAt(
+        this.navData.floors,
+        this.position.x,
+        this.position.z,
+        baseY + INSPECTOR_STEP_HEIGHT_M,
+      );
+      const floorY = below?.bounds.max.y;
+      this.position.y =
+        floorY !== undefined && baseY - floorY <= WORLD_SCALE.groundSnap
+          ? floorY
+          : baseY;
       this.hopBaseY = null;
       this.land();
       return;
@@ -927,6 +944,11 @@ export class CharacterController {
     this.position.y = climb.endY;
     this.position.z = climb.endZ;
     this.surfaceId = climb.ascending ? climb.link.to : climb.link.from;
+    // A hiding body begins the hunt surface-locked to keep ordinary hops on
+    // their take-off plane. Once it explicitly climbs, that safety must yield:
+    // otherwise the newly reached top is treated as a foreign surface and the
+    // player cannot cross or step off it.
+    if (climb.ascending) this.surfaceLocked = false;
     this.grounded = true;
     this.verticalVelocity = 0;
     this.climbLatch = climb.link;

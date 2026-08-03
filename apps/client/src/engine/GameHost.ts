@@ -19,6 +19,10 @@ import { SHOP_FORGE_WORKSPACE, ShopWorld } from "../world/ShopWorld";
 import { TestRoom } from "../world/TestRoom";
 import { NAV_DATA } from "../world/maps/nav";
 import { DisposalBag } from "./DisposalBag";
+import {
+  clientPerformanceTelemetry,
+  type PerformanceDiagnosticsSnapshot,
+} from "./performanceTelemetry";
 
 export const FIXED_STEP = 1 / 60;
 
@@ -452,6 +456,11 @@ export class GameHost {
     return this.running;
   }
 
+  /** Structured counters for automated Portals checks and the diagnostics HUD. */
+  get performanceDiagnostics(): PerformanceDiagnosticsSnapshot {
+    return clientPerformanceTelemetry.snapshot();
+  }
+
   /**
    * Manual selection wins over the boot probe and over automatic tier changes
    * for the rest of the session. Resolution still adapts inside the chosen
@@ -569,6 +578,7 @@ export class GameHost {
       this.lastTimeMs = timeMs;
     }
     const rawDelta = (timeMs - this.lastTimeMs) / 1000;
+    clientPerformanceTelemetry.recordFrame(rawDelta * 1000, MAX_FRAME_DELTA * 1000);
     this.lastTimeMs = timeMs;
     const delta = Math.min(Math.max(rawDelta, 0), MAX_FRAME_DELTA);
 
@@ -590,6 +600,7 @@ export class GameHost {
         // catching up would only make the next frame longer. Drop it instead.
         if (steps === MAX_STEPS_PER_FRAME && this.accumulator >= FIXED_STEP) {
           this.accumulator = 0;
+          clientPerformanceTelemetry.recordSimulationBacklogDrop();
         }
         world.interpolate(this.accumulator / FIXED_STEP);
       } else if (forge !== null) {
@@ -687,6 +698,7 @@ export class GameHost {
       heightPx: Math.round(resolution.y),
       meshCount: this.world?.stats.meshCount ?? this.shopMeshCount(),
       effects: this.renderer.post.activeEffects,
+      performance: clientPerformanceTelemetry.snapshot(),
     };
   };
 

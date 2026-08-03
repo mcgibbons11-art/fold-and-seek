@@ -46,6 +46,7 @@ export class Eyedropper {
   private readonly getPixelSource: ((texture: THREE.Texture) => PaintPixelSource | null) | null;
   /** Read-back of static images, keyed by texture uuid. */
   private readonly readbacks = new Map<string, PaintPixelSource | null>();
+  private readonly intersections: THREE.Intersection[] = [];
 
   constructor(options: EyedropperOptions) {
     this.raycaster = options.raycaster;
@@ -56,8 +57,9 @@ export class Eyedropper {
   /** Samples whatever the pointer is over. `pointer` is in NDC. */
   sample(pointer: THREE.Vector2, targets: readonly THREE.Object3D[]): EyedropperSample | null {
     this.raycaster.setFromCamera(pointer, this.camera);
-    const hits = this.raycaster.intersectObjects([...targets], true);
-    for (const hit of hits) {
+    this.intersections.length = 0;
+    this.raycaster.intersectObjects(targets as THREE.Object3D[], true, this.intersections);
+    for (const hit of this.intersections) {
       const sample = this.sampleIntersection(hit);
       if (sample !== null) return sample;
     }

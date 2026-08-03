@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RemoteInspectorPresentation } from "../../src/gameplay/RemoteInspectorPresentation";
 import { InspectorBody, type InspectorBodyFrame } from "../../src/inspector/InspectorBody";
 import { WORLD_SCALE } from "../../src/inspector/navData";
+import { PerformanceTelemetry } from "../../src/engine/performanceTelemetry";
 
 const STILL = {
   airborne: false,
@@ -61,7 +62,7 @@ describe("remote Inspector presentation", () => {
     const remote = new RemoteInspectorPresentation(new Scene(), "seat-vertical", false);
     remote.push({ atMs: 0, x: 1, y: 1, z: 2, yaw: 0, pitch: 0, ...STILL });
     remote.push({ atMs: 100, x: 1, y: 2, z: 2, yaw: 0, pitch: 0, airborne: true, climbing: false });
-    remote.update(16);
+    remote.update(150);
 
     expect(remote.achievedHorizontalVelocity).toEqual([0, 0]);
     expect(frames.at(-1)).toMatchObject({ speedMps: 0, airborne: true, climbing: false });
@@ -76,16 +77,16 @@ describe("remote Inspector presentation", () => {
     const sparse = new RemoteInspectorPresentation(new Scene(), "seat-sparse", false);
     sparse.push({ atMs: 0, x: 0, y: 1, z: 0, yaw: 0, pitch: 0, ...STILL });
     sparse.push({ atMs: 100, x: 0.12, y: 1, z: -0.16, yaw: 0, pitch: 0, ...STILL });
+    sparse.update(100);
     const sparseVelocity = sparse.achievedHorizontalVelocity;
-    sparse.update(16);
     const sparseSpeed = frames.at(-1)?.speedMps;
 
     const frequent = new RemoteInspectorPresentation(new Scene(), "seat-frequent", false);
     frequent.push({ atMs: 0, x: 0, y: 1, z: 0, yaw: 0, pitch: 0, ...STILL });
     frequent.push({ atMs: 50, x: 0.06, y: 1, z: -0.08, yaw: 0, pitch: 0, ...STILL });
     frequent.push({ atMs: 100, x: 0.12, y: 1, z: -0.16, yaw: 0, pitch: 0, ...STILL });
+    frequent.update(100);
     const frequentVelocity = frequent.achievedHorizontalVelocity;
-    frequent.update(16);
     const frequentSpeed = frames.at(-1)?.speedMps;
 
     expect(frequentVelocity[0]).toBeCloseTo(sparseVelocity[0]);
@@ -106,9 +107,9 @@ describe("remote Inspector presentation", () => {
     remote.push({ atMs: 0, x: 0, y: 1.2, z: 0, yaw: 0, pitch: 0, airborne: true, climbing: false });
     remote.update(16);
     remote.push({ atMs: 100, x: 0, y: 1.5, z: 0, yaw: 0, pitch: 0, airborne: true, climbing: true });
-    remote.update(16);
+    remote.update(134);
     remote.push({ atMs: 200, x: 0, y: 1.2, z: 0, yaw: 0, pitch: 0, ...STILL });
-    remote.update(16);
+    remote.update(100);
     remote.update(16);
 
     expect(frames.map(({ airborne, climbing }) => [airborne, climbing])).toEqual([
@@ -131,6 +132,34 @@ describe("remote Inspector presentation", () => {
     expect(remote.fire(42)).toBe(true);
     expect(remote.fire(40)).toBe(false);
     expect(fire).toHaveBeenCalledTimes(2);
+    remote.dispose();
+  });
+
+  it("smooths reordered jitter, bounds a dropped packet, and rejects stale history", () => {
+    const telemetry = new PerformanceTelemetry();
+    const remote = new RemoteInspectorPresentation(new Scene(), "seat-jitter", false, telemetry);
+    remote.push({ atMs: 0, x: 0, y: 1, z: 0, yaw: 0, pitch: 0, ...STILL });
+    remote.push({ atMs: 200, x: 2, y: 1, z: 0, yaw: 0.2, pitch: 0, ...STILL });
+    remote.push({ atMs: 100, x: 1, y: 1, z: 0, yaw: 0.1, pitch: 0, ...STILL });
+
+    remote.update(100);
+    expect(remote.root.position.x).toBeCloseTo(0.5);
+    remote.update(50);
+    expect(remote.root.position.x).toBeCloseTo(1);
+    remote.update(200);
+    expect(remote.root.position.x).toBeCloseTo(3);
+    remote.update(500);
+    expect(remote.root.position.x).toBeCloseTo(3);
+
+    remote.push({ atMs: 25, x: -100, y: 1, z: 0, yaw: 0, pitch: 0, ...STILL });
+    remote.update(16);
+    expect(remote.root.position.x).toBeCloseTo(3);
+    expect(telemetry.snapshot()).toMatchObject({
+      remoteSamplesReordered: 1,
+      remoteSamplesStale: 1,
+      remoteExtrapolations: 1,
+      remoteStaleHolds: 2,
+    });
     remote.dispose();
   });
 });

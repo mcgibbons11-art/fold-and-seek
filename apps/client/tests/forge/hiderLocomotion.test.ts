@@ -261,16 +261,15 @@ describe("creeping during the hunt", () => {
     }
   });
 
-  it("keeps to the surface it settled on rather than creeping off it", () => {
-    // The same run that walked off the workbench during the Forge.
+  it("can run off a hiding surface and dismount during the hunt", () => {
+    // Hunt movement must not strand a Hider on the workbench they locked on.
     const locomotion = creeper(NAV_DATA);
     const root = at(6.8, 0.92, -0.7);
     hold(locomotion, ["w"], 6, root);
 
-    expect(root.y).toBe(0.92);
-    expect(
-      surfaceAt(NAV_DATA.floors, root.x, root.z, root.y + WORLD_SCALE.stepHeight)?.id,
-    ).toBe("workbench_top");
+    expect(root.y).toBeLessThan(0.92);
+    expect(locomotion.motion.grounded).toBe(true);
+    expect(surfaceAt(NAV_DATA.floors, root.x, root.z, root.y + WORLD_SCALE.stepHeight)).not.toBeNull();
   });
 
   it("does not creep a disguise that is standing on nothing", () => {

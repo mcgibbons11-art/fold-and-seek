@@ -86,7 +86,7 @@ describe("dealing two seekers", () => {
     for (const playerId of harness.playerIds) {
       harness.command(playerId, { type: "vote_rematch", yes: true });
     }
-    harness.tickUntil(MatchPhase.BaselineScan);
+    harness.tickUntil(MatchPhase.Forge);
 
     const second = harness.inspectorIds();
     expect(second).toHaveLength(2);

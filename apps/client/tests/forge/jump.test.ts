@@ -282,6 +282,38 @@ describe("the hop", () => {
     locomotion.releaseAll();
   });
 
+  it("uses Space release as an immediate top-out while Forward stays held", () => {
+    const spawn = humanMimicSpawn();
+    const root = at(spawn.position.x, spawn.position.y, spawn.position.z);
+    const locomotion = new HiderLocomotion(MIMIC_NAV_DATA);
+    locomotion.press("w");
+    for (let frame = 0; frame < 0.9 / FRAME_SECONDS; frame += 1) {
+      locomotion.update(FRAME_SECONDS, 0.7, root);
+    }
+    locomotion.press(" ");
+
+    let reachedLip = false;
+    for (let frame = 0; frame < 8 / FRAME_SECONDS; frame += 1) {
+      locomotion.update(FRAME_SECONDS, 0.7, root);
+      const climb = locomotion.motion.climbState;
+      if (climb !== null && climb.ascending && climb.progress >= 0.6) {
+        reachedLip = true;
+        locomotion.release(" ");
+        break;
+      }
+    }
+
+    expect(reachedLip).toBe(true);
+    expect(locomotion.motion.climbState).toBeNull();
+    const top = root.y;
+    for (let frame = 0; frame < 2 / FRAME_SECONDS; frame += 1) {
+      locomotion.update(FRAME_SECONDS, 0.7, root);
+    }
+    expect(locomotion.motion.climbState).toBeNull();
+    expect(root.y).toBeLessThanOrEqual(top);
+    locomotion.releaseAll();
+  });
+
   it("does not launch a second time in mid-air", () => {
     const locomotion = new HiderLocomotion(openNavData());
     const root = at(0, 0, 0);
@@ -301,19 +333,18 @@ describe("hopping while the hunt's creep cap is on", () => {
     return locomotion;
   }
 
-  it("lands back on the height it left, so a hop in place costs no ground", () => {
+  it("settles onto real ground instead of preserving a stale lock-in height", () => {
     const locomotion = creeper();
-    // Deliberately resting above the floor rather than on it, but still within
-    // ground snap: a locked disguise sits where the Forge posed it, and landing
-    // on whatever is underfoot instead would spend creep budget the hop never
-    // earned. The offset is under `groundSnap`, so the body counts as standing.
+    // A locked disguise may begin slightly above the floor. Hunt locomotion is
+    // no longer surface-locked, so landing resolves against actual geometry
+    // and cannot preserve an invisible shelf/height trap.
     const restY = WORLD_SCALE.groundSnap / 2;
     const root = at(0, restY, 0);
     const { apexY } = runKeys(locomotion, [" "], 1, root);
 
     expect(apexY).toBeGreaterThan(restY + JUMP_HEIGHT_M - APEX_SLACK_M);
     expect(apexY).toBeLessThanOrEqual(restY + JUMP_HEIGHT_M);
-    expect(root.y).toBe(restY);
+    expect(root.y).toBe(0);
     expect(root.x).toBe(0);
     expect(root.z).toBe(0);
   });

@@ -150,6 +150,10 @@ export class HiderLocomotion {
   setCreepLimit(metresPerSecond: number | null): void {
     if (this.creepSpeed === metresPerSecond) return;
     this.creepSpeed = metresPerSecond;
+    // Start hunt movement surface-locked so Space remains a hop unless the
+    // player is deliberately pushing into a climb. CharacterController drops
+    // this lock after a successful top-out, allowing the shelf crossing and
+    // dismount without turning every held jump near furniture into a climb.
     this.controller.surfaceLocked = metresPerSecond !== null;
     this.walking = false;
   }
@@ -163,6 +167,10 @@ export class HiderLocomotion {
   release(key: string): void {
     if (!isHiderMoveKey(key)) return;
     this.held.delete(key);
+    // Forward + Space starts a contextual climb. Releasing Space is an explicit
+    // stop/top-out gesture even when Forward remains held; waiting for every
+    // direction key to come up is what left players hanging at the lip.
+    if (key === JUMP_KEY) this.controller.releaseClimbInput();
     if (!["w", "a", "s", "d"].some((moveKey) => this.held.has(moveKey as MoveKey))) {
       this.controller.releaseClimbInput();
     }

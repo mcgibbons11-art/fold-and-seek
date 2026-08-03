@@ -12,12 +12,19 @@ import {
 } from "@foldseek/game-sim";
 import {
   DEFAULT_MATCH_SETTINGS,
+  encodePaintLayer,
   eyesAgree,
   LIMITS,
   MatchPhase,
   MatchSnapshotSchema,
   type MatchSettings,
 } from "@foldseek/shared";
+import {
+  applyPaintSyncUpdate,
+  decodePaintSyncUpdate,
+  encodePaintSyncUpdate,
+  type PaintRevisionState,
+} from "../paint";
 import {
   BotSeats,
   isBotSeat,
@@ -136,6 +143,8 @@ import type {
 export const PORTALS_TICK_HZ = 10;
 /** Outbound coalescing window, matching the 100-150 ms sampling guidance. */
 export const FLUSH_INTERVAL_MS = 100;
+/** Capacity kept clear for leave, authority, command, and matchmaking traffic. */
+export const CRITICAL_SEND_RESERVE = 4;
 const SNAPSHOT_INTERVAL_MS = Math.round(1_000 / SNAPSHOT_WRITES_PER_SECOND);
 /**
  * Pause before the one automatic retry of a failed relay join. Long enough for
@@ -212,6 +221,25 @@ export interface PortalsAdapterOptions extends BotSeatOptions {
   readonly joinRetryDelayMs?: number;
 }
 
+/** Cheap, allocation-only-on-read relay health for performance diagnostics. */
+export interface PortalsRelayDiagnostics {
+  readonly sendsSent: number;
+  readonly sendsDeferred: number;
+  readonly sendsDropped: number;
+  readonly stateWritesWritten: number;
+  readonly stateWritesDeferred: number;
+  readonly criticalQueueLength: number;
+  readonly criticalQueueMaxAgeMs: number;
+  readonly snapshotBytes: number;
+  readonly poseBodySerializations: number;
+  readonly paintBodySerializations: number;
+}
+
+interface CriticalSend {
+  readonly payload: Record<string, unknown>;
+  readonly enqueuedAt: number;
+}
+
 /**
  * Why a room could not be entered. Every one of these is the player's business
  * and reaches them as a sentence, so none of them is reported as a bare failure.
@@ -250,7 +278,6 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private readonly portals: PortalsSdk;
   private readonly net: PortalsNet;
   private readonly options: PortalsAdapterOptions;
-  private readonly tickHz: number;
   private readonly clock: () => number;
   private readonly joinRetryDelayMs: number;
 
@@ -271,6 +298,8 @@ export class PortalsNetAdapter implements NetworkAdapter {
   /** Stable identity the simulation knows this client by. */
   private selfSeatId: string | null = null;
   private authoritySeatId: string | null = null;
+  /** Monotonic generation used to fence traffic from a superseded host. */
+  private authorityTerm = 0;
   private sim: MatchSimulation | null = null;
 
   /** Live connection id to seat id, decided once per connection by indexSeats. */
@@ -279,6 +308,8 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private readonly connectionNames = new Map<string, string>();
   /** Host only: which connection currently holds each seated player's slot. */
   private readonly seatOwners = new Map<string, string>();
+  /** Live relay seats that explicitly left this logical room. */
+  private readonly departedRoomSeats = new Set<string>();
 
   /**
    * The room this client is playing in, and the state keys that room publishes
@@ -329,14 +360,24 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private pendingEye: EyePosition | null = null;
   private sentEye: EyePosition | null = null;
   private eyeReported = false;
+  /** Camera samples share the 10 Hz flush owner with eye telemetry. */
+  private pendingCamera: InspectorCameraSample | null = null;
+  private cameraReported = false;
+  private cameraDirty = false;
   /** Locked poses, kept out of the frequently rewritten publication. */
   private poseBook: PoseBook = {};
   private poseSeq = 0;
   private lastPoseSerialized = "";
+  private readonly publishedPoses = new Map<string, string>();
   /** Body paint, on its own range for the same reason the poses are. */
   private paintBook: PaintBook = {};
   private paintSeq = 0;
   private lastPaintSerialized = "";
+  private readonly publishedPaint = new Map<string, string>();
+  /** Authority-side reconstructed layers, one ordered revision stream per seat. */
+  private readonly paintRevisionStates = new Map<string, PaintRevisionState>();
+  private poseBodySerializations = 0;
+  private paintBodySerializations = 0;
   /**
    * Ranges whose value is too large for the keys they own. Latched so that a
    * fault which repeats on every publish is reported once rather than filling
@@ -355,6 +396,18 @@ export class PortalsNetAdapter implements NetworkAdapter {
   /** Connections the simulation would not seat, and why, kept for their resync. */
   private readonly refusedConnections = new Map<string, string>();
   private readonly sendWindow = new RateWindow(SEND_RATE_LIMIT, RATE_WINDOW_MS);
+  private readonly ordinarySendWindow = new RateWindow(
+    SEND_RATE_LIMIT - CRITICAL_SEND_RESERVE,
+    RATE_WINDOW_MS,
+  );
+  /** Critical payloads survive saturation and are retried in FIFO order. */
+  private readonly criticalOutbox: CriticalSend[] = [];
+  private sendsSent = 0;
+  private sendsDeferred = 0;
+  private sendsDropped = 0;
+  private stateWritesWritten = 0;
+  private stateWritesDeferred = 0;
+  private snapshotBytes = 0;
   private readonly commandWindow = new KeyedRateWindow(MAX_COMMANDS_PER_SECOND, RATE_WINDOW_MS);
   private readonly forgeWindow = new KeyedRateWindow(
     MAX_FORGE_SNAPSHOTS_PER_SECOND,
@@ -371,7 +424,6 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private readonly botSeats: BotSeats;
 
   private flushTimer: ReturnType<typeof setInterval> | null = null;
-  private tickTimer: ReturnType<typeof setInterval> | null = null;
   private listenersAttached = false;
   private disposed = false;
 
@@ -394,7 +446,6 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.portals = portals;
     this.net = portals.net;
     this.options = options;
-    this.tickHz = options.tickHz ?? PORTALS_TICK_HZ;
     this.clock = options.now ?? (() => Date.now());
     this.joinRetryDelayMs = options.joinRetryDelayMs ?? JOIN_RETRY_DELAY_MS;
     this.botSeats = new BotSeats(options);
@@ -672,6 +723,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     // The room's first host is whoever opened it, without an election: nobody
     // else is in it, so there is nothing to elect between.
     this.authoritySeatId = this.selfSeatId;
+    this.authorityTerm += 1;
     this.assumeAuthority();
     this.publishAd(true);
     this.emitDirectory();
@@ -759,7 +811,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       const remaining = this.roomSeats().filter((seat) => seat !== this.selfSeatId);
       if (remaining.length === 0) this.retireAd();
     }
-    this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "exit" });
+    this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "exit", term: this.authorityTerm });
 
     this.roomCode = null;
     this.authoritySeatId = null;
@@ -816,6 +868,9 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.paintBook = {};
     this.lastPoseSerialized = "";
     this.lastPaintSerialized = "";
+    this.publishedPoses.clear();
+    this.publishedPaint.clear();
+    this.paintRevisionStates.clear();
     this.poseSeq = 0;
     this.paintSeq = 0;
     this.snapshotSeq = 0;
@@ -825,6 +880,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.lastAdAt = 0;
     this.lastAdBody = "";
     this.oversizedRanges.clear();
+    this.departedRoomSeats.clear();
     this.sync = EMPTY_SYNC;
     this.syncSignal.emit(this.sync);
   }
@@ -968,6 +1024,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       v: PORTALS_PROTOCOL_VERSION,
       t: "cmd",
       to: this.authoritySeatId,
+      term: this.authorityTerm,
       cmd: command,
     });
   }
@@ -984,6 +1041,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       v: PORTALS_PROTOCOL_VERSION,
       t: "snap",
       to: this.authoritySeatId,
+      term: this.authorityTerm,
       snapshot,
     });
   }
@@ -996,17 +1054,25 @@ export class PortalsNetAdapter implements NetworkAdapter {
       return;
     }
     if (this.authoritySeatId === null) return;
+    const encodedSync = update.encodedSync ?? encodePaintSyncUpdate({
+      kind: "checkpoint",
+      revision: update.revision,
+      encodedPaint: update.encodedPaint,
+    });
     this.rawSend({
       v: PORTALS_PROTOCOL_VERSION,
       t: "paint",
       to: this.authoritySeatId,
-      paint: update,
+      term: this.authorityTerm,
+      paint: { revision: update.revision, encodedSync },
     });
   }
 
   sendCameraSample(sample: InspectorCameraSample | null): void {
     if (this.connection.status !== "connected" || this.selfSeatId === null) return;
-    this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "cam", sample });
+    this.pendingCamera = sample;
+    this.cameraReported = true;
+    this.cameraDirty = true;
   }
 
   /**
@@ -1029,6 +1095,22 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
   getConnection(): ConnectionState {
     return this.connection;
+  }
+
+  getRelayDiagnostics(): PortalsRelayDiagnostics {
+    const oldest = this.criticalOutbox[0]?.enqueuedAt;
+    return {
+      sendsSent: this.sendsSent,
+      sendsDeferred: this.sendsDeferred,
+      sendsDropped: this.sendsDropped,
+      stateWritesWritten: this.stateWritesWritten,
+      stateWritesDeferred: this.stateWritesDeferred,
+      criticalQueueLength: this.criticalOutbox.length,
+      criticalQueueMaxAgeMs: oldest === undefined ? 0 : Math.max(0, this.clock() - oldest),
+      snapshotBytes: this.snapshotBytes,
+      poseBodySerializations: this.poseBodySerializations,
+      paintBodySerializations: this.paintBodySerializations,
+    };
   }
 
   getRoster(): readonly RosterEntry[] {
@@ -1289,7 +1371,11 @@ export class PortalsNetAdapter implements NetworkAdapter {
       case "cmd":
         // Only the elected authority acts on commands, and only on ones
         // addressed to it, so a stale host cannot fork the simulation.
-        if (!this.isAuthority() || envelope.to !== this.selfSeatId) return;
+        if (
+          !this.isAuthority() ||
+          envelope.to !== this.selfSeatId ||
+          envelope.term !== this.authorityTerm
+        ) return;
         if (!this.commandWindow.tryConsume(fromId, this.clock())) {
           console.warn(
             `[portals] ${fromId} exceeded ${MAX_COMMANDS_PER_SECOND} commands/s, dropped ${envelope.cmd.type}`,
@@ -1300,7 +1386,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         return;
 
       case "ev": {
-        if (fromSeat !== this.authoritySeatId) {
+        if (fromSeat !== this.authoritySeatId || envelope.term !== this.authorityTerm) {
           console.warn("[portals] ignored events from non-authority", fromId);
           return;
         }
@@ -1328,7 +1414,11 @@ export class PortalsNetAdapter implements NetworkAdapter {
       }
 
       case "pev":
-        if (fromSeat !== this.authoritySeatId || envelope.to !== this.selfSeatId) return;
+        if (
+          fromSeat !== this.authoritySeatId ||
+          envelope.to !== this.selfSeatId ||
+          envelope.term !== this.authorityTerm
+        ) return;
         if (envelope.privateState !== null) {
           this.setSync(this.sync.publicState, envelope.privateState);
         }
@@ -1337,7 +1427,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         return;
 
       case "snap":
-        if (!this.isAuthority() || envelope.to !== this.selfSeatId) return;
+        if (!this.isAuthority() || envelope.to !== this.selfSeatId || envelope.term !== this.authorityTerm) return;
         if (!this.forgeWindow.tryConsume(fromId, this.clock())) {
           console.warn(
             `[portals] ${fromId} exceeded ${MAX_FORGE_SNAPSHOTS_PER_SECOND} forge snapshots/s`,
@@ -1351,7 +1441,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         return;
 
       case "paint":
-        if (!this.isAuthority() || envelope.to !== this.selfSeatId) return;
+        if (!this.isAuthority() || envelope.to !== this.selfSeatId || envelope.term !== this.authorityTerm) return;
         // Deliberately the same window the poses use: the simulation charges
         // both to one command budget, so giving paint a window of its own would
         // let a client alternate the two for twice the inbound rate.
@@ -1361,14 +1451,69 @@ export class PortalsNetAdapter implements NetworkAdapter {
           );
           return;
         }
-        if (fromSeat !== undefined) this.applyPaintUpdate(fromSeat, envelope.paint);
+        if (fromSeat !== undefined) {
+          const decoded = decodePaintSyncUpdate(envelope.paint.encodedSync);
+          const previous = this.paintRevisionStates.get(fromSeat) ?? null;
+          const next = decoded === null ? null : applyPaintSyncUpdate(previous, decoded);
+          if (next === null) {
+            // A self-contained checkpoint with an invalid layer is still a
+            // paint command, so let the simulation return its normal targeted
+            // invalid_paint rejection instead of disguising it as packet loss.
+            const checkpointBody = invalidCheckpointBody(envelope.paint.encodedSync);
+            if (decoded === null && checkpointBody !== null) {
+              this.applyPaintUpdate(fromSeat, {
+                revision: envelope.paint.revision,
+                encodedPaint: checkpointBody,
+              });
+              return;
+            }
+            // The stream has a gap or malformed delta. Keep the known-good
+            // layer and ask only its owner for a self-contained recovery.
+            this.rawSend({
+              v: PORTALS_PROTOCOL_VERSION,
+              t: "paint_checkpoint_request",
+              to: fromSeat,
+              term: this.authorityTerm,
+            });
+            return;
+          }
+          this.paintRevisionStates.set(fromSeat, next);
+          this.applyPaintUpdate(fromSeat, {
+            revision: next.revision,
+            encodedPaint: encodePaintLayer(next.strokes),
+          });
+        }
+        return;
+
+      case "paint_checkpoint_request":
+        if (
+          envelope.to !== this.selfSeatId ||
+          fromSeat !== this.authoritySeatId ||
+          envelope.term !== this.authorityTerm ||
+          this.lastPaintUpdate === null ||
+          this.authoritySeatId === null
+        ) return;
+        this.rawSend({
+          v: PORTALS_PROTOCOL_VERSION,
+          t: "paint",
+          to: this.authoritySeatId,
+          term: this.authorityTerm,
+          paint: {
+            revision: this.lastPaintUpdate.revision,
+            encodedSync: encodePaintSyncUpdate({
+              kind: "checkpoint",
+              revision: this.lastPaintUpdate.revision,
+              encodedPaint: this.lastPaintUpdate.encodedPaint,
+            }),
+          },
+        });
         return;
 
       case "eye":
         // Only the host holds a validator anyone is asking, and only it should
         // be spending work on positions. A report addressed to a stale host is
         // dropped rather than applied, exactly as a command would be.
-        if (!this.isAuthority() || envelope.to !== this.selfSeatId) return;
+        if (!this.isAuthority() || envelope.to !== this.selfSeatId || envelope.term !== this.authorityTerm) return;
         if (!this.eyeWindow.tryConsume(fromId, this.clock())) {
           console.warn(
             `[portals] ${fromId} exceeded ${MAX_EYE_REPORTS_PER_SECOND} eye reports/s`,
@@ -1381,6 +1526,22 @@ export class PortalsNetAdapter implements NetworkAdapter {
       case "cam":
         if (fromSeat !== undefined && fromSeat !== this.selfSeatId) {
           this.cameraSignal.emit({ seatId: fromSeat, sample: envelope.sample });
+        }
+        return;
+
+      case "telemetry":
+        if (envelope.term !== this.authorityTerm) return;
+        if (fromSeat !== undefined && fromSeat !== this.selfSeatId && envelope.hasCamera) {
+          this.cameraSignal.emit({ seatId: fromSeat, sample: envelope.sample });
+        }
+        if (
+          envelope.hasEye &&
+          this.isAuthority() &&
+          envelope.to === this.selfSeatId &&
+          fromSeat !== undefined &&
+          this.eyeWindow.tryConsume(fromId, this.clock())
+        ) {
+          this.options.onInspectorEye?.(fromSeat, envelope.eye);
         }
         return;
 
@@ -1406,7 +1567,11 @@ export class PortalsNetAdapter implements NetworkAdapter {
         // answers. Re-sending costs one message each and restores what would
         // otherwise be lost with the host that recorded it. Paint made before
         // the lock is as unrecoverable as the pose, so it goes back too.
-        if (fromSeat !== this.authoritySeatId || this.isAuthority()) return;
+        if (
+          fromSeat !== this.authoritySeatId ||
+          envelope.term !== this.authorityTerm ||
+          this.isAuthority()
+        ) return;
         if (this.lastForgeSnapshot !== null) this.sendForgeSnapshot(this.lastForgeSnapshot);
         this.pendingPaintResend = this.lastPaintUpdate;
         return;
@@ -1419,6 +1584,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         if (!this.commandWindow.tryConsume(fromId, this.clock())) return;
         const player = this.players.find((candidate) => candidate.id === fromId);
         if (player === undefined) return;
+        if (fromSeat !== undefined) this.departedRoomSeats.delete(fromSeat);
         this.connectionNames.set(fromId, this.connectionNames.get(fromId) ?? envelope.displayName);
         this.seatArrival(player);
         // A joiner reads the state keys as it enters, so publish as early as the
@@ -1430,7 +1596,17 @@ export class PortalsNetAdapter implements NetworkAdapter {
       }
 
       case "exit": {
-        if (!this.isAuthority() || fromSeat === undefined) return;
+        if (fromSeat === undefined || envelope.term !== this.authorityTerm) return;
+        this.departedRoomSeats.add(fromSeat);
+        // A host remains connected to the relay while returning to matchmaking,
+        // so playerleave cannot drive migration. Its fenced exit does.
+        if (fromSeat === this.authoritySeatId && !this.isAuthority()) {
+          this.authoritySeatId = null;
+          this.resolveAuthority();
+          this.emitRoster();
+          return;
+        }
+        if (!this.isAuthority()) return;
         if (this.seatOwners.get(fromSeat) !== fromId) return;
         // A deliberate departure is not a dropout: the seat is freed outright
         // rather than held through the reconnect grace, because the player is
@@ -1560,6 +1736,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.pendingSync.delete(seat);
     this.privateOutbox.delete(seat);
     this.pendingRejections.delete(seat);
+    this.paintRevisionStates.delete(seat);
   }
 
   /**
@@ -1730,12 +1907,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (this.roomCode === null) return [];
     const live = new Set(this.connectionSeats.values());
     const seats = new Set<string>();
-    if (this.selfSeatId !== null) seats.add(this.selfSeatId);
+    if (this.selfSeatId !== null && !this.departedRoomSeats.has(this.selfSeatId)) seats.add(this.selfSeatId);
     for (const player of this.lastSnapshot?.publicState.players ?? []) {
-      if (!isBotSeat(player.seatId) && live.has(player.seatId)) seats.add(player.seatId);
+      if (!isBotSeat(player.seatId) && live.has(player.seatId) && !this.departedRoomSeats.has(player.seatId)) seats.add(player.seatId);
     }
     for (const seat of this.seatOwners.keys()) {
-      if (live.has(seat)) seats.add(seat);
+      if (live.has(seat) && !this.departedRoomSeats.has(seat)) seats.add(seat);
     }
     return [...seats];
   }
@@ -1751,13 +1928,19 @@ export class PortalsNetAdapter implements NetworkAdapter {
     const seats = this.roomSeats();
     const held = this.authoritySeatId !== null && seats.includes(this.authoritySeatId);
     const published = this.lastSnapshot?.authorityId;
+    const adoptsPublished =
+      !held && published !== undefined && seats.includes(published);
     const next = held
       ? this.authoritySeatId
-      : published !== undefined && seats.includes(published)
+      : adoptsPublished
         ? published
         : ([...seats].sort()[0] ?? null);
 
     if (next === this.authoritySeatId) return;
+    // Reading the current publication adopts its generation; only an actual
+    // election advances it. Otherwise every late joiner would invent a term
+    // that no sender uses and fence the legitimate host.
+    if (!adoptsPublished) this.authorityTerm += 1;
     this.authoritySeatId = next;
     // A new host has never heard this client's eye, so the record of what was
     // already sent is worthless and the next flush states it again.
@@ -1916,7 +2099,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     const phase = restored.getPhase();
     if (phase === MatchPhase.Forge || phase === MatchPhase.Locking) {
       // Working poses were never public, so ask for them rather than lose them.
-      this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "reforge" });
+      this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "reforge", term: this.authorityTerm });
       // The request reaches everyone except its sender, and the new host is a
       // player too: its own working pose has to be put back by hand. It goes
       // through the same path as any other creep, so the events it produces
@@ -1964,7 +2147,6 @@ export class PortalsNetAdapter implements NetworkAdapter {
     // The next host publishes its own ranges, so it starts with a clean latch
     // and reports a fault of its own rather than inheriting this one's silence.
     this.oversizedRanges.clear();
-    this.stopTickTimer();
   }
 
   private applyCommandFrom(seatId: string, command: MatchCommand): void {
@@ -2136,11 +2318,15 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
   private flush(): void {
     this.expireRoomRequests();
+    this.drainCriticalOutbox();
     if (this.selfSeatId === null) return;
     this.drainPaintResend();
-    this.drainEyeReport();
+    this.drainTelemetry();
     const room = this.roomCode;
     if (!this.isAuthority() || room === null) return;
+    // Durable match truth outranks directory freshness when both contend for
+    // the shared-state budget. The ad still has a live relay fallback.
+    this.maybeWriteSnapshot();
     this.publishAd();
 
     if (this.publicOutbox.length > 0) {
@@ -2150,6 +2336,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       const buildPublic = (events: SimEvent[]): Record<string, unknown> => ({
         v: PORTALS_PROTOCOL_VERSION,
         t: "ev",
+        term: this.authorityTerm,
         events,
       });
       const { batches, oversized } = batchEvents(pending, buildPublic);
@@ -2174,6 +2361,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         v: PORTALS_PROTOCOL_VERSION,
         t: "pev",
         to: seatId,
+        term: this.authorityTerm,
         events,
         privateState,
         rejections,
@@ -2202,7 +2390,6 @@ export class PortalsNetAdapter implements NetworkAdapter {
       this.pendingSync.delete(seatId);
     }
 
-    this.maybeWriteSnapshot();
   }
 
   /**
@@ -2230,22 +2417,30 @@ export class PortalsNetAdapter implements NetworkAdapter {
    * Mimic never spends a message on a position the authority does not use. The
    * host is skipped for the reason `reportInspectorEye` gives.
    */
-  private drainEyeReport(): void {
-    if (!this.eyeReported || this.isAuthority() || this.authoritySeatId === null) return;
+  private drainTelemetry(): void {
     if (this.roomCode === null) return;
     const eye = this.pendingEye;
-    if (eyesAgree(eye, this.sentEye)) return;
-    if (
-      !this.rawSend({
-        v: PORTALS_PROTOCOL_VERSION,
-        t: "eye",
-        to: this.authoritySeatId,
-        eye,
-      })
-    ) {
-      return;
+    const eyeChanged =
+      this.eyeReported &&
+      !this.isAuthority() &&
+      this.authoritySeatId !== null &&
+      !eyesAgree(eye, this.sentEye);
+    const cameraChanged = this.cameraReported && this.cameraDirty;
+    if (!eyeChanged && !cameraChanged) return;
+    if (!this.rawSend({
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "telemetry",
+      term: this.authorityTerm,
+      to: eyeChanged ? this.authoritySeatId : null,
+      hasCamera: cameraChanged,
+      sample: cameraChanged ? this.pendingCamera : null,
+      eye,
+      hasEye: eyeChanged,
+    })) return;
+    if (eyeChanged) this.sentEye = eye;
+    if (cameraChanged) {
+      this.cameraDirty = false;
     }
-    this.sentEye = eye;
   }
 
   /**
@@ -2293,34 +2488,57 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
   /** Writes the locked poses, and only when the set of them has changed. */
   private publishPoses(disguises: PublicMatchState["disguises"]): void {
+    let bodyCount = 0;
+    let changed = false;
+    for (const disguise of disguises) {
+      if (disguise.encodedPose.length === 0) continue;
+      bodyCount += 1;
+      if (this.publishedPoses.get(disguise.publicObjectId) !== disguise.encodedPose) changed = true;
+    }
+    if (!changed && bodyCount === this.publishedPoses.size) return;
+
     const book: PoseBook = {};
     for (const disguise of disguises) {
       if (disguise.encodedPose.length > 0) book[disguise.publicObjectId] = disguise.encodedPose;
     }
     const serialized = JSON.stringify(book);
+    this.poseBodySerializations += 1;
     if (serialized === this.lastPoseSerialized) return;
 
     this.poseSeq += 1;
     if (this.writeChunked(book, this.poseSeq, this.roomSlot.keys.pose, "locked poses") === "written") {
       this.poseBook = book;
       this.lastPoseSerialized = serialized;
+      replaceStringMap(this.publishedPoses, book);
     }
   }
 
   /** Writes the body-paint layers, and only when the set of them has changed. */
   private publishPaint(disguises: PublicMatchState["disguises"]): void {
+    let bodyCount = 0;
+    let changed = false;
+    for (const disguise of disguises) {
+      const paint = disguise.encodedPaint;
+      if (paint === null || paint.length === 0) continue;
+      bodyCount += 1;
+      if (this.publishedPaint.get(disguise.publicObjectId) !== paint) changed = true;
+    }
+    if (!changed && bodyCount === this.publishedPaint.size) return;
+
     const book: PaintBook = {};
     for (const disguise of disguises) {
       const paint = disguise.encodedPaint;
       if (paint !== null && paint.length > 0) book[disguise.publicObjectId] = paint;
     }
     const serialized = JSON.stringify(book);
+    this.paintBodySerializations += 1;
     if (serialized === this.lastPaintSerialized) return;
 
     this.paintSeq += 1;
     if (this.writeChunked(book, this.paintSeq, this.roomSlot.keys.paint, "body paint") === "written") {
       this.paintBook = book;
       this.lastPaintSerialized = serialized;
+      replaceStringMap(this.publishedPaint, book);
     }
   }
 
@@ -2374,16 +2592,18 @@ export class PortalsNetAdapter implements NetworkAdapter {
       return "too_large";
     }
     this.oversizedRanges.delete(label);
-    // Every key costs a write, and the relay counts them across all of them.
+    // Reserve the complete generation before touching any key. A partial write
+    // can otherwise combine with stale chunks into a torn publication.
+    if (!this.stateWindow.tryConsumeMany(chunks.length, this.clock())) {
+      this.stateWritesDeferred += chunks.length;
+      return "deferred";
+    }
     for (let index = 0; index < chunks.length; index += 1) {
-      if (!this.stateWindow.tryConsume(this.clock())) {
-        console.warn(`[portals] state write budget reached, deferring ${label}`);
-        return "deferred";
-      }
       const key = keys[index];
       const chunk = chunks[index];
       if (key !== undefined && chunk !== undefined) this.net.setState(key, chunk);
     }
+    this.stateWritesWritten += chunks.length;
     return "written";
   }
 
@@ -2445,13 +2665,17 @@ export class PortalsNetAdapter implements NetworkAdapter {
     const serialized = JSON.stringify(body);
     const changed = serialized !== this.lastAdBody;
     if (!force && !changed && nowMs - this.lastAdAt < ROOM_HEARTBEAT_MS) return;
-    if (!this.stateWindow.tryConsume(nowMs)) return;
+    if (!this.stateWindow.tryConsume(nowMs)) {
+      this.stateWritesDeferred += 1;
+      return;
+    }
 
     this.adBeat += 1;
     this.lastAdAt = nowMs;
     this.lastAdBody = serialized;
     const ad: RoomAd = { ...body, beat: this.adBeat };
     this.net.setState(this.roomSlot.adKey, ad);
+    this.stateWritesWritten += 1;
     // Apply our own write synchronously. Portals does not promise sender echo,
     // and making the creator wait for one was the reason its own browser could
     // keep reading zero rooms after OPEN.
@@ -2467,6 +2691,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (this.roomCode === null) return;
     this.directory.forget(this.roomSlot.index);
     this.net.setState(this.roomSlot.adKey, VACANT_SLOT);
+    this.stateWritesWritten += 1;
   }
 
   /**
@@ -2502,6 +2727,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
   private adoptSnapshotSeq(snapshot: HostPublication): void {
     this.snapshotSeq = Math.max(this.snapshotSeq, snapshot.seq);
+    this.authorityTerm = Math.max(this.authorityTerm, snapshot.term);
   }
 
   /** Publishes at most SNAPSHOT_WRITES_PER_SECOND times, and only when stale. */
@@ -2567,19 +2793,48 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
   /** Directory-level counterpart used before the requester has a room. */
   private sendForRoom(room: string, body: Record<string, unknown>): boolean {
-    if (this.connection.status !== "connected") return false;
+    if (this.connection.status !== "connected") {
+      this.sendsDropped += 1;
+      return false;
+    }
     const payload = { ...body, r: room };
     const bytes = jsonByteLength(payload);
     if (bytes > MAX_PAYLOAD_BYTES) {
       console.warn(`[portals] dropped ${bytes} byte message over the ${MAX_PAYLOAD_BYTES} byte limit`);
+      this.sendsDropped += 1;
       return false;
     }
-    if (!this.sendWindow.tryConsume(this.clock())) {
-      console.warn("[portals] send rate limit reached, deferring");
+    const critical = isCriticalEnvelope((payload as Record<string, unknown>).t);
+    if (this.trySendPayload(payload, critical)) return true;
+    if (!critical) {
+      this.sendsDeferred += 1;
       return false;
     }
-    this.net.send(payload);
+    // Acceptance into this bounded-by-the-protocol FIFO counts as reliable
+    // delivery from the caller's perspective; the 10 Hz owner retries it.
+    const serialized = JSON.stringify(payload);
+    if (!this.criticalOutbox.some((entry) => JSON.stringify(entry.payload) === serialized)) {
+      this.criticalOutbox.push({ payload, enqueuedAt: this.clock() });
+      this.sendsDeferred += 1;
+    }
     return true;
+  }
+
+  private trySendPayload(payload: Record<string, unknown>, critical: boolean): boolean {
+    const nowMs = this.clock();
+    if (!critical && !this.ordinarySendWindow.tryConsume(nowMs)) return false;
+    if (!this.sendWindow.tryConsume(nowMs)) return false;
+    this.net.send(payload);
+    this.sendsSent += 1;
+    return true;
+  }
+
+  private drainCriticalOutbox(): void {
+    while (this.criticalOutbox.length > 0) {
+      const pending = this.criticalOutbox[0];
+      if (pending === undefined || !this.trySendPayload(pending.payload, true)) return;
+      this.criticalOutbox.shift();
+    }
   }
 
   private publishSnapshot(): void {
@@ -2587,13 +2842,11 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (!sim || this.selfSeatId === null) return;
 
     const publicState = sim.getPublicState();
-    this.publishPoses(publicState.disguises);
-    this.publishPaint(publicState.disguises);
-
     this.snapshotSeq += 1;
     const snapshot: HostPublication = {
       v: PORTALS_PROTOCOL_VERSION,
       seq: this.snapshotSeq,
+      term: this.authorityTerm,
       authorityId: this.selfSeatId,
       // Pose and paint bodies are stripped here and carried on their own key
       // ranges; the publication keeps only what changes from one publish to the
@@ -2607,6 +2860,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
         })),
       },
     };
+    this.snapshotBytes = jsonByteLength(snapshot);
     if (this.writeChunked(snapshot, this.snapshotSeq, this.roomSlot.keys.snapshot, "public state") !== "written") {
       return;
     }
@@ -2615,7 +2869,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.snapshotDirty = false;
     // Locally the host has the real thing, so its own view keeps the geometry.
     this.setSync(publicState, this.sync.privateState);
+    // Shared-state priority: live public truth, migration checkpoint, immutable
+    // pose bodies, then the largest/costliest paint range. Atomic reservation
+    // lets a lower tier defer without tearing the higher tier that preceded it.
     this.publishSimSnapshot(sim);
+    this.publishPoses(publicState.disguises);
+    this.publishPaint(publicState.disguises);
   }
 
   // ------------------------------------------------------------------ delivery
@@ -2681,24 +2940,13 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private startTimers(): void {
     if (this.flushTimer === null) {
       this.flushTimer = setInterval(() => {
-        this.flush();
+        if (this.isAuthority()) this.tick();
+        else this.flush();
       }, FLUSH_INTERVAL_MS);
     }
-    if (this.tickTimer === null && this.isAuthority()) {
-      this.tickTimer = setInterval(() => {
-        this.tick();
-      }, Math.round(1_000 / this.tickHz));
-    }
-  }
-
-  private stopTickTimer(): void {
-    if (this.tickTimer === null) return;
-    clearInterval(this.tickTimer);
-    this.tickTimer = null;
   }
 
   private stopTimers(): void {
-    this.stopTickTimer();
     if (this.flushTimer === null) return;
     clearInterval(this.flushTimer);
     this.flushTimer = null;
@@ -2707,7 +2955,10 @@ export class PortalsNetAdapter implements NetworkAdapter {
   /** One authoritative step. The interval calls this; tests drive it directly. */
   tick(): void {
     const sim = this.sim;
-    if (!sim || !this.isAuthority()) return;
+    if (!sim || !this.isAuthority()) {
+      this.flush();
+      return;
+    }
     // One reading drives the whole step: a bot measures how much of the match
     // it has to catch up on against the clock the phase machine was just
     // advanced to, so a second reading would judge it in a different moment.
@@ -2720,6 +2971,25 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
 /** Envelopes only the elected host may send, and which a stale view would drop. */
 const AUTHORITY_ONLY: ReadonlySet<NetEnvelope["t"]> = new Set(["ev", "pev", "reforge"]);
+
+/** Messages whose loss changes ownership, admission, or authoritative play. */
+const CRITICAL_ENVELOPES: ReadonlySet<string> = new Set([
+  "cmd",
+  "ev",
+  "pev",
+  "resync",
+  "reforge",
+  "enter",
+  "exit",
+  "refused",
+  "join_request",
+  "join_cancel",
+  "join_decision",
+]);
+
+function isCriticalEnvelope(type: unknown): boolean {
+  return typeof type === "string" && CRITICAL_ENVELOPES.has(type);
+}
 
 function rejectionOf(type: string, reason?: string, detail?: string): CommandRejection {
   const body = reason ?? "rejected";
@@ -2849,6 +3119,17 @@ function mergeSelf(players: PortalsNetPlayer[], self: PortalsNetPlayer): Portals
   return players.some((player) => player.id === self.id) ? [...players] : [...players, self];
 }
 
+function replaceStringMap(target: Map<string, string>, source: Readonly<Record<string, string>>): void {
+  target.clear();
+  for (const [key, value] of Object.entries(source)) target.set(key, value);
+}
+
+function invalidCheckpointBody(payload: string): string | null {
+  if (!payload.startsWith("pc1.")) return null;
+  const separator = payload.indexOf(".", 4);
+  return separator < 0 ? null : payload.slice(separator + 1);
+}
+
 function nameOf(player: PortalsNetPlayer): string {
   return player.displayName ?? `Visitor ${player.id.slice(0, 4)}`;
 }
@@ -2865,7 +3146,6 @@ function settingsPatchOf(settings: MatchSettings): Required<MatchSettingsPatch> 
     seekerCount: settings.seekerCount,
     mapIntroMs: settings.mapIntroMs,
     roleRevealMs: settings.roleRevealMs,
-    baselineScanMs: settings.baselineScanMs,
     forgeMs: settings.forgeMs,
     lockGraceMs: settings.lockGraceMs,
     inspectionIntroMs: settings.inspectionIntroMs,

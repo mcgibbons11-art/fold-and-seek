@@ -502,6 +502,7 @@ describe("P2 hardening batch", () => {
     expect(set({ forgeMs: -1 }).reason).toBe("invalid_settings");
     expect(set({ maxPlayers: 1 }).reason).toBe("invalid_settings");
     expect(set({ warrantsBonus: 17 }).reason).toBe("invalid_settings");
+    expect(set({ baselineScanMs: 12_000 }).reason).toBe("invalid_settings");
     expect(set({ forgeMs: MAX_PHASE_DURATION_MS }).accepted).toBe(true);
   });
 

@@ -323,4 +323,13 @@ describe("send rate window", () => {
     // The first stamp ages out exactly one window after it was taken.
     expect(window.tryConsume(1_000)).toBe(true);
   });
+
+  it("reserves a chunk range atomically without spending a partial allowance", () => {
+    const window = new RateWindow(4, 1_000);
+    expect(window.tryConsumeMany(3, 0)).toBe(true);
+    // Two cannot fit; refusing them must not consume the one slot that remains.
+    expect(window.tryConsumeMany(2, 10)).toBe(false);
+    expect(window.tryConsumeMany(1, 20)).toBe(true);
+    expect(window.tryConsume(30)).toBe(false);
+  });
 });

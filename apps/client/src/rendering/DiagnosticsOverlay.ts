@@ -1,6 +1,7 @@
 import type { QualityTier } from "./quality";
 import type { PipelineEffect } from "./RenderPipeline";
 import type { RenderBackend } from "./RendererManager";
+import type { PerformanceDiagnosticsSnapshot } from "../engine/performanceTelemetry";
 
 const TOGGLE_KEY = "Backquote";
 const REFRESH_INTERVAL_MS = 200;
@@ -21,6 +22,7 @@ export interface DiagnosticsSnapshot {
   readonly heightPx: number;
   readonly meshCount: number;
   readonly effects: readonly PipelineEffect[];
+  readonly performance: PerformanceDiagnosticsSnapshot;
 }
 
 /**
@@ -105,6 +107,16 @@ export class DiagnosticsOverlay {
       `targets    ${data.renderTargets}`,
       `pipelines  ${data.programs}`,
       `meshes     ${data.meshCount}`,
+      "",
+      `frames     ${data.performance.frames}`,
+      `frame avg  ${data.performance.averageFrameMs.toFixed(2)} ms`,
+      `frame max  ${data.performance.maxFrameMs.toFixed(2)} ms`,
+      `slow/clamp ${data.performance.longFrames} / ${data.performance.clampedFrames}`,
+      `sim drops  ${data.performance.simulationBacklogDrops}`,
+      `net sample ${data.performance.remoteSamplesAccepted} ok · ${data.performance.remoteSamplesReordered} reorder · ${data.performance.remoteSamplesDuplicate} duplicate · ${data.performance.remoteSamplesStale} stale`,
+      `net smooth ${data.performance.remoteExtrapolations} extrap · ${data.performance.remoteStaleHolds} held`,
+      `paint      ${data.performance.paintFlushes} flush · ${data.performance.paintUploadRegions} regions · ${data.performance.paintUploadPixels.toLocaleString("en-US")} px`,
+      `paint cpu  ${data.performance.paintFlushCpuMs.toFixed(2)} ms · ${data.performance.paintRebuilds} rebuilds`,
       "",
       "` toggles this overlay",
     ].join("\n");

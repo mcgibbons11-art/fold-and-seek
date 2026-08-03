@@ -4,7 +4,6 @@ import {
   ForgeSnapshotSchema,
   LIMITS,
   MatchCommandSchema,
-  PaintUpdateSchema,
   PrivateSimEventSchema,
   SimEventSchema,
 } from "@foldseek/shared";
@@ -148,6 +147,8 @@ export const MAX_EVENTS_PER_MESSAGE = 64;
 export const MAX_REJECTIONS_PER_MESSAGE = 8;
 const connectionId = z.string().min(1).max(LIMITS.idLength);
 const version = z.literal(PORTALS_PROTOCOL_VERSION);
+/** Monotonic authority generation. Messages from an older host are fenced. */
+const authorityTerm = z.number().int().min(0).default(0);
 /**
  * Which room an envelope belongs to.
  *
@@ -159,6 +160,10 @@ const version = z.literal(PORTALS_PROTOCOL_VERSION);
  * against the reader's own code, so a malformed code simply addresses nobody.
  */
 const roomCode = z.string().min(1).max(16);
+const paintRelayUpdate = z.object({
+  revision: z.number().int().min(0),
+  encodedSync: z.string().min(1).max(MAX_PAYLOAD_BYTES),
+});
 
 /**
  * Every `to` in this protocol is a SEAT id (the identity the simulation knows a
@@ -173,6 +178,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     t: z.literal("cmd"),
     r: roomCode,
     to: connectionId,
+    term: authorityTerm,
     cmd: MatchCommandSchema,
   }),
   /** Public event batch from the host. */
@@ -180,6 +186,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     v: version,
     t: z.literal("ev"),
     r: roomCode,
+    term: authorityTerm,
     events: z.array(SimEventSchema).max(MAX_EVENTS_PER_MESSAGE),
   }),
   /**
@@ -202,6 +209,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     t: z.literal("pev"),
     r: roomCode,
     to: connectionId,
+    term: authorityTerm,
     events: z.array(PrivateSimEventSchema).max(MAX_EVENTS_PER_MESSAGE),
     privateState: PrivateMatchStateSchema.nullable(),
     /**
@@ -221,6 +229,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     t: z.literal("snap"),
     r: roomCode,
     to: connectionId,
+    term: authorityTerm,
     snapshot: ForgeSnapshotSchema,
   }),
   /**
@@ -234,7 +243,16 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     t: z.literal("paint"),
     r: roomCode,
     to: connectionId,
-    paint: PaintUpdateSchema,
+    term: authorityTerm,
+    paint: paintRelayUpdate,
+  }),
+  /** Authority asks one Mimic to recover a missed delta with a checkpoint. */
+  z.object({
+    v: version,
+    t: z.literal("paint_checkpoint_request"),
+    r: roomCode,
+    to: connectionId,
+    term: authorityTerm,
   }),
   /**
    * Where an Inspector is looking from, reported to the host.
@@ -256,6 +274,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     t: z.literal("eye"),
     r: roomCode,
     to: connectionId,
+    term: authorityTerm,
     eye: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).nullable(),
   }),
   /** Sparse movement samples broadcast so every peer can draw the Inspector. */
@@ -275,6 +294,29 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
         climbing: z.boolean(),
       })
       .nullable(),
+  }),
+  /** One coalesced 10 Hz movement/eye report, replacing two competing sends. */
+  z.object({
+    v: version,
+    t: z.literal("telemetry"),
+    r: roomCode,
+    term: authorityTerm,
+    to: connectionId.nullable(),
+    hasCamera: z.boolean(),
+    sample: z
+      .object({
+        atMs: z.number().finite().min(0),
+        x: z.number().finite(),
+        y: z.number().finite(),
+        z: z.number().finite(),
+        yaw: z.number().finite(),
+        pitch: z.number().finite(),
+        airborne: z.boolean(),
+        climbing: z.boolean(),
+      })
+      .nullable(),
+    eye: z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]).nullable(),
+    hasEye: z.boolean(),
   }),
   /** A client asking the host for a fresh sync after a join or a reconnect. */
   z.object({ v: version, t: z.literal("resync"), r: roomCode }),
@@ -335,7 +377,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * seat outright rather than holding it through the reconnect grace, because
    * the player is still here and has chosen not to be in this room.
    */
-  z.object({ v: version, t: z.literal("exit"), r: roomCode }),
+  z.object({ v: version, t: z.literal("exit"), r: roomCode, term: authorityTerm }),
   /**
    * A new host asking every Mimic to re-send its working Forge pose.
    *
@@ -345,7 +387,7 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
    * them again: each client re-sends what it last gave the transport, so no
    * player's work is lost and nothing extra is written to room state.
    */
-  z.object({ v: version, t: z.literal("reforge"), r: roomCode }),
+  z.object({ v: version, t: z.literal("reforge"), r: roomCode, term: authorityTerm }),
   /**
    * The host refusing one client a seat.
    *
@@ -390,6 +432,8 @@ export const HostPublicationSchema = z.strictObject({
   v: version,
   /** Monotonic publish counter, used to reassemble a consistent chunk set. */
   seq: z.number().int().min(0),
+  /** Fences publications and relay messages from a departed authority. */
+  term: authorityTerm,
   /** Seat id of the publishing host, so a late joiner knows who is authoritative. */
   authorityId: connectionId,
   publicState: PublicMatchStateSchema,
@@ -598,11 +642,19 @@ export class RateWindow {
   ) {}
 
   tryConsume(nowMs: number): boolean {
+    return this.tryConsumeMany(1, nowMs);
+  }
+
+  /**
+   * Atomically reserves several operations. This is essential for chunked
+   * state: either the complete generation is written or none of it is.
+   */
+  tryConsumeMany(count: number, nowMs: number): boolean {
     while (this.stamps.length > 0 && nowMs - (this.stamps[0] as number) >= this.windowMs) {
       this.stamps.shift();
     }
-    if (this.stamps.length >= this.limit) return false;
-    this.stamps.push(nowMs);
+    if (count < 0 || this.stamps.length + count > this.limit) return false;
+    for (let index = 0; index < count; index += 1) this.stamps.push(nowMs);
     return true;
   }
 }

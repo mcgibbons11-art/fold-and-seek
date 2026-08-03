@@ -91,6 +91,32 @@ export interface PaintPixelSource {
   readonly data: Uint8ClampedArray;
 }
 
+/** Cumulative paint raster, rebuild, and canvas-upload counters. */
+export interface PaintUploadStats {
+  readonly flushes: number;
+  readonly rectangles: number;
+  readonly pixels: number;
+  readonly targets: number;
+  /** Stroke rasterizations, including target-local history replay. */
+  readonly rasterizedStrokes: number;
+  /** CPU time spent preparing canvas uploads, accumulated in milliseconds. */
+  readonly flushCpuMs: number;
+  /** Full or target-local replay operations. */
+  readonly rebuilds: number;
+  /** Number of tiles reset across those rebuilds (27 means one full atlas). */
+  readonly rebuiltTargets: number;
+}
+
+/** Mutable sink for allocation-free diagnostics polling. */
+export type PaintUploadStatsSink = { -readonly [Key in keyof PaintUploadStats]: PaintUploadStats[Key] };
+
+interface PaintUploadRegion {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 /** Porcelain, the swatch a Mimic wears before anything is sampled (§17.3). */
 const DEFAULT_BASE_COLOR: readonly [number, number, number] = [236, 226, 210];
 
@@ -188,6 +214,22 @@ export class PaintLayer {
   private emissiveTexture: THREE.CanvasTexture | null = null;
   private readonly targetEmissiveTextures = new Map<number, THREE.Texture>();
 
+  /** Reused ImageData wrappers; their typed arrays remain live as paint changes. */
+  private colorImage: ImageData | null = null;
+  private materialImage: ImageData | null = null;
+  private emissiveImage: ImageData | null = null;
+
+  /** One bit per atlas tile. A dab normally dirties exactly one of them. */
+  private readonly dirtyTargets = new Uint8Array(PAINT_TARGET_COUNT);
+  private uploadFlushes = 0;
+  private uploadRectangles = 0;
+  private uploadPixels = 0;
+  private uploadTargets = 0;
+  private rasterizedStrokes = 0;
+  private flushCpuMs = 0;
+  private rebuilds = 0;
+  private rebuiltTargets = 0;
+
   /** Open undo batch, collecting what to take back when the drag ends. */
   private batch: { added: PaintStrokeWire[]; evicted: PaintStrokeWire[] } | null = null;
 
@@ -198,6 +240,10 @@ export class PaintLayer {
    * serializes the layer when the image actually changed.
    */
   private changeRevision = 0;
+
+  /** Encoding 768 stamps is not a per-frame dirty check. Cache it by revision. */
+  private wireCacheRevision = -1;
+  private wireCache = "";
 
   private dirty = true;
 
@@ -279,7 +325,7 @@ export class PaintLayer {
   setBaseColors(
     entries: readonly (readonly [number, readonly [number, number, number]])[],
   ): void {
-    let changed = false;
+    const changedTargets: number[] = [];
     for (const [targetIndex, color] of entries) {
       if (targetIndex < 0 || targetIndex >= PAINT_TARGET_COUNT) continue;
       const r = Math.round(clamp01(color[0]) * 255);
@@ -295,9 +341,9 @@ export class PaintLayer {
       this.baseColors[targetIndex * 3] = r;
       this.baseColors[targetIndex * 3 + 1] = g;
       this.baseColors[targetIndex * 3 + 2] = b;
-      changed = true;
+      changedTargets.push(targetIndex);
     }
-    if (changed) this.rebuild();
+    this.rebuildTargets(changedTargets);
   }
 
   /**
@@ -312,7 +358,7 @@ export class PaintLayer {
   setBaseMaterials(
     entries: readonly (readonly [number, number, number])[],
   ): void {
-    let changed = false;
+    const changedTargets: number[] = [];
     for (const [targetIndex, roughness, metalness] of entries) {
       if (targetIndex < 0 || targetIndex >= PAINT_TARGET_COUNT) continue;
       const r = Math.round(clamp01(roughness) * 255);
@@ -325,9 +371,9 @@ export class PaintLayer {
       }
       this.baseMaterials[targetIndex * 2] = r;
       this.baseMaterials[targetIndex * 2 + 1] = m;
-      changed = true;
+      changedTargets.push(targetIndex);
     }
-    if (changed) this.rebuild();
+    this.rebuildTargets(changedTargets);
   }
 
   /**
@@ -339,7 +385,7 @@ export class PaintLayer {
   setBaseEmissives(
     entries: readonly (readonly [number, readonly [number, number, number]])[],
   ): void {
-    let changed = false;
+    const changedTargets: number[] = [];
     for (const [targetIndex, emissive] of entries) {
       if (targetIndex < 0 || targetIndex >= PAINT_TARGET_COUNT) continue;
       const r = Math.round(clamp01(emissive[0]) * 255);
@@ -355,9 +401,9 @@ export class PaintLayer {
       this.baseEmissives[targetIndex * 3] = r;
       this.baseEmissives[targetIndex * 3 + 1] = g;
       this.baseEmissives[targetIndex * 3 + 2] = b;
-      changed = true;
+      changedTargets.push(targetIndex);
     }
-    if (changed && this.emissivePixels !== null) this.rebuild();
+    if (this.emissivePixels !== null) this.rebuildTargets(changedTargets);
   }
 
   applyStroke(stroke: PaintStroke): void {
@@ -381,7 +427,12 @@ export class PaintLayer {
       this.batch?.evicted.push(...evicted);
       this.batch?.added.push(wire);
       this.changeRevision += 1;
-      this.rebuild();
+      // Removing the oldest stamp can only change its own tile. Replaying that
+      // tile (and the new stamp's tile when different) avoids the old 768-stamp
+      // full-atlas cliff while producing byte-identical pixels to a full replay.
+      this.rebuildTargets(evicted[0]?.target === wire.target
+        ? [wire.target]
+        : [evicted[0]?.target ?? wire.target, wire.target]);
       return;
     }
 
@@ -438,7 +489,7 @@ export class PaintLayer {
     // the painter had rather than one missing its oldest marks.
     if (batch.evicted.length > 0) this.strokes.unshift(...batch.evicted);
     this.changeRevision += 1;
-    this.rebuild();
+    this.rebuildTargets(this.targetsOf([...batch.added, ...batch.evicted]));
   }
 
   /**
@@ -454,7 +505,7 @@ export class PaintLayer {
       this.strokes.push(stroke);
     }
     if (batch.added.length > 0) this.changeRevision += 1;
-    this.rebuild();
+    this.rebuildTargets(this.targetsOf([...batch.added, ...batch.evicted]));
   }
 
   /** Drops every stamp and returns the body to its materials. */
@@ -483,7 +534,38 @@ export class PaintLayer {
   }
 
   toDataForWire(): string {
-    return encodePaintLayer(this.strokes);
+    if (this.wireCacheRevision !== this.changeRevision) {
+      this.wireCache = encodePaintLayer(this.strokes);
+      this.wireCacheRevision = this.changeRevision;
+    }
+    return this.wireCache;
+  }
+
+  /** Canvas-copy counters used by the performance HUD and regression tests. */
+  get uploadStats(): PaintUploadStats {
+    return {
+      flushes: this.uploadFlushes,
+      rectangles: this.uploadRectangles,
+      pixels: this.uploadPixels,
+      targets: this.uploadTargets,
+      rasterizedStrokes: this.rasterizedStrokes,
+      flushCpuMs: this.flushCpuMs,
+      rebuilds: this.rebuilds,
+      rebuiltTargets: this.rebuiltTargets,
+    };
+  }
+
+  /** Writes counters into a caller-owned object, so a live overlay allocates nothing. */
+  readUploadStats(out: PaintUploadStatsSink): PaintUploadStatsSink {
+    out.flushes = this.uploadFlushes;
+    out.rectangles = this.uploadRectangles;
+    out.pixels = this.uploadPixels;
+    out.targets = this.uploadTargets;
+    out.rasterizedStrokes = this.rasterizedStrokes;
+    out.flushCpuMs = this.flushCpuMs;
+    out.rebuilds = this.rebuilds;
+    out.rebuiltTargets = this.rebuiltTargets;
+    return out;
   }
 
   /** Replaces the whole layer with a peer's. Returns false on a bad payload. */
@@ -712,55 +794,131 @@ export class PaintLayer {
    */
   flush(): void {
     if (!this.dirty) return;
+    const startedAt = typeof performance === "undefined" ? Date.now() : performance.now();
+    const targets: number[] = [];
+    for (let target = 0; target < this.dirtyTargets.length; target++) {
+      if (this.dirtyTargets[target] === 1) targets.push(target);
+    }
+    const rectangles = this.uploadRegions(targets);
+
     if (this.canvas !== null) {
       if (this.context === null) this.context = this.canvas.getContext("2d");
-      this.context?.putImageData(
-        new ImageData(this.pixels, this.atlasSize, this.atlasSize),
-        0,
-        0,
-      );
+      if (this.context !== null && this.colorImage === null && typeof ImageData !== "undefined") {
+        this.colorImage = new ImageData(this.pixels, this.atlasSize, this.atlasSize);
+      }
+      if (this.colorImage !== null) this.copyRegions(this.context, this.colorImage, rectangles);
     }
     if (this.materialCanvas !== null) {
       if (this.materialContext === null) {
         this.materialContext = this.materialCanvas.getContext("2d");
       }
-      this.materialContext?.putImageData(
-        new ImageData(this.materialPixels, this.atlasSize, this.atlasSize),
-        0,
-        0,
-      );
+      if (
+        this.materialContext !== null &&
+        this.materialImage === null &&
+        typeof ImageData !== "undefined"
+      ) {
+        this.materialImage = new ImageData(this.materialPixels, this.atlasSize, this.atlasSize);
+      }
+      if (this.materialImage !== null) {
+        this.copyRegions(this.materialContext, this.materialImage, rectangles);
+      }
     }
     const emissive = this.emissivePixels;
     if (this.emissiveCanvas !== null && emissive !== null) {
       if (this.emissiveContext === null) {
         this.emissiveContext = this.emissiveCanvas.getContext("2d");
       }
-      this.emissiveContext?.putImageData(
-        new ImageData(emissive, this.atlasSize, this.atlasSize),
-        0,
-        0,
-      );
-    }
-    if (this.canvas === null && this.materialCanvas === null && this.emissiveCanvas === null) {
-      return;
+      if (
+        this.emissiveContext !== null &&
+        this.emissiveImage === null &&
+        typeof ImageData !== "undefined"
+      ) {
+        this.emissiveImage = new ImageData(emissive, this.atlasSize, this.atlasSize);
+      }
+      if (this.emissiveImage !== null) {
+        this.copyRegions(this.emissiveContext, this.emissiveImage, rectangles);
+      }
     }
 
     this.dirty = false;
-    if (this.texture !== null) this.texture.needsUpdate = true;
-    if (this.materialTexture !== null) this.materialTexture.needsUpdate = true;
-    if (this.emissiveTexture !== null) this.emissiveTexture.needsUpdate = true;
+    this.dirtyTargets.fill(0);
+    this.uploadFlushes += 1;
+    this.uploadRectangles += rectangles.length;
+    this.uploadTargets += targets.length;
+    for (const rectangle of rectangles) this.uploadPixels += rectangle.width * rectangle.height;
+    // The parent atlas is only a clone source. Once tile views exist it is not
+    // worn by a material, so incrementing it too would schedule a redundant
+    // upload alongside the dirty view.
+    if (this.texture !== null && this.targetTextures.size === 0) this.texture.needsUpdate = true;
+    if (this.materialTexture !== null && this.targetMaterialTextures.size === 0) {
+      this.materialTexture.needsUpdate = true;
+    }
+    if (this.emissiveTexture !== null && this.targetEmissiveTextures.size === 0) {
+      this.emissiveTexture.needsUpdate = true;
+    }
     // The tile views are what the body actually wears, and the renderer decides
     // whether to re-upload from each texture's own version. Marking only the
     // atlas leaves every view holding the image it was first bound with, so the
     // paint would never reach the screen.
-    for (const view of this.targetTextures.values()) {
-      view.needsUpdate = true;
+    for (const target of targets) {
+      const color = this.targetTextures.get(target);
+      const material = this.targetMaterialTextures.get(target);
+      const glow = this.targetEmissiveTextures.get(target);
+      if (color !== undefined) color.needsUpdate = true;
+      if (material !== undefined) material.needsUpdate = true;
+      if (glow !== undefined) glow.needsUpdate = true;
     }
-    for (const view of this.targetMaterialTextures.values()) {
-      view.needsUpdate = true;
+    const finishedAt = typeof performance === "undefined" ? Date.now() : performance.now();
+    this.flushCpuMs += Math.max(0, finishedAt - startedAt);
+  }
+
+  /**
+   * Adjacent dirty tiles are cheaper as one canvas copy; sparse tiles remain
+   * separate so a dab on a hand does not copy the empty atlas between it and a
+   * panel. The threshold avoids trading a tiny pixel saving for many JS calls.
+   */
+  private uploadRegions(targets: readonly number[]): PaintUploadRegion[] {
+    if (targets.length === 0) return [];
+    const tiles = targets.flatMap((target) => {
+      const tile = this.tiles[target];
+      return tile === undefined
+        ? []
+        : [{ x: tile.x, y: tile.y, width: tile.width, height: tile.height }];
+    });
+    if (tiles.length <= 1) return tiles;
+
+    let minX = this.atlasSize;
+    let minY = this.atlasSize;
+    let maxX = 0;
+    let maxY = 0;
+    let tilePixels = 0;
+    for (const tile of tiles) {
+      minX = Math.min(minX, tile.x);
+      minY = Math.min(minY, tile.y);
+      maxX = Math.max(maxX, tile.x + tile.width);
+      maxY = Math.max(maxY, tile.y + tile.height);
+      tilePixels += tile.width * tile.height;
     }
-    for (const view of this.targetEmissiveTextures.values()) {
-      view.needsUpdate = true;
+    const union = { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    return union.width * union.height <= tilePixels * 1.5 || tiles.length > 6 ? [union] : tiles;
+  }
+
+  private copyRegions(
+    context: CanvasRenderingContext2D | null,
+    image: ImageData,
+    regions: readonly PaintUploadRegion[],
+  ): void {
+    if (context === null) return;
+    for (const region of regions) {
+      context.putImageData(
+        image,
+        0,
+        0,
+        region.x,
+        region.y,
+        region.width,
+        region.height,
+      );
     }
   }
 
@@ -786,14 +944,50 @@ export class PaintLayer {
     this.context = null;
     this.materialContext = null;
     this.emissiveContext = null;
+    this.colorImage = null;
+    this.materialImage = null;
+    this.emissiveImage = null;
   }
 
   /** Repaints every tile from its base colour and replays the surviving log. */
   private rebuild(): void {
+    this.rebuilds += 1;
+    this.rebuiltTargets += PAINT_TARGET_COUNT;
     this.fillAllTiles();
     for (const stroke of this.strokes) {
       this.rasterize(stroke);
     }
+  }
+
+  /** Replays only the tiles whose bases or surviving logs changed. */
+  private rebuildTargets(targets: readonly number[]): void {
+    if (targets.length === 0) return;
+    const wanted = new Uint8Array(PAINT_TARGET_COUNT);
+    let targetCount = 0;
+    for (const target of targets) {
+      if (target < 0 || target >= PAINT_TARGET_COUNT || wanted[target] === 1) continue;
+      wanted[target] = 1;
+      targetCount += 1;
+      this.hasLast[target] = 0;
+      this.fillTile(target);
+    }
+    if (targetCount === 0) return;
+    this.rebuilds += 1;
+    this.rebuiltTargets += targetCount;
+    for (const stroke of this.strokes) {
+      if (wanted[stroke.target] === 1) this.rasterize(stroke);
+    }
+  }
+
+  private targetsOf(strokes: readonly PaintStrokeWire[]): number[] {
+    const seen = new Uint8Array(PAINT_TARGET_COUNT);
+    const targets: number[] = [];
+    for (const stroke of strokes) {
+      if (stroke.target >= PAINT_TARGET_COUNT || seen[stroke.target] === 1) continue;
+      seen[stroke.target] = 1;
+      targets.push(stroke.target);
+    }
+    return targets;
   }
 
   private fillAllTiles(): void {
@@ -801,7 +995,6 @@ export class PaintLayer {
     for (let index = 0; index < PAINT_TARGET_COUNT; index++) {
       this.fillTile(index);
     }
-    this.dirty = true;
   }
 
   private fillTile(targetIndex: number): void {
@@ -838,11 +1031,13 @@ export class PaintLayer {
         index += 4;
       }
     }
+    this.markTargetDirty(targetIndex);
   }
 
   private rasterize(stroke: PaintStrokeWire): void {
     const tile = this.tiles[stroke.target];
     if (tile === undefined) return;
+    this.rasterizedStrokes += 1;
 
     const alpha = Math.round(clamp01(stroke.opacity) * 255);
     if (alpha <= 0) {
@@ -907,6 +1102,12 @@ export class PaintLayer {
     this.lastU[stroke.target] = stroke.u;
     this.lastV[stroke.target] = stroke.v;
     this.hasLast[stroke.target] = 1;
+    this.markTargetDirty(stroke.target);
+  }
+
+  private markTargetDirty(targetIndex: number): void {
+    if (targetIndex < 0 || targetIndex >= PAINT_TARGET_COUNT) return;
+    this.dirtyTargets[targetIndex] = 1;
     this.dirty = true;
   }
 

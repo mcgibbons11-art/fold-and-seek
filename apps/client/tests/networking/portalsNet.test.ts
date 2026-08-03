@@ -529,6 +529,7 @@ describe("PortalsNetAdapter inbound limits", () => {
         v: PORTALS_PROTOCOL_VERSION,
         t: "cmd",
         to: "a",
+        term: 1,
         cmd: { type: "player_ready", ready: index % 2 === 0 },
       });
     }
@@ -1420,6 +1421,13 @@ describe("PortalsNetAdapter transport budget", () => {
     const duringSteady = (session.relay.sendCount.get("p0") ?? 0) - beforeSteady;
 
     expect(duringSteady).toBeLessThanOrEqual(20);
+    expect(session.peer("p0").adapter.getRelayDiagnostics()).toEqual(expect.objectContaining({
+      sendsSent: expect.any(Number),
+      stateWritesWritten: expect.any(Number),
+      snapshotBytes: expect.any(Number),
+      poseBodySerializations: expect.any(Number),
+      paintBodySerializations: expect.any(Number),
+    }));
     expect(session.relay.violations).toEqual([]);
     console.log(
       `host sends: ${duringStart} across the start sequence, ${duringSteady} in the following second`,
@@ -1474,6 +1482,12 @@ describe("PortalsNetAdapter body paint", () => {
       .getSync()
       .publicState?.disguises.find((entry) => entry.publicObjectId === objectId);
     expect(seen?.encodedPaint).toBe(PAINT_LAYER);
+    const bodyWork = session.peer("a").adapter.getRelayDiagnostics();
+    session.advance(10);
+    expect(session.peer("a").adapter.getRelayDiagnostics()).toEqual(expect.objectContaining({
+      poseBodySerializations: bodyWork.poseBodySerializations,
+      paintBodySerializations: bodyWork.paintBodySerializations,
+    }));
     expect(session.relay.violations).toEqual([]);
     session.dispose();
   });
@@ -1950,6 +1964,79 @@ describe("PortalsNetAdapter bot seats", () => {
     session.runTo(MatchPhase.Lobby, "a", 400);
     expect(eventsOfType(host, "rematch_started")).toEqual([]);
     expect(host.adapter.getSync().publicState?.round).toBe(0);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
+  it("fences a stale authority generation after migration", async () => {
+    vi.useFakeTimers();
+    const session = new Session();
+    await session.addPeer("c", "Cora");
+    await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    session.advance(3);
+    session.relay.dropPeer("c");
+    session.advance(3);
+
+    const observer = session.peer("b");
+    const before = observer.events.length;
+    session.relay.injectRaw("a", {
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "ev",
+      r: observer.adapter.getRoomCode(),
+      term: 1,
+      events: [{
+        type: "host_changed",
+        publicPlayerId: "p_stale00001",
+        seq: 999_000,
+        at: session.now(),
+      }],
+    });
+    expect(observer.events).toHaveLength(before);
+
+    session.relay.injectRaw("a", {
+      v: PORTALS_PROTOCOL_VERSION,
+      t: "ev",
+      r: observer.adapter.getRoomCode(),
+      term: 2,
+      events: [{
+        type: "host_changed",
+        publicPlayerId: "p_current001",
+        seq: 999_001,
+        at: session.now(),
+      }],
+    });
+    expect(observer.events).toHaveLength(before + 1);
+    session.dispose();
+  });
+
+  it("retries a host exit after saturation and transfers authority", async () => {
+    vi.useFakeTimers();
+    const session = new Session();
+    const host = await session.addPeer("a", "Ada");
+    await session.addPeer("b", "Bex");
+    session.advance(3);
+
+    const window = (host.adapter as unknown as {
+      sendWindow: { tryConsume(nowMs: number): boolean };
+    }).sendWindow;
+    while (window.tryConsume(session.now())) { /* exhaust the physical relay window */ }
+    host.adapter.leaveRoom();
+    expect(session.peer("b").adapter.isAuthority()).toBe(false);
+    expect(host.adapter.getRelayDiagnostics()).toEqual(expect.objectContaining({
+      criticalQueueLength: 1,
+      criticalQueueMaxAgeMs: 0,
+    }));
+
+    // The queued fenced exit remains deliverable while Ada browses. Once the
+    // relay window rolls over, Bex takes over without a playerleave event.
+    session.advance(11);
+    expect(session.peer("b").adapter.isAuthority()).toBe(true);
+    expect(session.peer("b").adapter.getRoster().map((entry) => entry.displayName)).toEqual(["Bex"]);
+    expect(host.adapter.getRelayDiagnostics()).toEqual(expect.objectContaining({
+      criticalQueueLength: 0,
+      sendsDeferred: expect.any(Number),
+    }));
     expect(session.relay.violations).toEqual([]);
     session.dispose();
   });

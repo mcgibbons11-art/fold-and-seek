@@ -78,6 +78,9 @@ export class PaintMaterialBinder {
   private readonly layer: PaintLayer;
   private readonly getMeshes: () => readonly THREE.Object3D[];
   private readonly bindings = new Map<string, Binding>();
+  private readonly baseColors: [number, readonly [number, number, number]][] = [];
+  private readonly baseMaterials: [number, number, number][] = [];
+  private readonly baseEmissives: [number, readonly [number, number, number]][] = [];
   private attached = false;
 
   constructor(layer: PaintLayer, getMeshes: () => readonly THREE.Object3D[]) {
@@ -88,9 +91,9 @@ export class PaintMaterialBinder {
   /** Binds every paintable mesh and refreshes any the Mimic reassigned. */
   sync(): void {
     this.attached = true;
-    const baseColors: [number, readonly [number, number, number]][] = [];
-    const baseMaterials: [number, number, number][] = [];
-    const baseEmissives: [number, readonly [number, number, number]][] = [];
+    this.baseColors.length = 0;
+    this.baseMaterials.length = 0;
+    this.baseEmissives.length = 0;
     // Monotonic, so this flips at most once in a layer's life and the re-clone
     // it forces happens the first time the player paints something that glows.
     const wantEmissive = this.layer.hasEmissive;
@@ -118,7 +121,7 @@ export class PaintMaterialBinder {
 
       const clone = source.clone();
       source.color.getRGB(scratchColor, THREE.SRGBColorSpace);
-      baseColors.push([target, [scratchColor.r, scratchColor.g, scratchColor.b]]);
+      this.baseColors.push([target, [scratchColor.r, scratchColor.g, scratchColor.b]]);
 
       clone.name = `${source.name}+paint`;
       clone.color.setRGB(1, 1, 1);
@@ -129,7 +132,7 @@ export class PaintMaterialBinder {
       // texel instead. That is what leaves an empty layer looking exactly like
       // the material underneath it.
       if (clone.roughness !== undefined && clone.metalness !== undefined) {
-        baseMaterials.push([target, source.roughness ?? 1, source.metalness ?? 0]);
+        this.baseMaterials.push([target, source.roughness ?? 1, source.metalness ?? 0]);
         clone.roughness = 1;
         clone.metalness = 1;
         const response = this.layer.getTargetMaterialTexture(target);
@@ -143,7 +146,7 @@ export class PaintMaterialBinder {
       // glowing paint on it keeps its own emissive and never pays for the
       // texture or for the shader variant that reads one.
       if (clone.emissive !== undefined) {
-        baseEmissives.push([target, baseEmissiveOf(source.emissive, source.emissiveIntensity)]);
+        this.baseEmissives.push([target, baseEmissiveOf(source.emissive, source.emissiveIntensity)]);
         if (wantEmissive) {
           clone.emissive.setRGB(1, 1, 1);
           clone.emissiveIntensity = 1;
@@ -161,9 +164,9 @@ export class PaintMaterialBinder {
       });
     }
 
-    if (baseColors.length > 0) this.layer.setBaseColors(baseColors);
-    if (baseMaterials.length > 0) this.layer.setBaseMaterials(baseMaterials);
-    if (baseEmissives.length > 0) this.layer.setBaseEmissives(baseEmissives);
+    if (this.baseColors.length > 0) this.layer.setBaseColors(this.baseColors);
+    if (this.baseMaterials.length > 0) this.layer.setBaseMaterials(this.baseMaterials);
+    if (this.baseEmissives.length > 0) this.layer.setBaseEmissives(this.baseEmissives);
   }
 
   /** Puts the Mimic's own materials back and drops every clone. */

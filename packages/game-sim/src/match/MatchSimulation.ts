@@ -1558,6 +1558,15 @@ export class MatchSimulation {
     if (!player.isHost) return reject("not_host");
     if (this.phase !== MatchPhase.Lobby) return reject("wrong_phase");
 
+    // Commands normally pass through the strict wire schema, but the
+    // simulation is also a public boundary used by local/offline adapters.
+    // Reject retired or invented fields here as well instead of silently
+    // accepting a request that changes nothing.
+    const allowedKeys = new Set<string>(SETTABLE_SETTING_KEYS);
+    for (const key of Object.keys(patch)) {
+      if (!allowedKeys.has(key)) return reject("invalid_settings", key);
+    }
+
     const changedKeys: SettableSettingKey[] = [];
     const next: MatchSettings = { ...this.settings };
     for (const key of SETTABLE_SETTING_KEYS) {

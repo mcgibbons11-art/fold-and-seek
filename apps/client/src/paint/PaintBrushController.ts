@@ -49,6 +49,8 @@ export const DEFAULT_BRUSH_RADIUS = 0.12;
 export class PaintBrushController {
   private readonly options: PaintBrushOptions;
   private readonly pointerNdc = new THREE.Vector2();
+  /** Three accepts an optional result array; reuse it instead of allocating per dab. */
+  private readonly intersections: THREE.Intersection[] = [];
 
   private color: [number, number, number] = [0.85, 0.27, 0.2];
   private radius = DEFAULT_BRUSH_RADIUS;
@@ -275,8 +277,13 @@ export class PaintBrushController {
 
   private pick(): { target: number; u: number; v: number } | null {
     this.options.raycaster.setFromCamera(this.pointerNdc, this.options.camera);
-    const hits = this.options.raycaster.intersectObjects([...this.options.getMimicMeshes()], false);
-    for (const hit of hits) {
+    this.intersections.length = 0;
+    this.options.raycaster.intersectObjects(
+      this.options.getMimicMeshes() as THREE.Object3D[],
+      false,
+      this.intersections,
+    );
+    for (const hit of this.intersections) {
       const target = paintTargetOfObject(hit.object);
       if (target === null || hit.uv === undefined) continue;
       const [u, v] = normalizeTargetUv(target, hit.uv.x, hit.uv.y);
@@ -306,8 +313,12 @@ export class PaintBrushController {
       kind: this.eraser ? "eraser" : "brush",
       continued,
     };
-    const expanded = this.options.expandStroke?.(stroke) ?? [stroke];
-    for (const dab of expanded) this.options.layer.applyStroke(dab);
+    const expanded = this.options.expandStroke?.(stroke);
+    if (expanded === undefined) {
+      this.options.layer.applyStroke(stroke);
+    } else {
+      for (const dab of expanded) this.options.layer.applyStroke(dab);
+    }
     this.options.onStroke?.(stroke);
     return stroke;
   }

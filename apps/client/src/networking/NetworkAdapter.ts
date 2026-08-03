@@ -66,6 +66,8 @@ export interface ForgeSnapshot {
 export interface PaintUpdate {
   readonly encodedPaint: string;
   readonly revision: number;
+  /** Portals-only compact checkpoint/delta; other transports use encodedPaint. */
+  readonly encodedSync?: string;
 }
 
 export type ConnectionStatus =

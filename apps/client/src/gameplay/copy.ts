@@ -150,9 +150,7 @@ export const AMMO_READY_PROMPT = "HOLD TO FIRE";
  *
  * §41.1 names this phase FOLD, which is the Mimics' verb: the Inspector is shut
  * in the Security Office for the same sixty seconds with nothing to fold. The
- * phase is renamed for them and the standing goal stays under it, because
- * "memorize the room" is only an instruction if the reason for it is on screen
- * beside the clock.
+ * phase is renamed for them and the standing goal stays under it.
  */
 export const INSPECTOR_FORGE_LABEL = "STAND BY";
 export const INSPECTOR_FORGE_GOAL =

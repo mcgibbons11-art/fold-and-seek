@@ -373,6 +373,34 @@ class RoomSession {
 }
 
 describe("rooms over one channel", () => {
+  it("retries an accepted matchmaking decision after host send saturation", async () => {
+    vi.useFakeTimers();
+    const session = new RoomSession();
+    const host = await session.browse("a", "Ada");
+    const guest = await session.browse("b", "Bex");
+    const opened = host.adapter.createRoom("The Attic");
+    if (!opened.ok) throw new Error(opened.reason);
+    session.advance(2);
+
+    let accepted = false;
+    guest.adapter.onRoomDecision((decision) => { accepted = decision.accepted; });
+    expect(guest.adapter.requestRoom(opened.code).ok).toBe(true);
+    const request = host.adapter.pendingJoinRequests()[0];
+    if (request === undefined) throw new Error("request was not delivered");
+
+    const window = (host.adapter as unknown as {
+      sendWindow: { tryConsume(nowMs: number): boolean };
+    }).sendWindow;
+    while (window.tryConsume(session.now())) { /* saturate */ }
+    expect(host.adapter.acceptRoomRequest(request.id).ok).toBe(true);
+    expect(accepted).toBe(false);
+
+    session.advance(11);
+    expect(accepted).toBe(true);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
   it("keeps a requester outside until the host explicitly accepts", async () => {
     vi.useFakeTimers();
     const session = new RoomSession();
@@ -515,14 +543,9 @@ describe("rooms over one channel", () => {
       climbing: false,
     });
     ada.adapter.sendCameraSample(null);
+    session.advance(1);
 
     expect(received).toEqual([
-      {
-        seatId: ada.adapter.getSelfId(),
-        x: 1.25,
-        airborne: true,
-        climbing: false,
-      },
       { seatId: ada.adapter.getSelfId(), x: null, airborne: null, climbing: null },
     ]);
     expect(session.relay.violations).toEqual([]);

@@ -503,7 +503,6 @@ export const MatchSettingsPatchSchema = z
     seekerCount: z.number().int().min(1).max(MAX_SEEKER_COUNT),
     mapIntroMs: settingsValue,
     roleRevealMs: settingsValue,
-    baselineScanMs: settingsValue,
     forgeMs: settingsValue,
     lockGraceMs: settingsValue,
     inspectionIntroMs: settingsValue,

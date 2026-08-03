@@ -142,7 +142,9 @@ export const DEFAULT_MATCH_SETTINGS = {
   seekerCount: 1,
   mapIntroMs: 5_000,
   roleRevealMs: 4_000,
-  baselineScanMs: 12_000,
+  // Kept on the wire for old snapshots only. New rounds go directly from the
+  // role reveal to Forge; the old memorize-the-room phase is gone.
+  baselineScanMs: 0,
   forgeMs: 55_000,
   lockGraceMs: 5_000,
   inspectionIntroMs: 4_000,

@@ -201,6 +201,7 @@ describe("match command schema", () => {
     expect(MatchSettingsPatchSchema.safeParse({ forgeMs: Number.NaN }).success).toBe(false);
     expect(MatchSettingsPatchSchema.safeParse({ maxPlayers: 1 }).success).toBe(false);
     expect(MatchSettingsPatchSchema.safeParse({ inspectorMoveSpeed: 99 }).success).toBe(false);
+    expect(MatchSettingsPatchSchema.safeParse({ baselineScanMs: 12_000 }).success).toBe(false);
   });
 });
 

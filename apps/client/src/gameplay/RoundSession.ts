@@ -23,6 +23,8 @@ import { OFFICE_DOOR_NAME } from "../world/maps/props";
 import { CURIOSITY_SHOP_OBJECTS, mapObject } from "../world/maps/registry";
 import { SECURITY_OFFICE_BOUNDS } from "../world/maps/zones";
 import { encodeDisguiseState } from "../mimic/poseWire";
+import { PaintSnapshotBookkeeper, type PaintUploadStatsSink } from "../paint";
+import { clientPerformanceTelemetry } from "../engine/performanceTelemetry";
 import type {
   InspectorCameraSample,
   NetworkAdapter,
@@ -114,8 +116,8 @@ const SURVEY_FOV_DEG = 55;
 /**
  * The survey is DRIVABLE: holding the left button swings it, at the same
  * sensitivity every other camera turns at. USER DIRECTIVE (2026-08-02): "i
- * can't turn my camera as a hider once the round starts" — the memorize sweep
- * ran a fixed orbit for its whole minute, and a camera the player cannot turn
+ * can't turn my camera as a hider once the round starts" — the old survey
+ * ran a fixed orbit, and a camera the player cannot turn
  * reads as a camera that is broken, whatever the cinematic intent was. The
  * sweep resumes on its own once the pointer has been still a moment.
  */
@@ -146,10 +148,8 @@ const OFFICE_VIGIL_RADIUS_M = 0.55;
 const OFFICE_VIGIL_HEIGHT_M = 0.7;
 
 /**
- * When the Inspector is shut in. It is the fold and nothing else: the baseline
- * scan before it is the phase whose whole point is that the Inspector walks an
- * undisturbed shop and memorises it (§5.6), and no Mimic is on their feet yet.
- * The moment the Forge opens they are, and that is the moment the office closes.
+ * When the Inspector is shut in. New rounds move directly from role reveal to
+ * Forge, so the office closes before any Mimic begins editing or moving.
  */
 const OFFICE_VIGIL_PHASES: ReadonlySet<MatchPhase> = new Set([
   MatchPhase.Forge,
@@ -260,6 +260,17 @@ export class RoundSession {
   private publishedRevision = -1;
   private sincePublishMs = 0;
   private publishedPaintRevision = 0;
+  private readonly paintBookkeeper = new PaintSnapshotBookkeeper();
+  private readonly paintStats: PaintUploadStatsSink = {
+    flushes: 0,
+    rectangles: 0,
+    pixels: 0,
+    targets: 0,
+    rasterizedStrokes: 0,
+    flushCpuMs: 0,
+    rebuilds: 0,
+    rebuiltTargets: 0,
+  };
   private sincePaintPublishMs = 0;
   private lastPhase: MatchPhase | null = null;
   /** Countdown second last ticked, so one tick is heard per second and no more. */
@@ -803,6 +814,7 @@ export class RoundSession {
     this.forgeLocked = false;
     this.publishedRevision = -1;
     this.publishedPaintRevision = 0;
+    this.paintBookkeeper.reset();
     this.sincePaintPublishMs = 0;
     this.forgeSubscription = forge.subscribe((hud) => {
       if (hud.locked === this.forgeLocked) return;
@@ -827,6 +839,8 @@ export class RoundSession {
     // controls here, so enforce the live state rather than trusting one event.
     if (creeping && forge.snapshot().locked) forge.unlock(HUNT_EDIT_HINT);
     forge.update(dtMs);
+    forge.paintLayer.readUploadStats(this.paintStats);
+    clientPerformanceTelemetry.recordPaint(this.paintStats);
 
     // A Mimic on its feet walks the same controller the Inspector does, so it
     // gets the same boards underfoot. The quieter hunt footstep mix preserves
@@ -884,6 +898,7 @@ export class RoundSession {
     if (forge.paintRevision <= this.publishedPaintRevision) return;
     if (this.sincePaintPublishMs < PAINT_PUBLISH_INTERVAL_MS) return;
     const paint = forge.paintSnapshot;
+    const publication = this.paintBookkeeper.capture(forge.paintLayer);
 
     this.publishedPaintRevision = paint.revision;
     this.sincePaintPublishMs = 0;
@@ -891,6 +906,7 @@ export class RoundSession {
     this.options.adapter.sendPaintUpdate({
       encodedPaint: paint.encodedPaint,
       revision: paint.revision,
+      ...(publication === null ? {} : { encodedSync: publication.encoded }),
     });
   }
 
