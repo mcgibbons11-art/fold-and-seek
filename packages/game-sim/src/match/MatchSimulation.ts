@@ -1979,6 +1979,15 @@ export class MatchSimulation {
       case MatchPhase.Results:
         this.publishResults();
         return;
+      case MatchPhase.RematchVote:
+        // Players may vote from the Results board. If everyone has already
+        // answered, entering the dedicated ballot phase must resolve that
+        // complete vote immediately instead of making the whole room stare at
+        // another countdown before Ready becomes available again.
+        if (this.rematchVotes.size >= this.connectedPlayers().length) {
+          this.resolveRematch();
+        }
+        return;
       case MatchPhase.Lobby:
         this.resetForLobby();
         return;

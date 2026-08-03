@@ -43,7 +43,6 @@ describe("match flow", () => {
       MatchPhase.Loading,
       MatchPhase.MapIntro,
       MatchPhase.RoleReveal,
-      MatchPhase.BaselineScan,
       MatchPhase.Forge,
       MatchPhase.Locking,
       MatchPhase.InspectionIntro,
@@ -120,6 +119,26 @@ describe("match flow", () => {
     for (const playerId of harness.playerIds) {
       harness.command(playerId, { type: "vote_rematch", yes: false });
     }
+    expect(harness.phase()).toBe(MatchPhase.Lobby);
+    expect(harness.eventsOfType("rematch_started")).toHaveLength(0);
+    expect(harness.sim.getPublicState().players.every((player) => !player.ready)).toBe(true);
+  });
+
+  it("resolves a complete Results-screen ballot when the vote phase opens", () => {
+    const harness = new Harness({
+      players: 2,
+      seed: 19,
+      settings: { resultsMs: 100, rematchVoteMs: 10_000 },
+    });
+    harness.toInspection();
+    harness.tickUntil(MatchPhase.Results);
+
+    for (const playerId of harness.playerIds) {
+      expect(harness.command(playerId, { type: "vote_rematch", yes: false }).accepted).toBe(true);
+    }
+    expect(harness.phase()).toBe(MatchPhase.Results);
+
+    harness.tick(100);
     expect(harness.phase()).toBe(MatchPhase.Lobby);
     expect(harness.eventsOfType("rematch_started")).toHaveLength(0);
     expect(harness.sim.getPublicState().players.every((player) => !player.ready)).toBe(true);
