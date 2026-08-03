@@ -195,7 +195,7 @@ export class InspectorAvatar {
     }
 
     const run = this.actions.get("run");
-    if (run !== undefined) {
+    if (run !== undefined && this.currentAction === "run") {
       const fraction = frame.speedCapMps > 0 ? Math.min(1, frame.speedMps / frame.speedCapMps) : 0;
       run.timeScale = THREE.MathUtils.lerp(0.78, 1.42, fraction);
       run.setEffectiveWeight(INSPECTOR_RUN_ANIMATION_WEIGHT);

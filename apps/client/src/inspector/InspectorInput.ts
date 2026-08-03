@@ -36,6 +36,7 @@ export class InspectorInput {
   private readonly held = new Set<string>();
   private pendingYaw = 0;
   private pendingPitch = 0;
+  private pendingZoom = 0;
   private attached = false;
 
   /** Right mouse: aim down the sights. Replaces the old focus hold. */
@@ -68,6 +69,7 @@ export class InspectorInput {
     this.attached = true;
     this.element.addEventListener("mousedown", this.onMouseDown);
     this.element.addEventListener("contextmenu", this.onContextMenu);
+    this.element.addEventListener("wheel", this.onWheel, { passive: false });
     const doc = this.element.ownerDocument;
     doc.addEventListener("mousemove", this.onMouseMove);
     doc.addEventListener("mouseup", this.onMouseUp);
@@ -82,6 +84,7 @@ export class InspectorInput {
     this.attached = false;
     this.element.removeEventListener("mousedown", this.onMouseDown);
     this.element.removeEventListener("contextmenu", this.onContextMenu);
+    this.element.removeEventListener("wheel", this.onWheel);
     const doc = this.element.ownerDocument;
     doc.removeEventListener("mousemove", this.onMouseMove);
     doc.removeEventListener("mouseup", this.onMouseUp);
@@ -114,6 +117,7 @@ export class InspectorInput {
       out.lookPitchDelta = 0;
       out.brisk = false;
       out.jump = false;
+      out.disengageClimb = false;
       return;
     }
     const gamepad = readStandardGamepad();
@@ -123,6 +127,7 @@ export class InspectorInput {
     out.strafe = Math.max(-1, Math.min(1, out.strafe));
     out.brisk = hasAny(this.held, BRISK_KEYS);
     out.jump = actionHeld(this.held, "jump") || (gamepad?.jump ?? false);
+    out.disengageClimb = actionHeld(this.held, "moveBack");
     out.lookYawDelta = this.pendingYaw - (gamepad?.lookX ?? 0) * 2.5 * dtSeconds;
     const gamepadPitch = (gamepad?.lookY ?? 0) * 2.2 * dtSeconds;
     out.lookPitchDelta = this.pendingPitch + (this.invertY ? gamepadPitch : -gamepadPitch);
@@ -149,6 +154,13 @@ export class InspectorInput {
     return true;
   }
 
+  /** Consumes wheel travel accumulated since the previous rendered frame. */
+  takeZoomDelta(): number {
+    const delta = this.pendingZoom;
+    this.pendingZoom = 0;
+    return delta;
+  }
+
   private clear(): void {
     this.held.clear();
     this.aimHeld = false;
@@ -156,6 +168,7 @@ export class InspectorInput {
     this.firePressed = false;
     this.pendingYaw = 0;
     this.pendingPitch = 0;
+    this.pendingZoom = 0;
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
@@ -190,6 +203,12 @@ export class InspectorInput {
 
   private readonly onContextMenu = (event: Event): void => {
     event.preventDefault();
+  };
+
+  private readonly onWheel = (event: WheelEvent): void => {
+    if (!this.locked) return;
+    event.preventDefault();
+    this.pendingZoom += event.deltaY;
   };
 
   private readonly onPointerLockChange = (): void => {

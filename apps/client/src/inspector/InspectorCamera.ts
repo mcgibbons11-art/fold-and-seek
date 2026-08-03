@@ -49,16 +49,18 @@ export const DEFAULT_AIM_FOV_DEG = 48;
 /**
  * Rig distances are a fixed share of body height, so the framing that reads
  * correctly for a human-scale character survives the shrink to a tiny one. At
- * `WORLD_SCALE.playerHeight` of 0.35 m the boom is 44 cm, which keeps the shop
+ * `WORLD_SCALE.playerHeight` of 0.35 m the boom is 84 cm, which keeps the shop
  * towering overhead instead of filling the frame.
  */
-const BOOM_PER_BODY_HEIGHT = 1.6;
+const BOOM_PER_BODY_HEIGHT = 2.4;
 const SHOULDER_PER_BODY_HEIGHT = 0.3;
 const MIN_BOOM_PER_BODY_HEIGHT = 0.26;
 const SKIN_PER_BODY_HEIGHT = 0.069;
 const BOB_PER_BODY_HEIGHT = 0.0126;
 
 export const DEFAULT_BOOM_LENGTH_M = WORLD_SCALE.playerHeight * BOOM_PER_BODY_HEIGHT;
+/** Both third-person rigs may pull back far enough to frame the surrounding aisle. */
+export const MAX_BOOM_LENGTH_M = WORLD_SCALE.playerHeight * 9;
 export const DEFAULT_SHOULDER_OFFSET_M = WORLD_SCALE.playerHeight * SHOULDER_PER_BODY_HEIGHT;
 export const DEFAULT_AIM_RESPONSE = 8;
 
@@ -93,6 +95,7 @@ const DIP_SETTLE_M = WORLD_SCALE.playerHeight * 3e-4;
 
 /** Aiming damps sway to this fraction of its free-walk amount. */
 const AIMED_SWAY_SCALE = 0.15;
+const ZOOM_PER_WHEEL_DELTA = 0.0016;
 
 /** Corners nearer than this to the eye plane are treated as behind the camera. */
 const MIN_VIEW_DEPTH_M = 0.05;
@@ -111,7 +114,7 @@ export class InspectorCamera {
   private readonly navData: NavData;
   private baseFovDeg: number;
   private aimFovDeg: number;
-  private readonly boomLengthM: number;
+  private boomLengthM: number;
   private readonly shoulderOffsetM: number;
   private readonly aimResponse: number;
   private motionScale: number;
@@ -146,6 +149,15 @@ export class InspectorCamera {
     this.aimFovDeg = Math.max(40, fov - 14);
     this.motionScale = Math.min(1, Math.max(0, motionScale));
     this.shakeScale = Math.min(1, Math.max(0, shakeScale));
+  }
+
+  /** Mouse-wheel dolly, using the same multiplicative feel as the Mimic orbit. */
+  adjustZoom(wheelDeltaY: number): void {
+    if (!Number.isFinite(wheelDeltaY) || wheelDeltaY === 0) return;
+    this.boomLengthM = Math.min(
+      MAX_BOOM_LENGTH_M,
+      Math.max(MIN_BOOM_LENGTH_M, this.boomLengthM * (1 + wheelDeltaY * ZOOM_PER_WHEEL_DELTA)),
+    );
   }
 
   /** Blend between hip fire (0) and fully aimed down the sights (1). */

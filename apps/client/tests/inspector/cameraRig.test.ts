@@ -8,6 +8,7 @@ import {
   DEFAULT_BOOM_LENGTH_M,
   DEFAULT_AIM_FOV_DEG,
   InspectorCamera,
+  MAX_BOOM_LENGTH_M,
 } from "../../src/inspector/InspectorCamera";
 import { InspectorController } from "../../src/inspector/InspectorController";
 import { WORLD_SCALE } from "../../src/inspector/navData";
@@ -44,6 +45,21 @@ describe("InspectorCamera rig", () => {
     expect(camera.origin.x).toBeCloseTo(DEFAULT_BOOM_LENGTH_M, 3);
     expect(camera.eye.y).toBeCloseTo(WORLD_SCALE.eyeHeight, 6);
     expect(camera.forward.x).toBeCloseTo(-1, 6);
+  });
+
+  it("starts farther out and lets the Inspector zoom through the shared range", () => {
+    const { rig: camera, controller } = rig(openNavData());
+    expect(DEFAULT_BOOM_LENGTH_M).toBeCloseTo(WORLD_SCALE.playerHeight * 2.4, 8);
+    settle(camera, controller, 1, false);
+    const opening = camera.origin.x;
+
+    camera.adjustZoom(600);
+    settle(camera, controller, 1, false);
+    expect(camera.origin.x).toBeGreaterThan(opening);
+
+    camera.adjustZoom(1_000_000);
+    settle(camera, controller, 1, false);
+    expect(camera.origin.x).toBeCloseTo(MAX_BOOM_LENGTH_M, 6);
   });
 
   it("pulls in when the boom would pass through a wall", () => {

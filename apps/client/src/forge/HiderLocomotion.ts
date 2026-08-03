@@ -71,9 +71,9 @@ export class HiderLocomotion {
   private landed = false;
 
   /**
-   * A climb abort can teleport the controller back to safe footing without
-   * producing a movement delta. The Forge root must still receive that pose on
-   * the next update, especially while W+S cancel one another out.
+   * A climb release changes traversal state before ordinary movement runs. The
+   * Forge root must still receive that pose on the next update, especially
+   * while W+S cancel one another out and gravity is the only motion.
    */
   private traversalRecoveryPending = false;
 

@@ -195,7 +195,7 @@ describe("running the Mimic during the Forge", () => {
     expect(root.y).toBeLessThan(releasedAt);
   });
 
-  it("publishes the safe climb start when S is pressed while W remains held", () => {
+  it("publishes a gravity-driven drop when S is pressed while W remains held", () => {
     const locomotion = new HiderLocomotion(testNavData());
     const start = MANTLE_TO_TABLE.position;
     const root = at(start.x + 0.5, 0, start.z);
@@ -210,12 +210,18 @@ describe("running the Mimic during the Forge", () => {
     );
     expect(root.y).toBeGreaterThan(0.05);
 
-    // W is deliberately still down. Before the fix W+S cancelled movement,
-    // so the internal controller escaped but this visible/published root never
-    // received the safe position and stayed wedged in the corner.
+    const releasedAt = root.y;
+    // W is deliberately still down. W+S cancels horizontal intent, but the
+    // visible/published root must still leave traversal and fall from here.
     locomotion.press("s");
     expect(locomotion.motion.climbState).toBeNull();
     expect(locomotion.update(FRAME_SECONDS, Math.PI / 2, root)).toBe(true);
+    expect(root.y).toBeLessThan(releasedAt);
+    expect(root.y).toBeGreaterThan(0);
+    expect(locomotion.motion.grounded).toBe(false);
+    for (let frame = 0; frame < 180 && !locomotion.motion.grounded; frame += 1) {
+      locomotion.update(FRAME_SECONDS, Math.PI / 2, root);
+    }
     expect(root.y).toBeCloseTo(0, 6);
     expect(locomotion.motion.grounded).toBe(true);
   });

@@ -43,6 +43,8 @@ import { nearestBlockerEntry } from "../inspector/geometry";
 import {
   BOB_AMPLITUDE_M as CAMERA_BOB_AMPLITUDE_M,
   BOB_RATE_RAD_PER_M as CAMERA_BOB_RATE_RAD_PER_M,
+  DEFAULT_BOOM_LENGTH_M,
+  MAX_BOOM_LENGTH_M,
 } from "../inspector/InspectorCamera";
 import { DEFAULT_LOOK_SENSITIVITY } from "../inspector/InspectorInput";
 import { WORLD_SCALE, type AABB, type NavData, type Vec3Like } from "../inspector/navData";
@@ -333,15 +335,13 @@ interface SegmentEdit {
  * a 0.075 m grab handle on a 0.35 m creature.
  */
 const CAMERA_MIN_RADIUS = 0.6 * RIG_TO_WORLD;
-const CAMERA_MAX_RADIUS = 7 * RIG_TO_WORLD;
+const CAMERA_MAX_RADIUS = MAX_BOOM_LENGTH_M;
 /**
- * Where the orbit starts. At a 40 degree field of view this stands the body
- * across about two thirds of the frame height, which is the shot the workspace
- * wants: the Mimic is the subject and the shelf it is hiding among is context.
- * The old 2.4 was a leftover world-metre literal, further out than the wheel's
- * own maximum, so the opening view could not be zoomed back to once left.
+ * Both roles open at the same third-person boom distance. The Mimic still owns
+ * an orbit rather than an over-shoulder rig, but neither role begins with the
+ * character filling the frame and both can pull back to the shared ceiling.
  */
-const CAMERA_START_RADIUS = 2.4 * RIG_TO_WORLD;
+const CAMERA_START_RADIUS = DEFAULT_BOOM_LENGTH_M;
 const CAMERA_MIN_PITCH = -1.2;
 const CAMERA_MAX_PITCH = 1.45;
 

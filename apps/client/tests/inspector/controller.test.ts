@@ -261,7 +261,7 @@ describe("InspectorController climbing", () => {
 
     expect(controller.climbState?.link.to).toBe("solid_top_0");
     expect(controller.climbState?.link.kind).toBe("ladder");
-    walkUntil(controller, { forward: 1 }, (current) => current.climbState === null);
+    walkUntil(controller, { forward: 1, jump: true }, (current) => current.climbState === null);
     expect(controller.position.y).toBeCloseTo(WALL.max.y, 6);
     expect(controller.surfaceId).toBe("solid_top_0");
   });
@@ -336,10 +336,52 @@ describe("InspectorController climbing", () => {
     walk(controller, 20, { forward: 1 });
     expect(controller.position.y).toBeGreaterThan(0);
 
+    const releasedAt = controller.position.y;
     walk(controller, 1, { forward: 0 });
-    expect(controller.position.y).toBeCloseTo(0, 6);
+    expect(controller.position.y).toBeCloseTo(releasedAt, 6);
     expect(controller.climbState).toBeNull();
-    expect(controller.grounded).toBe(true);
+    expect(controller.grounded).toBe(false);
+    walk(controller, 1, { forward: 0 });
+    expect(controller.position.y).toBeLessThan(releasedAt);
+    walkUntil(controller, {}, (current) => current.grounded);
+    expect(controller.position.y).toBeCloseTo(0, 6);
+  });
+
+  it("uses S to drop an Inspector in place even while Forward and Space remain held", () => {
+    const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.78, 0);
+    walk(controller, 1, { forward: 1, jump: true });
+    walkUntil(
+      controller,
+      { forward: 1, jump: true },
+      (current) => (current.climbState?.progress ?? 0) > 0.15,
+    );
+    const releasedAt = controller.position.y;
+
+    walk(controller, 1, { forward: 1, jump: true, disengageClimb: true });
+    expect(controller.climbState).toBeNull();
+    expect(controller.position.y).toBeLessThanOrEqual(releasedAt);
+    expect(controller.position.y).toBeGreaterThan(0);
+    expect(controller.grounded).toBe(false);
+
+    walkUntil(controller, { jump: false }, (current) => current.grounded);
+    expect(controller.position.y).toBeCloseTo(0, 6);
+  });
+
+  it("falls from its current height when an Inspector releases Space mid-climb", () => {
+    const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.78, 0);
+    walk(controller, 1, { forward: 1, jump: true });
+    walkUntil(
+      controller,
+      { forward: 1, jump: true },
+      (current) => (current.climbState?.progress ?? 0) > 0.15,
+    );
+    const releasedAt = controller.position.y;
+
+    walk(controller, 1, { forward: 1, jump: false });
+    expect(controller.climbState).toBeNull();
+    expect(controller.position.y).toBeLessThan(releasedAt);
+    expect(controller.position.y).toBeGreaterThan(0);
+    expect(controller.grounded).toBe(false);
   });
 
   it("steps onto the top when forward is released after clearing the ladder lip", () => {

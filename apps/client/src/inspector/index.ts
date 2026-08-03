@@ -230,6 +230,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
 
       if (this.enabled && input !== null) {
         input.sample(moveInput, dtSeconds);
+        cameraRig.adjustZoom(input.takeZoomDelta());
       } else {
         moveInput.forward = 0;
         moveInput.strafe = 0;

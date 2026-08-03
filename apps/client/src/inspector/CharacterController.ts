@@ -50,6 +50,8 @@ export interface CharacterMoveInput {
   brisk: boolean;
   /** Held rather than edged: a body that lands with the key down hops again. */
   jump: boolean;
+  /** S/back explicitly lets go of a climb, even while Forward is also held. */
+  disengageClimb?: boolean;
 }
 
 export function createMoveInput(): CharacterMoveInput {
@@ -64,6 +66,8 @@ const MIN_AXIS_FRACTION = 1e-6;
 
 /** A climb never resolves instantly, however short the link. */
 const MIN_CLIMB_SECONDS = 0.25;
+/** Ensures a released climber enters the fall sweep instead of ground-snapping. */
+const CLIMB_RELEASE_DOWN_SPEED = WORLD_SCALE.playerHeight * 0.05;
 
 /**
  * Shape of a mantle: the body rises before it travels, so it reads as pulling
@@ -336,6 +340,10 @@ export class CharacterController {
     this.yaw = wrapAngle(this.yaw + input.lookYawDelta);
     this.pitch = clamp(this.pitch + input.lookPitchDelta, -MAX_PITCH_RAD, MAX_PITCH_RAD);
 
+    if (this.climb !== null && (input.disengageClimb === true || input.forward < 0)) {
+      this.disengageClimb();
+    }
+    if (this.climb !== null && this.climb.requiresJump && !input.jump) this.releaseClimbInput();
     if (this.climb !== null) {
       this.advanceClimb(dtSeconds, input);
       return;
@@ -710,31 +718,28 @@ export class CharacterController {
   }
 
   /**
-   * Applies a lost movement intent immediately, without waiting for another
-   * animation frame. Mantles (authored and procedural) remain committed and
-   * finish on their bounded clock; a ladder returns to its known-safe footing,
-   * or top-outs if the body has already cleared the lip.
+   * Lets go immediately. Above the lip the body completes its top-out; below
+   * it, the current position is retained and ordinary gravity takes over.
    */
   releaseClimbInput(): void {
     const climb = this.climb;
-    if (climb === null || climb.link.kind !== "ladder") return;
+    if (climb === null) return;
     if (climb.ascending && climb.progress >= MANTLE_RISE_FRACTION) {
       this.finishClimb(climb);
       return;
     }
-    this.abortClimbToStart(climb);
+    this.dropClimb(climb);
   }
 
   /**
-   * Explicit bail-out used by a Hider pressing S. This never reverses the
-   * route or climbs downward: it returns any ladder/mantle to the safe footing
-   * where that traversal began.
+   * Explicit bail-out used by either role pressing S. This never reverses or
+   * snaps to an endpoint: the body lets go where it is and falls.
    */
   disengageClimb(): boolean {
     const climb = this.climb;
     if (climb === null) return false;
     this.solidClimbRequiresJumpRelease = true;
-    this.abortClimbToStart(climb);
+    this.dropClimb(climb);
     return true;
   }
 
@@ -885,7 +890,7 @@ export class CharacterController {
       position: { x: this.position.x, y: this.position.y, z: this.position.z },
       target: { x: safeTarget.x, y: blocker.max.y, z: safeTarget.z },
     };
-    this.beginClimb(link, true, link.target);
+    this.beginClimb(link, true, link.target, true);
     return true;
   }
 
@@ -944,7 +949,12 @@ export class CharacterController {
     return { x: targetX, z: targetZ };
   }
 
-  private beginClimb(link: ClimbLink, ascending: boolean, end: Vec3Like): void {
+  private beginClimb(
+    link: ClimbLink,
+    ascending: boolean,
+    end: Vec3Like,
+    requiresJump = false,
+  ): void {
     const dx = end.x - this.position.x;
     const dy = end.y - this.position.y;
     const dz = end.z - this.position.z;
@@ -966,13 +976,12 @@ export class CharacterController {
     this.climb = {
       link,
       ascending,
+      requiresJump,
       progress: 0,
       durationSeconds: Math.max(MIN_CLIMB_SECONDS, distance / speed),
       startX: this.position.x,
       startY: this.position.y,
       startZ: this.position.z,
-      startSurfaceId: this.surfaceId,
-      startGrounded: this.grounded,
       endX: end.x,
       endY: end.y,
       endZ: end.z,
@@ -996,9 +1005,7 @@ export class CharacterController {
       if (climb.ascending && climb.progress >= MANTLE_RISE_FRACTION) {
         this.finishClimb(climb);
       } else {
-        // Let go cleanly at the last known-safe footing instead of leaving the
-        // body in an interpolated point that may overlap a shelf corner.
-        this.abortClimbToStart(climb);
+        this.dropClimb(climb);
       }
       return;
     }
@@ -1038,15 +1045,15 @@ export class CharacterController {
     this.climb = null;
   }
 
-  /** Returns an interrupted/unsafe climb to its last collision-safe footing. */
-  private abortClimbToStart(climb: MutableClimb): void {
-    this.position.x = climb.startX;
-    this.position.y = climb.startY;
-    this.position.z = climb.startZ;
+  /** Releases a traversal in place and hands vertical motion back to gravity. */
+  private dropClimb(climb: MutableClimb): void {
     this.climb = null;
-    this.surfaceId = climb.startSurfaceId;
-    this.grounded = climb.startGrounded;
-    this.verticalVelocity = 0;
+    this.climbLatch = climb.link;
+    this.surfaceId = null;
+    this.grounded = false;
+    this.surfaceLocked = false;
+    this.solidClimbRequiresJumpRelease = true;
+    this.verticalVelocity = -CLIMB_RELEASE_DOWN_SPEED;
     this.velocityX = 0;
     this.velocityZ = 0;
     this.speed = 0;
@@ -1071,13 +1078,12 @@ function horizontalDistanceSq(a: { x: number; z: number }, b: Vec3Like): number 
 interface MutableClimb {
   readonly link: ClimbLink;
   readonly ascending: boolean;
+  readonly requiresJump: boolean;
   progress: number;
   readonly durationSeconds: number;
   readonly startX: number;
   readonly startY: number;
   readonly startZ: number;
-  readonly startSurfaceId: string | null;
-  readonly startGrounded: boolean;
   readonly endX: number;
   readonly endY: number;
   readonly endZ: number;
