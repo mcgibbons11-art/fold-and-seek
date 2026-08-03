@@ -320,6 +320,8 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
         cameraRig.eye.z,
         controller.yaw,
         controller.pitch,
+        controller.airborne,
+        controller.climbState !== null,
       );
     },
 

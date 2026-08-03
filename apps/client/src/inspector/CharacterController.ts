@@ -692,6 +692,22 @@ export class CharacterController {
     return top;
   }
 
+  /**
+   * Applies a lost movement intent immediately, without waiting for another
+   * animation frame. Mantles (authored and procedural) remain committed and
+   * finish on their bounded clock; a ladder is released at its exact current
+   * point, or top-outs if the body has already cleared the lip.
+   */
+  releaseClimbInput(): void {
+    const climb = this.climb;
+    if (climb === null || climb.link.kind !== "ladder") return;
+    if (climb.ascending && climb.progress >= MANTLE_RISE_FRACTION) {
+      this.finishClimb(climb);
+      return;
+    }
+    this.cancelClimb();
+  }
+
   /** A flat blocker top at the body's current standing height, if one exists. */
   private supportingBlockerTopAt(x: number, z: number): number | null {
     let top: number | null = null;
@@ -883,10 +899,7 @@ export class CharacterController {
         // Let go cleanly. Gravity takes over on the following frame from the
         // exact point reached instead of an invisible climb state pinning the
         // body in mid-air until Forward happens to be pressed again.
-        this.climb = null;
-        this.surfaceId = null;
-        this.verticalVelocity = 0;
-        this.lastResolution = "idle";
+        this.cancelClimb();
       }
       return;
     }
@@ -919,6 +932,15 @@ export class CharacterController {
     this.climbLatch = climb.link;
     if (climb.link.to.startsWith("solid_top_")) this.solidClimbRequiresJumpRelease = true;
     this.climb = null;
+  }
+
+  private cancelClimb(): void {
+    this.climb = null;
+    this.surfaceId = null;
+    this.grounded = false;
+    this.verticalVelocity = 0;
+    this.speed = 0;
+    this.lastResolution = "idle";
   }
 
   /** True once the player has stepped clear of both ends of the link. */

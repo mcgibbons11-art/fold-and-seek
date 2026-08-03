@@ -457,12 +457,17 @@ describe("running the Mimic about the room", () => {
     const rotation = new THREE.Quaternion(...moving.root.rotation);
     const authoredFace = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation).setY(0).normalize();
 
+    // This is the direction accumulated over a route that can slide along room
+    // collision. The live per-frame achieved-velocity contract is >= .95 in
+    // hiderLocomotion.test; the final face only needs to agree with this curved
+    // path as a whole.
     expect(authoredFace.dot(travel)).toBeGreaterThan(0.9);
     const diagnostic = (walker.canvas as { dataset: Record<string, string> }).dataset;
+    expect(diagnostic["hiderVisualId"]).toBe("mimic-hider-forge-v2");
     expect(diagnostic["hiderPosition"]?.split(",").map(Number)).toEqual(moving.root.position);
     expect(
       Math.cos(Number(diagnostic["hiderFacingYaw"]) - Number(diagnostic["hiderTravelYaw"])),
-    ).toBeGreaterThan(0.9);
+    ).toBeGreaterThanOrEqual(0.95);
     expect(Number(diagnostic["hiderSpeed"])).toBeGreaterThan(0);
   });
 
@@ -480,7 +485,7 @@ describe("running the Mimic about the room", () => {
     const rotation = new THREE.Quaternion(...moving.root.rotation);
     const authoredFace = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation).setY(0).normalize();
 
-    expect(authoredFace.dot(travel)).toBeGreaterThan(0.9);
+    expect(authoredFace.dot(travel)).toBeGreaterThanOrEqual(0.95);
   });
 
   it("stops where the keys were let go and stays there", () => {

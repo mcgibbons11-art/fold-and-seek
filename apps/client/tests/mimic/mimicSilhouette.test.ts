@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { applyDisguiseStateToPose, createStarterArrangement } from "../../src/mimic/disguiseState";
 import { createPoseState } from "../../src/mimic/ikSolver";
 import { SEGMENT_BONES, type SegmentBoneName } from "../../src/mimic/rig";
-import { MimicVisual } from "../../src/mimic/visual/MimicVisual";
+import { MIMIC_VISUAL_ID, MimicVisual } from "../../src/mimic/visual/MimicVisual";
 
 /**
  * The Mimic is the object the whole game is about, and a player has to be able
@@ -28,6 +28,11 @@ visual.applyForms(pose);
 visual.applyPanels(state.panels);
 visual.applyPose(pose);
 visual.root.updateMatrixWorld(true);
+
+it("uses the versioned reshapeable authored Hider identity", () => {
+  expect(visual.root.userData["visualId"]).toBe(MIMIC_VISUAL_ID);
+  expect(MIMIC_VISUAL_ID).toBe("mimic-hider-forge-v2");
+});
 
 /** World bounding box of one shell, which is what the silhouette is made of. */
 function shell(bone: SegmentBoneName): THREE.Box3 {

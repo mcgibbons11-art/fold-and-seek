@@ -240,14 +240,25 @@ describe("DisguiseTheatre", () => {
     const theatre = new DisguiseTheatre(scene, QUALITY);
     theatre.sync([publicDisguise("obj_a", createBotDisguisePayload(0))], null);
     const body = scene.getObjectByName("disguise-obj_a") as THREE.Object3D;
+    const floorY = new THREE.Box3().setFromObject(body).min.y;
 
     expect(theatre.playCatch("obj_a")).toBe(true);
+    // Lethal authority removes the target before a single presentation frame;
+    // the hit reaction cannot be shot a second time.
+    expect(theatre.proxies()).toHaveLength(0);
     theatre.update(80);
     expect(Math.abs(body.rotation.x) + Math.abs(body.rotation.z)).toBeGreaterThan(0);
 
     theatre.update(2_000);
     expect(Math.abs(body.rotation.z)).toBeGreaterThan(1);
     expect(theatre.proxies()).toHaveLength(0);
+    expect(new THREE.Box3().setFromObject(body).min.y).toBeGreaterThanOrEqual(floorY - 0.020001);
+
+    const frozenPosition = body.position.clone();
+    const frozenRotation = body.quaternion.clone();
+    theatre.update(5_000);
+    expect(body.position.equals(frozenPosition)).toBe(true);
+    expect(body.quaternion.equals(frozenRotation)).toBe(true);
 
     theatre.dispose();
   });

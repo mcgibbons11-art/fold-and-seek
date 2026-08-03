@@ -103,6 +103,32 @@ function settle(locomotion: HiderLocomotion, root: MutableVec3, seconds = 3): vo
 }
 
 describe("running the Mimic during the Forge", () => {
+  it("faces achieved travel for cardinal and diagonal WASD intent", () => {
+    const cases = [
+      ["w"], ["s"], ["a"], ["d"],
+      ["w", "a"], ["w", "d"], ["s", "a"], ["s", "d"],
+    ] as const;
+
+    for (const keys of cases) {
+      const locomotion = new HiderLocomotion(openNavData());
+      const root = at(0, 0, 0);
+      for (const key of keys) locomotion.press(key);
+      for (let frame = 0; frame < 20; frame += 1) {
+        const before = { ...root };
+        locomotion.update(FRAME_SECONDS, 0, root);
+        const dx = root.x - before.x;
+        const dz = root.z - before.z;
+        const speed = Math.hypot(dx, dz) / FRAME_SECONDS;
+        if (speed <= 0.1) continue;
+        const travelX = dx / Math.hypot(dx, dz);
+        const travelZ = dz / Math.hypot(dx, dz);
+        const facingX = -Math.sin(locomotion.sample.travelYaw);
+        const facingZ = -Math.cos(locomotion.sample.travelYaw);
+        expect(facingX * travelX + facingZ * travelZ, keys.join("+")).toBeGreaterThanOrEqual(0.95);
+      }
+    }
+  });
+
   it("covers the derived run speed over open floor", () => {
     const locomotion = new HiderLocomotion(openNavData());
     const root = at(0, 0, 0);

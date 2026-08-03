@@ -57,8 +57,17 @@ export class MixamoMotion {
   private readonly from = new Quaternion();
   private readonly to = new Quaternion();
   private readonly sampled = new Quaternion();
+  private readonly reference = new Quaternion();
+  private readonly referenceInverse = new Quaternion();
   private readonly mixed = new Quaternion();
   private readonly delta = new Quaternion();
+
+  /** True when sampling this layer can make no visible joint change. */
+  get neutral(): boolean {
+    if (this.active <= 0) return true;
+    if (this.action !== null) return false;
+    return this.run <= 0 && this.airborne <= 0 && this.climbing <= 0;
+  }
 
   reset(): void {
     this.elapsedSeconds = 0;
@@ -168,7 +177,7 @@ export class MixamoMotion {
     const clip = MIXAMO_CLIPS[name];
     const last = clip.frames.length - 1;
     if (last <= 0) {
-      readQuaternion(clip.frames[0]!, boneSlot, output);
+      output.identity();
       return;
     }
 
@@ -183,6 +192,16 @@ export class MixamoMotion {
     readQuaternion(clip.frames[firstFrame]!, boneSlot, this.from);
     readQuaternion(clip.frames[secondFrame]!, boneSlot, this.to);
     output.slerpQuaternions(this.from, this.to, frame - firstFrame);
+
+    // Mixamo's first keyed pose is not the Mimic's upright rest pose. Applying
+    // it as an absolute delta is what produced the old permanent crossed-leg /
+    // raised-arm silhouette. Rebase every clip to its own authenticated frame 0
+    // before it reaches the Mimic: frame 0 becomes identity, and every later
+    // frame is the motion away from that pose. The result is then projected
+    // through the Mimic's own joint limits by `apply` above.
+    readQuaternion(clip.frames[0]!, boneSlot, this.reference);
+    this.referenceInverse.copy(this.reference).invert();
+    output.multiply(this.referenceInverse).normalize();
   }
 }
 

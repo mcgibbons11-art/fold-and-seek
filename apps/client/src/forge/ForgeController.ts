@@ -67,7 +67,7 @@ import {
   type SegmentProfileId,
 } from "../mimic/segmentForm";
 import { createPuckGeometry } from "../mimic/visual/mimicGeometry";
-import { MIMIC_BODY_TAG, MimicVisual } from "../mimic/visual/MimicVisual";
+import { MIMIC_BODY_TAG, MIMIC_VISUAL_ID, MimicVisual } from "../mimic/visual/MimicVisual";
 import {
   MIMIC_LEGAL_SWATCHES,
   swatchById,
@@ -953,6 +953,7 @@ export class ForgeController {
   private writeMovementDiagnostics(): void {
     const dataset = (this.canvas as HTMLCanvasElement & { dataset?: DOMStringMap }).dataset;
     if (dataset === undefined) return;
+    dataset["hiderVisualId"] = MIMIC_VISUAL_ID;
     const locomotion = this.locomotion;
     if (locomotion === null) {
       delete dataset["hiderPosition"];

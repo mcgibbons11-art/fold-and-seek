@@ -12,6 +12,8 @@ export interface CameraSample {
   readonly z: number;
   readonly yaw: number;
   readonly pitch: number;
+  readonly airborne: boolean;
+  readonly climbing: boolean;
 }
 
 /** A stall longer than this many intervals is dropped rather than burst-sent. */
@@ -39,6 +41,8 @@ export class CameraSamplePublisher {
     z: number,
     yaw: number,
     pitch: number,
+    airborne: boolean,
+    climbing: boolean,
   ): void {
     if (!Number.isFinite(this.intervalMs)) return;
     this.accumulatorMs += dtMs;
@@ -48,6 +52,6 @@ export class CameraSamplePublisher {
     } else {
       this.accumulatorMs -= this.intervalMs;
     }
-    this.publish({ atMs, x, y, z, yaw, pitch });
+    this.publish({ atMs, x, y, z, yaw, pitch, airborne, climbing });
   }
 }

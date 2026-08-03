@@ -291,11 +291,25 @@ describe("envelope validation", () => {
       v: PORTALS_PROTOCOL_VERSION,
       t: "cam",
       r: "ABCD",
-      sample: { atMs: 125, x: 1, y: 0.3, z: -2, yaw: 0.5, pitch: -0.1 },
+      sample: {
+        atMs: 125,
+        x: 1,
+        y: 0.3,
+        z: -2,
+        yaw: 0.5,
+        pitch: -0.1,
+        airborne: true,
+        climbing: false,
+      },
     } as const;
     expect(parseEnvelope(envelope)).toEqual(envelope);
     expect(parseEnvelope({ ...envelope, sample: null })).not.toBeNull();
     expect(parseEnvelope({ ...envelope, sample: { ...envelope.sample, yaw: Infinity } })).toBeNull();
+    const missingTraversal: Partial<typeof envelope.sample> = { ...envelope.sample };
+    delete missingTraversal.airborne;
+    expect(parseEnvelope({ ...envelope, sample: missingTraversal })).toBeNull();
+    // The added traversal state stays tiny relative to Portals' 8 KB/send cap.
+    expect(jsonByteLength(envelope)).toBeLessThan(256);
   });
 });
 

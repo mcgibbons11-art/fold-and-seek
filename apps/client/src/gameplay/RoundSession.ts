@@ -589,14 +589,19 @@ export class RoundSession {
         this.captionAtObject("Object reaction", event.objectId);
         break;
 
-      case "accusation_resolved":
+      case "accusation_resolved": {
+        const shooter = this.state().roster.find(
+          (player) => player.publicPlayerId === event.inspectorPublicId,
+        );
+        const remoteInspector =
+          shooter === undefined ? undefined : this.remoteInspectors.get(shooter.seatId);
+        if (event.inspectorPublicId !== this.state().self.publicPlayerId) {
+          remoteInspector?.fire(event.seq);
+        }
         if (this.spatialAudio === null) {
           this.audio.play(event.correct ? CATCH_SOUND : WRONG_ACCUSATION_SOUND);
         } else {
-          const shooter = this.state().roster.find(
-            (player) => player.publicPlayerId === event.inspectorPublicId,
-          );
-          const remoteEye = shooter === undefined ? null : this.remoteInspectors.get(shooter.seatId)?.eye ?? null;
+          const remoteEye = remoteInspector?.eye ?? null;
           if (
             event.inspectorPublicId !== this.state().self.publicPlayerId &&
             remoteEye !== null
@@ -619,6 +624,7 @@ export class RoundSession {
           this.inspector?.handleAccusationResolved(event.correct);
         }
         break;
+      }
 
       case "close_pass":
         if (this.ownsDisguise(event.publicObjectId)) {

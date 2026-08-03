@@ -109,23 +109,33 @@ describe("CameraSamplePublisher", () => {
     const publisher = new CameraSamplePublisher(10, (sample) => samples.push(sample));
 
     for (let frame = 0; frame < 60; frame += 1) {
-      publisher.update(16, frame * 16, 1, 2, 3, 0.5, -0.25);
+      publisher.update(16, frame * 16, 1, 2, 3, 0.5, -0.25, true, false);
     }
 
     expect(samples.length).toBeGreaterThanOrEqual(9);
     expect(samples.length).toBeLessThanOrEqual(10);
-    expect(samples[0]).toMatchObject({ x: 1, y: 2, z: 3, yaw: 0.5, pitch: -0.25 });
+    expect(samples[0]).toMatchObject({
+      x: 1,
+      y: 2,
+      z: 3,
+      yaw: 0.5,
+      pitch: -0.25,
+      airborne: true,
+      climbing: false,
+    });
   });
 
   it("publishes nothing at zero hertz and drops a long stall rather than bursting", () => {
     const silent: CameraSample[] = [];
-    new CameraSamplePublisher(0, (sample) => silent.push(sample)).update(1000, 0, 0, 0, 0, 0, 0);
+    new CameraSamplePublisher(0, (sample) => silent.push(sample)).update(
+      1000, 0, 0, 0, 0, 0, 0, false, false,
+    );
     expect(silent).toHaveLength(0);
 
     const stalled: CameraSample[] = [];
     const publisher = new CameraSamplePublisher(10, (sample) => stalled.push(sample));
-    publisher.update(5_000, 5_000, 0, 0, 0, 0, 0);
-    publisher.update(16, 5_016, 0, 0, 0, 0, 0);
+    publisher.update(5_000, 5_000, 0, 0, 0, 0, 0, false, false);
+    publisher.update(16, 5_016, 0, 0, 0, 0, 0, false, false);
     expect(stalled).toHaveLength(1);
   });
 });

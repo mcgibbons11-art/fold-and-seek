@@ -125,6 +125,9 @@ interface DeathPlayback {
   /** Bottom-centre hinge: the body collapses onto the floor instead of orbiting. */
   readonly pivot: THREE.Vector3;
   readonly heightM: number;
+  readonly floorY: number;
+  collapseStarted: boolean;
+  frozen: boolean;
 }
 
 /** Fast impact, then a weightier mechanical collapse. */
@@ -149,6 +152,7 @@ const scratchCentre = new THREE.Vector3();
 const scratchDeathQuaternion = new THREE.Quaternion();
 const scratchDeathEuler = new THREE.Euler();
 const scratchDeathPivot = new THREE.Vector3();
+const scratchDeathBounds = new THREE.Box3();
 
 /**
  * A precompile walks the same render list a frame does, culling included, so a
@@ -194,7 +198,11 @@ function applyDeathPose(root: THREE.Object3D, death: DeathPlayback): void {
   const elapsed = Math.min(totalMs, death.elapsedMs);
   const impactT = Math.min(1, elapsed / CATCH_IMPACT_MS);
   const fallT = Math.max(0, Math.min(1, (elapsed - CATCH_IMPACT_MS) / CATCH_DEATH_MS));
-  const impact = Math.sin(Math.PI * impactT) * (1 - fallT);
+  // Impact exists only before collapse. The Mixamo hit clip supplies the joint
+  // reaction in this window; after it, the authored body is restored and the
+  // root collapse becomes the sole owner of the fall. Never stack the full
+  // Mixamo death animation under an 85-degree root roll.
+  const impact = fallT === 0 ? Math.sin(Math.PI * impactT) : 0;
   const easedFall = 1 - Math.pow(1 - fallT, 3);
   const roll = death.direction * (impact * 0.18 + easedFall * Math.PI * 0.47);
   const pitch = -impact * 0.12 - easedFall * 0.16;
@@ -206,6 +214,11 @@ function applyDeathPose(root: THREE.Object3D, death: DeathPlayback): void {
     .sub(scratchDeathPivot.copy(death.pivot).applyQuaternion(scratchDeathQuaternion));
   // The warrant strike pops the shell for one sharp frame before gravity wins.
   root.position.y += impact * death.heightM * 0.09;
+
+  root.updateWorldMatrix(true, true);
+  scratchDeathBounds.setFromObject(root);
+  const penetration = death.floorY - scratchDeathBounds.min.y;
+  if (penetration > 0.02) root.position.y += penetration - 0.02;
 }
 
 interface Actor {
@@ -455,7 +468,7 @@ export class DisguiseTheatre {
     if (actor.death !== null) return;
     actor.taunt = null;
     actor.motion.reset();
-    actor.motion.playAction("death");
+    actor.motion.playAction("hit");
     restPose(actor.visual.root);
     const centre = actor.bounds.getCenter(new THREE.Vector3());
     const direction = [...actor.publicObjectId].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 2 === 0 ? 1 : -1;
@@ -464,6 +477,9 @@ export class DisguiseTheatre {
       direction,
       pivot: new THREE.Vector3(centre.x, actor.bounds.min.y, centre.z),
       heightM: Math.max(FALLBACK_BODY_HEIGHT_M, actor.bounds.max.y - actor.bounds.min.y),
+      floorY: actor.bounds.min.y,
+      collapseStarted: false,
+      frozen: false,
     };
     // A corpse stays visible but is no longer a legal reticle target.
     this.castRevision += 1;
@@ -486,11 +502,22 @@ export class DisguiseTheatre {
     for (const actor of this.actors.values()) {
       const death = actor.death;
       if (death !== null) {
-        death.elapsedMs += dtMs;
-        actor.motion.update(dtMs / 1_000, STILL_MIMIC, 0);
-        actor.visual.applyPose(actor.motion.pose(actor.pose));
-        actor.merged.refresh();
+        if (death.frozen) continue;
+        death.elapsedMs = Math.min(CATCH_IMPACT_MS + CATCH_DEATH_MS, death.elapsedMs + dtMs);
+        if (!death.collapseStarted && death.elapsedMs < CATCH_IMPACT_MS) {
+          actor.motion.update(dtMs / 1_000, STILL_MIMIC, 0);
+          actor.visual.applyPose(actor.motion.pose(actor.pose));
+          actor.merged.refresh();
+        } else if (!death.collapseStarted) {
+          // Hand the body from the short joint-level impact to one clean root
+          // collapse at the exact phase boundary.
+          death.collapseStarted = true;
+          actor.motion.reset();
+          actor.visual.applyPose(actor.pose);
+          actor.merged.refresh();
+        }
         applyDeathPose(actor.visual.root, death);
+        death.frozen = death.elapsedMs >= CATCH_IMPACT_MS + CATCH_DEATH_MS;
         continue;
       }
       const taunt = actor.taunt;

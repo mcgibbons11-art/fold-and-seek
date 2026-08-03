@@ -32,6 +32,15 @@ import {
 import { MimicMaterialPool, PORCELAIN_SWATCH_ID } from "./materialSwatches";
 
 /**
+ * Versioned identity of the reshapeable runtime interpretation of the authored
+ * `assets-source/blender/mimic-hider.blend` character. A fixed SkinnedMesh GLB
+ * cannot preserve arbitrary Forge segment forms, panels and paint, so the game
+ * builds the same shell language on the live rig instead of silently falling
+ * back to an unrelated legacy character.
+ */
+export const MIMIC_VISUAL_ID = "mimic-hider-forge-v2";
+
+/**
  * The renderable Mimic (bible §7.2, §24.2). One shell per rig segment, a dark
  * bellows at every joint, eight panels on the rig's sockets, and a head pod with
  * two eyes behind a shutter.
@@ -260,6 +269,7 @@ export class MimicVisual {
     this.root = new THREE.Group();
     this.root.name = "mimic";
     this.root.userData[MIMIC_BODY_TAG] = true;
+    this.root.userData["visualId"] = MIMIC_VISUAL_ID;
 
     this.pool = pool ?? this.bag.add(new MimicMaterialPool());
     const graphite = this.pool.graphite;

@@ -258,9 +258,13 @@ export class InspectorBody {
     this.avatar =
       !AUTHORED_INSPECTOR_ENABLED || import.meta.env.MODE === "test"
         ? null
-        : new InspectorAvatar(this.root, this.hand, () => {
-            this.bob.visible = false;
+        : new InspectorAvatar(this.root, this.hand, (loaded) => {
+            // Do not flash the historical primitive character while the GLB is
+            // in flight. It is a recovery presentation, shown only when the
+            // authored asset has conclusively failed to load.
+            this.bob.visible = !loaded;
           });
+    if (this.avatar !== null) this.bob.visible = false;
     this.authoredReady = this.avatar?.load() ?? Promise.resolve(false);
   }
 
@@ -328,6 +332,16 @@ export class InspectorBody {
   /** Plays the authored trigger performance alongside the warrant-gun recoil. */
   fire(): void {
     this.avatar?.fire();
+  }
+
+  /** Plays a non-terminal full-body warrant impact reaction. */
+  hit(): void {
+    this.avatar?.hit();
+  }
+
+  /** Plays and retains the authored terminal pose. */
+  death(): void {
+    this.avatar?.death();
   }
 
   /**

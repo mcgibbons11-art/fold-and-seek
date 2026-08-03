@@ -490,16 +490,40 @@ describe("rooms over one channel", () => {
     bex.adapter.enterRoom(opened.code);
     session.advance(2);
 
-    const received: Array<{ seatId: string; x: number | null }> = [];
+    const received: Array<{
+      seatId: string;
+      x: number | null;
+      airborne: boolean | null;
+      climbing: boolean | null;
+    }> = [];
     bex.adapter.onCameraSample((seatId, sample) => {
-      received.push({ seatId, x: sample?.x ?? null });
+      received.push({
+        seatId,
+        x: sample?.x ?? null,
+        airborne: sample?.airborne ?? null,
+        climbing: sample?.climbing ?? null,
+      });
     });
-    ada.adapter.sendCameraSample({ atMs: 100, x: 1.25, y: 0.3, z: -2, yaw: 0.4, pitch: 0.1 });
+    ada.adapter.sendCameraSample({
+      atMs: 100,
+      x: 1.25,
+      y: 0.3,
+      z: -2,
+      yaw: 0.4,
+      pitch: 0.1,
+      airborne: true,
+      climbing: false,
+    });
     ada.adapter.sendCameraSample(null);
 
     expect(received).toEqual([
-      { seatId: ada.adapter.getSelfId(), x: 1.25 },
-      { seatId: ada.adapter.getSelfId(), x: null },
+      {
+        seatId: ada.adapter.getSelfId(),
+        x: 1.25,
+        airborne: true,
+        climbing: false,
+      },
+      { seatId: ada.adapter.getSelfId(), x: null, airborne: null, climbing: null },
     ]);
     expect(session.relay.violations).toEqual([]);
     session.dispose();

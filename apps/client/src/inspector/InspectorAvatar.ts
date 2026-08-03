@@ -4,14 +4,26 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import type { InspectorBodyFrame } from "./InspectorBody";
 import { WORLD_SCALE } from "./navData";
 
-const ASSET_PATH = "assets/characters/inspector-curator.glb";
+export const INSPECTOR_ASSET_SHA256 =
+  "426c2d856051bf3b45c3e018121f994dc40ceacf8d0691693f5a389dcfcff991";
+export const INSPECTOR_ASSET_URL =
+  `assets/characters/inspector-curator.glb?v=${INSPECTOR_ASSET_SHA256.slice(0, 16)}`;
 /** Blender master is just over two metres from boot sole to head loop. */
 const AUTHORED_HEIGHT_M = 2.05;
 const CROSS_FADE_SECONDS = 0.1;
 const FIRE_FADE_SECONDS = 0.045;
+const HIT_FADE_SECONDS = 0.065;
+/** Maximum correction away from the authored pose for each solved joint. */
+const ARM_IK_LIMIT_RAD = 0.9;
+const FOREARM_IK_LIMIT_RAD = 1.35;
 
 type BaseAction = "rifle-idle" | "run" | "jump" | "climb";
 type InspectorAction = BaseAction | "rifle-fire" | "hit" | "death";
+export type InspectorReaction = "none" | "hit" | "death";
+
+export function inspectorUsesGunIk(reaction: InspectorReaction): boolean {
+  return reaction === "none";
+}
 
 /** Locomotion choice is kept pure so the gameplay thresholds stay testable. */
 export function inspectorActionForFrame(frame: InspectorBodyFrame): BaseAction {
@@ -32,7 +44,7 @@ export function inspectorActionForFrame(frame: InspectorBodyFrame): BaseAction {
 export class InspectorAvatar {
   private readonly parent: THREE.Object3D;
   private readonly gunHand: THREE.Object3D;
-  private readonly onReady: () => void;
+  private readonly onSettled: (loaded: boolean) => void;
   private readonly loader = new GLTFLoader();
   private readonly actions = new Map<string, THREE.AnimationAction>();
   private readonly geometries = new Set<THREE.BufferGeometry>();
@@ -42,6 +54,7 @@ export class InspectorAvatar {
   private mixer: THREE.AnimationMixer | null = null;
   private currentAction: InspectorAction | null = null;
   private oneShotSeconds = 0;
+  private reaction: InspectorReaction = "none";
   private lastFrame: InspectorBodyFrame | null = null;
   private rightArm: THREE.Bone | null = null;
   private rightForeArm: THREE.Bone | null = null;
@@ -60,16 +73,19 @@ export class InspectorAvatar {
   private readonly parentWorldInverse = new THREE.Quaternion();
   private readonly localDelta = new THREE.Quaternion();
   private readonly identity = new THREE.Quaternion();
+  private readonly correction = new THREE.Quaternion();
+  private readonly armAuthoredRotation = new THREE.Quaternion();
+  private readonly foreArmAuthoredRotation = new THREE.Quaternion();
 
-  constructor(parent: THREE.Object3D, gunHand: THREE.Object3D, onReady: () => void) {
+  constructor(parent: THREE.Object3D, gunHand: THREE.Object3D, onSettled: (loaded: boolean) => void) {
     this.parent = parent;
     this.gunHand = gunHand;
-    this.onReady = onReady;
+    this.onSettled = onSettled;
   }
 
   async load(): Promise<boolean> {
     try {
-      const url = new URL(ASSET_PATH, document.baseURI).href;
+      const url = new URL(INSPECTOR_ASSET_URL, document.baseURI).href;
       const gltf = await this.loader.loadAsync(url);
       if (this.disposed) {
         disposeTree(gltf.scene);
@@ -117,11 +133,12 @@ export class InspectorAvatar {
       }
 
       this.play("rifle-idle", 0);
-      this.onReady();
+      this.onSettled(true);
       return true;
     } catch (error) {
       if (!this.disposed) console.warn("[inspector] authored avatar unavailable; using fallback", error);
       this.disposeModel();
+      this.onSettled(false);
       return false;
     }
   }
@@ -131,9 +148,17 @@ export class InspectorAvatar {
     const mixer = this.mixer;
     if (mixer === null) return;
 
+    if (this.reaction === "death") {
+      mixer.update(Math.min(dtSeconds, 0.1));
+      return;
+    }
+
     if (this.oneShotSeconds > 0) {
       this.oneShotSeconds = Math.max(0, this.oneShotSeconds - dtSeconds);
-      if (this.oneShotSeconds === 0) this.play(inspectorActionForFrame(frame));
+      if (this.oneShotSeconds === 0) {
+        this.reaction = "none";
+        this.play(inspectorActionForFrame(frame));
+      }
     } else {
       this.play(inspectorActionForFrame(frame));
     }
@@ -144,14 +169,33 @@ export class InspectorAvatar {
       run.timeScale = THREE.MathUtils.lerp(0.78, 1.42, fraction);
     }
     mixer.update(Math.min(dtSeconds, 0.1));
-    this.solveGunArm();
+    // Hit and death are full-body performances. Solving the arm back onto the
+    // live gun during either one destroys the authored reaction silhouette.
+    if (inspectorUsesGunIk(this.reaction)) this.solveGunArm();
   }
 
   fire(): void {
+    if (this.reaction !== "none") return;
     const action = this.actions.get("rifle-fire");
     if (action === undefined) return;
     this.play("rifle-fire", FIRE_FADE_SECONDS, true);
     this.oneShotSeconds = Math.max(0.12, action.getClip().duration - FIRE_FADE_SECONDS);
+  }
+
+  hit(): void {
+    if (this.reaction === "death") return;
+    const action = this.actions.get("hit");
+    if (action === undefined) return;
+    this.reaction = "hit";
+    this.play("hit", HIT_FADE_SECONDS, true);
+    this.oneShotSeconds = Math.max(0.12, action.getClip().duration - HIT_FADE_SECONDS);
+  }
+
+  death(): void {
+    if (this.reaction === "death" || !this.actions.has("death")) return;
+    this.reaction = "death";
+    this.oneShotSeconds = 0;
+    this.play("death", HIT_FADE_SECONDS, true);
   }
 
   setCastShadow(enabled: boolean): void {
@@ -197,14 +241,21 @@ export class InspectorAvatar {
     const hand = this.rightHand;
     if (model === null || arm === null || foreArm === null || hand === null) return;
     this.gunHand.getWorldPosition(this.target);
+    this.armAuthoredRotation.copy(arm.quaternion);
+    this.foreArmAuthoredRotation.copy(foreArm.quaternion);
 
     for (let pass = 0; pass < 3; pass += 1) {
-      this.rotateJointToward(foreArm, hand, this.target);
-      this.rotateJointToward(arm, hand, this.target);
+      this.rotateJointToward(foreArm, hand, this.target, this.foreArmAuthoredRotation);
+      this.rotateJointToward(arm, hand, this.target, this.armAuthoredRotation);
     }
   }
 
-  private rotateJointToward(joint: THREE.Bone, effector: THREE.Bone, target: THREE.Vector3): void {
+  private rotateJointToward(
+    joint: THREE.Bone,
+    effector: THREE.Bone,
+    target: THREE.Vector3,
+    authoredRotation: THREE.Quaternion,
+  ): void {
     joint.updateWorldMatrix(true, true);
     joint.getWorldPosition(this.jointPoint);
     effector.getWorldPosition(this.handPoint);
@@ -233,6 +284,16 @@ export class InspectorAvatar {
       .multiply(this.limitedDelta)
       .multiply(this.parentWorld);
     joint.quaternion.premultiply(this.localDelta).normalize();
+    // CCD has no anatomical knowledge. Bound its correction relative to the
+    // mixer-authored joint so an unreachable grip cannot turn the elbow inside
+    // out or leave a corrupt pose latched across frames.
+    this.correction.copy(authoredRotation).invert().multiply(joint.quaternion);
+    const limit = joint === this.rightForeArm ? FOREARM_IK_LIMIT_RAD : ARM_IK_LIMIT_RAD;
+    const correctionAngle = this.identity.angleTo(this.correction);
+    if (correctionAngle > limit) {
+      this.correction.slerpQuaternions(this.identity, this.correction, limit / correctionAngle);
+      joint.quaternion.copy(authoredRotation).multiply(this.correction).normalize();
+    }
     joint.updateWorldMatrix(false, true);
   }
 
@@ -247,6 +308,8 @@ export class InspectorAvatar {
     this.mixer = null;
     this.model = null;
     this.currentAction = null;
+    this.oneShotSeconds = 0;
+    this.reaction = "none";
     this.rightArm = null;
     this.rightForeArm = null;
     this.rightHand = null;

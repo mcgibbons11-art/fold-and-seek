@@ -275,6 +275,11 @@ export class LocomotionRig {
     return this.live;
   }
 
+  /** Distance-driven phase shared by the fallback gait and Mixamo sampler. */
+  get stridePhaseRadians(): number {
+    return this.stridePhase;
+  }
+
   /**
    * True while every channel is exactly zero, so the body stands precisely as
    * the player posed it. A caller that needs that — a locked disguise, or one
@@ -298,7 +303,8 @@ export class LocomotionRig {
       a.torsoPitch === 0 &&
       a.headTwist === 0 &&
       a.headPitch === 0 &&
-      a.sinkM === 0
+      a.sinkM === 0 &&
+      this.mixamo.neutral
     );
   }
 
@@ -493,6 +499,10 @@ export class LocomotionRig {
     overlay.rootPosition.copy(authored.rootPosition);
     overlay.rootPosition.y -= this.live.sinkM;
 
+    // Mimic limb joints have one animation owner: the rebased Mixamo layer.
+    // `live` remains the deterministic procedural fallback used by InspectorBody
+    // and supplies only the root sink here; applying its limb angles as well
+    // would double every stride and push authored joints into their limits.
     this.mixamo.apply(overlay);
 
     updateWorldTransforms(overlay);

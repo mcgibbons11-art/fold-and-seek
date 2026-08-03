@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { LocomotionRig } from "../../src/forge/LocomotionRig";
+import { MixamoMotion } from "../../src/forge/MixamoMotion";
 import type { LocomotionSample } from "../../src/forge/BodyLanguage";
 import { STRIDE_FACTOR } from "../../src/gameplay/footsteps";
 import { WORLD_SCALE } from "../../src/inspector/navData";
@@ -78,6 +79,52 @@ function excursion(
 }
 
 describe("the walking gait", () => {
+  it("advances exactly one animation cycle per two footfalls of ground", () => {
+    const rig = new LocomotionRig();
+    const footfallM = WORLD_SCALE.playerHeight * STRIDE_FACTOR;
+    rig.update((footfallM * 2) / RUN_SPEED, RUNNING, RUN_SPEED);
+    expect(rig.stridePhaseRadians).toBeCloseTo(0, 8);
+    rig.update(footfallM / RUN_SPEED, RUNNING, RUN_SPEED);
+    expect(rig.stridePhaseRadians).toBeCloseTo(Math.PI, 8);
+  });
+
+  it("rebases every Mixamo motion to the Mimic rest pose at frame zero", () => {
+    const frames = [
+      { run: 1, airborne: 0, climbing: 0, action: null },
+      { run: 0, airborne: 1, climbing: 0, action: null },
+      { run: 0, airborne: 0, climbing: 1, action: null },
+      { run: 0, airborne: 0, climbing: 0, action: "taunt" as const },
+      { run: 0, airborne: 0, climbing: 0, action: "hit" as const },
+      { run: 0, airborne: 0, climbing: 0, action: "death" as const },
+    ];
+    for (const frame of frames) {
+      const motion = new MixamoMotion();
+      if (frame.action !== null) motion.play(frame.action);
+      motion.update(1e-9, {
+        active: 1,
+        run: frame.run,
+        airborne: frame.airborne,
+        climbing: frame.climbing,
+        stridePhase: 0,
+        justTookOff: false,
+      });
+      const pose = createPoseState();
+      motion.apply(pose);
+      for (const rotation of pose.localRotations) {
+        expect(2 * Math.acos(Math.min(1, Math.abs(rotation.w)))).toBeLessThan(2 * DEG_TO_RAD);
+      }
+    }
+  });
+
+  it("draws an explicit hit action even while locomotion is otherwise still", () => {
+    const rig = new LocomotionRig();
+    const pose = createPoseState();
+    rig.playAction("hit");
+    for (let frame = 0; frame < 8; frame += 1) rig.update(FRAME_SECONDS, STILL, 0);
+    expect(rig.neutral).toBe(false);
+    expect(rig.pose(pose)).not.toBe(pose);
+  });
+
   it("swings the legs, and swings them against each other", () => {
     const rig = running();
     const hips = excursion(rig, RUNNING, RUN_SPEED, (r) => r.angles.hipL);

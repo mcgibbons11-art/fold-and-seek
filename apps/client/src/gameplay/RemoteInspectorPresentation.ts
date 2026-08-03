@@ -30,14 +30,26 @@ export class RemoteInspectorPresentation {
   private targetPitch = 0;
   private renderedYaw = 0;
   private renderedPitch = 0;
+  /** Achieved horizontal velocity inferred from sparse peer presentation samples. */
+  private velocityX = 0;
+  private velocityZ = 0;
   private speedMps = 0;
+  private airborne = false;
+  private climbing = false;
+  private landingSpeed = 0;
   private visible = true;
   private initialized = false;
+  private lastFiredEventSeq = Number.NEGATIVE_INFINITY;
   private footsteps: RemoteInspectorFootsteps | null = null;
   private surfaceAt: ((x: number, y: number, z: number) => string | null) | null = null;
 
   get eye(): Readonly<THREE.Vector3> | null {
     return this.initialized ? this.renderedEye : null;
+  }
+
+  /** Last achieved X/Z velocity, retained independently of vertical traversal. */
+  get achievedHorizontalVelocity(): readonly [x: number, z: number] {
+    return [this.velocityX, this.velocityZ];
   }
 
   constructor(scene: THREE.Scene, readonly seatId: string, castShadow = true) {
@@ -58,13 +70,21 @@ export class RemoteInspectorPresentation {
     if (previous !== null) {
       const elapsedSeconds = Math.max((sample.atMs - previous.atMs) / 1000, 1 / 120);
       const dx = sample.x - previous.x;
-      const dy = sample.y - previous.y;
       const dz = sample.z - previous.z;
-      this.speedMps = Math.min(
-        Math.hypot(dx, dy, dz) / elapsedSeconds,
-        WORLD_SCALE.playerHeight * 12,
-      );
+      const maxSpeed = WORLD_SCALE.playerHeight * 12;
+      const measuredX = dx / elapsedSeconds;
+      const measuredZ = dz / elapsedSeconds;
+      const measuredSpeed = Math.hypot(measuredX, measuredZ);
+      const scale = measuredSpeed > maxSpeed ? maxSpeed / measuredSpeed : 1;
+      this.velocityX = measuredX * scale;
+      this.velocityZ = measuredZ * scale;
+      this.speedMps = Math.hypot(this.velocityX, this.velocityZ);
+      if (previous.airborne && !sample.airborne) {
+        this.landingSpeed = Math.max(0, (previous.y - sample.y) / elapsedSeconds);
+      }
     }
+    this.airborne = sample.airborne;
+    this.climbing = sample.climbing;
 
     if (
       !this.initialized ||
@@ -94,6 +114,18 @@ export class RemoteInspectorPresentation {
     this.surfaceAt = surfaceAt;
   }
 
+  /**
+   * Plays a remote trigger performance once for one authoritative warrant.
+   * Relay event batches can be repeated during recovery; their simulation
+   * sequence is stable, so it is the idempotency key rather than arrival time.
+   */
+  fire(authoritativeEventSeq: number): boolean {
+    if (authoritativeEventSeq <= this.lastFiredEventSeq) return false;
+    this.lastFiredEventSeq = authoritativeEventSeq;
+    this.body.fire();
+    return true;
+  }
+
   update(dtMs: number): void {
     if (!this.initialized || !this.visible) return;
     const dtSeconds = Math.max(0, dtMs / 1000);
@@ -115,9 +147,9 @@ export class RemoteInspectorPresentation {
     this.body.update(dtSeconds, {
       speedMps: this.speedMps,
       speedCapMps: WORLD_SCALE.playerHeight * 4,
-      airborne: false,
-      climbing: false,
-      landingSpeed: 0,
+      airborne: this.airborne,
+      climbing: this.climbing,
+      landingSpeed: this.landingSpeed,
       pitch: this.renderedPitch,
       aimAmount: 0,
     });
@@ -134,7 +166,11 @@ export class RemoteInspectorPresentation {
 
     // A stopped sender has no new distance interval to reduce the measured
     // speed, so decay it locally and let the gait settle instead of moonwalking.
-    this.speedMps *= Math.exp(-8 * dtSeconds);
+    const velocityDecay = Math.exp(-8 * dtSeconds);
+    this.velocityX *= velocityDecay;
+    this.velocityZ *= velocityDecay;
+    this.speedMps = Math.hypot(this.velocityX, this.velocityZ);
+    this.landingSpeed = 0;
   }
 
   dispose(): void {

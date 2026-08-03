@@ -39,6 +39,14 @@ type MoveKey = (typeof MOVE_KEYS)[number];
 /** Below this a frame's motion is floating-point residue rather than a step. */
 const MOVED_EPSILON = 1e-9;
 
+/**
+ * Below this, collision-resolution jitter is not a trustworthy facing vector.
+ * Once the body is genuinely travelling, however, the direction it actually
+ * achieved wins over the direction the keys requested. This is what makes a
+ * wall slide read as a wall slide instead of a Mimic moonwalking into the wall.
+ */
+const ACHIEVED_FACING_SPEED_MPS = 0.1;
+
 export function isHiderMoveKey(key: string): key is MoveKey {
   return (MOVE_KEYS as readonly string[]).includes(key);
 }
@@ -153,12 +161,17 @@ export class HiderLocomotion {
   }
 
   release(key: string): void {
-    if (isHiderMoveKey(key)) this.held.delete(key);
+    if (!isHiderMoveKey(key)) return;
+    this.held.delete(key);
+    if (!["w", "a", "s", "d"].some((moveKey) => this.held.has(moveKey as MoveKey))) {
+      this.controller.releaseClimbInput();
+    }
   }
 
   /** Drops every held key, for a lost focus or a closing Forge. */
   releaseAll(): void {
     this.held.clear();
+    this.controller.releaseClimbInput();
   }
 
   /**
@@ -216,6 +229,15 @@ export class HiderLocomotion {
     this.landed = this.controller.justLanded;
     const { x, y, z } = this.controller.position;
 
+    const achievedX = x - startX;
+    const achievedZ = z - startZ;
+    const achievedSpeed = Math.hypot(achievedX, achievedZ) / dtSeconds;
+    if (achievedSpeed >= ACHIEVED_FACING_SPEED_MPS) {
+      // Three's yaw zero faces -Z. Deriving yaw from the post-collision delta,
+      // rather than input, keeps the visible +Z Mimic face on achieved travel.
+      this.controller.yaw = Math.atan2(-achievedX, -achievedZ);
+    }
+
     // Settled: nothing held, standing on something, no climb still running, and
     // the body has actually stopped. The last of those matters as much as the
     // rest — a body decelerating out of a run is still moving after the key came
@@ -231,9 +253,9 @@ export class HiderLocomotion {
     }
 
     const moved =
-      Math.abs(x - startX) > MOVED_EPSILON ||
+      Math.abs(achievedX) > MOVED_EPSILON ||
       Math.abs(y - startY) > MOVED_EPSILON ||
-      Math.abs(z - startZ) > MOVED_EPSILON;
+      Math.abs(achievedZ) > MOVED_EPSILON;
     if (!moved) return false;
 
     root.x = x;

@@ -271,6 +271,8 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
         z: z.number().finite(),
         yaw: z.number().finite(),
         pitch: z.number().finite(),
+        airborne: z.boolean(),
+        climbing: z.boolean(),
       })
       .nullable(),
   }),

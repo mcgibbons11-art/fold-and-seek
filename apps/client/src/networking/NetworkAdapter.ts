@@ -46,6 +46,10 @@ export interface InspectorCameraSample {
   readonly z: number;
   readonly yaw: number;
   readonly pitch: number;
+  /** True while the sender is jumping or falling. Presentation-only telemetry. */
+  readonly airborne: boolean;
+  /** True while the sender's controller is traversing a climb link. */
+  readonly climbing: boolean;
 }
 
 /** The latest legal pose a Mimic has authored, and the revision it belongs to. */

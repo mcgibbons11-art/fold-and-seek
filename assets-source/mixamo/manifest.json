@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "purpose": "Deterministic local inputs for the Fold & Seek Mimic animation bake",
+  "license": {
+    "status": "requires_verification",
+    "note": "Downloaded through the user's authenticated Mixamo account. Do not redistribute raw FBXs or promote them into a release until project-specific source/license provenance is recorded."
+  },
+  "visualIdentity": {
+    "id": "mimic-hider-forge-v2",
+    "editableMaster": "../blender/mimic-hider.blend",
+    "editableMasterBytes": 228375,
+    "editableMasterSha256": "26c07e7ab5dcf0f7c23e5fae77b4634c386fed76f6a5e68646cbc5795c296860",
+    "runtime": "MimicVisual",
+    "reason": "The Forge must reshape individual shells, panels, materials and paint. A fixed skinned export cannot replace that runtime contract; MimicVisual is the deformable runtime interpretation of this authored identity."
+  },
+  "inputs": [
+    { "file": "climb.fbx", "bytes": 387616, "sha256": "ad1d6cf20cbfabc904fd7ba72631b72e2cf1341c647e10124fa529ca27689dd3" },
+    { "file": "death.fbx", "bytes": 563104, "sha256": "d1cae026f132183e28f2558effe3b6c477fd3c23054076b7f4e3b85a95511c7c" },
+    { "file": "hit.fbx", "bytes": 410016, "sha256": "19e2dbd32df1e0e3579e9744bca7b8b85c2be68a95a0811d9dc4d7b3a2bf65e8" },
+    { "file": "idle.fbx", "bytes": 672816, "sha256": "ce75a06399cec44f98a5cf361354a0be1ef50af481f7661f73d4ff37353f0a6c" },
+    { "file": "jump.fbx", "bytes": 508112, "sha256": "252b94a89e9e11177c188c8f3fdc97551d1634bdd147ddc2ff4ce09dfef58a38" },
+    { "file": "rifle-fire.fbx", "bytes": 340176, "sha256": "2bc861769f082246e7064f32568fabaf7ac6103cf0e9aa96b84153736aed7a53" },
+    { "file": "rifle-idle.fbx", "bytes": 597216, "sha256": "22cb00a6400a6ef1f42dd65bf6bba0d5dfc96e603e9bdbac627208e134cb66d2" },
+    { "file": "run.fbx", "bytes": 332720, "sha256": "3b55de56dc8b2987b8cc235baa52c4c6e2a6c8ab8818c1c9c310863dfe16f3d0" },
+    { "file": "taunt.fbx", "bytes": 583712, "sha256": "2482458f729dc4d28c8ac8763612c86ce67a2cedf4e2ca77677014cb25dac7bb" }
+  ],
+  "output": "../../apps/client/src/forge/mixamoClips.generated.ts"
+}

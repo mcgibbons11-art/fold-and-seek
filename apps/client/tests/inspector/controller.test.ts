@@ -222,6 +222,39 @@ describe("InspectorController falling", () => {
 });
 
 describe("InspectorController climbing", () => {
+  for (const hz of [30, 60, 144]) {
+    it(`terminates authored, ladder and procedural climbs after release at ${hz} Hz`, () => {
+      const dt = 1 / hz;
+      const forward = createMoveInput();
+      forward.forward = 1;
+
+      const mantle = spawned(testNavData(), YAW_TOWARD_TABLE, -0.9, 0);
+      mantle.update(dt, forward);
+      expect(mantle.climbState?.link).toBe(MANTLE_TO_TABLE);
+      const released = createMoveInput();
+      for (let frame = 0; frame < hz * 8 && mantle.climbState !== null; frame += 1) {
+        mantle.update(dt, released);
+      }
+      expect(mantle.climbState).toBeNull();
+      expect(mantle.grounded).toBe(true);
+
+      const ladder = spawned(testNavData(), YAW_TOWARD_WALL, -4.25, 2.5);
+      ladder.update(dt, forward);
+      expect(ladder.climbState?.link).toBe(LADDER_TO_SHELF);
+      ladder.releaseClimbInput();
+      expect(ladder.climbState).toBeNull();
+
+      const procedural = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.78, 0);
+      const climb = createMoveInput();
+      climb.forward = 1;
+      climb.jump = true;
+      procedural.update(dt, climb);
+      expect(procedural.climbState?.link.to).toBe("solid_top_0");
+      procedural.releaseClimbInput();
+      expect(procedural.climbState).toBeNull();
+    });
+  }
+
   it("climbs an unlinked solid face when Forward and Jump are held", () => {
     const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.78, 0);
     walk(controller, 1, { forward: 1, jump: true });
