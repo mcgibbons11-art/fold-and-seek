@@ -14,6 +14,7 @@ export type MatchCommand =
   | { readonly type: "lock_disguise"; readonly payload: string; readonly revision: number }
   | { readonly type: "accuse"; readonly targetObjectId: string }
   | { readonly type: "focus"; readonly targetObjectId: string | null }
+  | { readonly type: "grapple"; readonly target: readonly [number, number, number] }
   | {
       readonly type: "vote_result";
       readonly category: ResultVoteCategory;

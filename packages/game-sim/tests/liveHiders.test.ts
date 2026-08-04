@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_MATCH_SETTINGS,
+  GRAPPLE_MAX_RANGE_M,
+  GRAPPLE_PULL_SPEED_MPS,
   MatchPhase,
   PrivateSimEventSchema,
   SimEventSchema,
@@ -53,6 +55,37 @@ function huntHarness(seed: number, players = 4): Harness {
 }
 
 describe("post-lock adjustments", () => {
+  it("grants fast movement only toward a validated grapple latch", () => {
+    const harness = huntHarness(1_300);
+    const mimicId = harness.mimicIds()[0] as string;
+    expect(harness.sim.recordForgeSnapshot(mimicId, poseAt(0, 2), 2, harness.now).accepted).toBe(true);
+    expect(harness.command(mimicId, { type: "grapple", target: [2, 0, 0] }).accepted).toBe(true);
+
+    harness.tick(250);
+    const pulled = GRAPPLE_PULL_SPEED_MPS * 0.18;
+    expect(
+      harness.sim.recordForgeSnapshot(mimicId, poseAt(pulled, 3), 3, harness.now).accepted,
+    ).toBe(true);
+
+    harness.tick(100);
+    expect(
+      harness.sim.recordForgeSnapshot(mimicId, poseAt(pulled - 0.02, 4), 4, harness.now).reason,
+    ).toBe("moved_too_fast");
+  });
+
+  it("rejects grapples from the wrong role, phase, or range", () => {
+    const lobby = new Harness({ players: 3, seed: 1_299 });
+    expect(lobby.command(lobby.hostId, { type: "grapple", target: [1, 0, 0] }).reason).toBe("wrong_phase");
+
+    const harness = huntHarness(1_302);
+    const inspectorId = harness.inspectorIds()[0] as string;
+    const mimicId = harness.mimicIds()[0] as string;
+    expect(harness.command(inspectorId, { type: "grapple", target: [1, 0, 0] }).reason).toBe("wrong_role");
+    expect(
+      harness.command(mimicId, { type: "grapple", target: [GRAPPLE_MAX_RANGE_M + 1, 0, 0] }).reason,
+    ).toBe("spatial_rejected");
+  });
+
   it("accepts a reshape and a slow creep during the hunt", () => {
     const harness = huntHarness(1_301);
     const mimicId = harness.mimicIds()[0] as string;

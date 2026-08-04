@@ -77,6 +77,17 @@ const JUMP_BODY_HEIGHTS = 0.45;
 /** Apex of a hop above the surface it left, in world metres. */
 export const JUMP_HEIGHT_M = PLAYER_HEIGHT_M * JUMP_BODY_HEIGHTS;
 
+/** Grapple traversal is quick enough to cross an aisle without replacing ordinary running. */
+export const GRAPPLE_PULL_SPEED_MPS = PLAYER_HEIGHT_M * 12;
+/** A latch closer than this is treated as an accidental click on the player's own cover. */
+export const GRAPPLE_MIN_RANGE_M = PLAYER_HEIGHT_M * 0.75;
+/** Keeps grapples local to the part of the room the player can actually read. */
+export const GRAPPLE_MAX_RANGE_M = PLAYER_HEIGHT_M * 18;
+/** Release before the character centre reaches the surface, leaving room for the capsule. */
+export const GRAPPLE_ARRIVAL_M = PLAYER_HEIGHT_M * 0.58;
+/** Extra authority time for the fall and the final network pose after the cable releases. */
+export const GRAPPLE_AUTHORITY_GRACE_MS = 3_000;
+
 /**
  * Reticle reach and gun reach, in body heights, measured from the eye to the
  * nearest point of the target's bounds.

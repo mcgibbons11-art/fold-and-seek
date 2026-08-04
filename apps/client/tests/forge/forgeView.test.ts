@@ -363,11 +363,11 @@ describe("the pose handles", () => {
     harness.pointer("pointerdown", hand);
     harness.pointer("pointerup", hand);
 
-    harness.key("keydown", "q");
+    harness.key("keydown", "r");
     expect(harness.controller.snapshot().segment?.form.profileId).toBe("capsule");
     expect(harness.controller.snapshot().segment?.form.width).toBeCloseTo(0.18);
 
-    harness.key("keydown", "q");
+    harness.key("keydown", "r");
     expect(harness.controller.snapshot().segment?.form.profileId).toBe("rounded_box");
     expect(harness.controller.snapshot().segment?.form.width).toBeCloseTo(0.88);
   });

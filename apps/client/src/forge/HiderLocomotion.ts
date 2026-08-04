@@ -1,7 +1,7 @@
 import { HIDER_FORGE_RUN_SPEED } from "@foldseek/shared";
 
 import { CharacterController, createMoveInput } from "../inspector/CharacterController";
-import type { MutableVec3, NavData } from "../inspector/navData";
+import type { MutableVec3, NavData, Vec3Like } from "../inspector/navData";
 import type { LocomotionSample } from "./BodyLanguage";
 
 /**
@@ -125,6 +125,22 @@ export class HiderLocomotion {
     return this.walking && this.controller.airborne;
   }
 
+  get grappling(): boolean {
+    return this.controller.grappleState !== null;
+  }
+
+  /** Q toggles a pull. Starting from rest adopts the Forge root before launching. */
+  toggleGrapple(anchor: Vec3Like, root: MutableVec3, headingYaw: number): boolean {
+    if (this.controller.releaseGrapple()) {
+      this.traversalRecoveryPending = true;
+      return false;
+    }
+    if (!this.walking) this.controller.placeAt(root.x, root.y, root.z, headingYaw);
+    if (!this.controller.startGrapple(anchor)) return false;
+    this.walking = true;
+    return true;
+  }
+
   /** True while the hunt's creep cap is in force rather than the Forge run. */
   get creeping(): boolean {
     return this.creepSpeed !== null;
@@ -143,7 +159,7 @@ export class HiderLocomotion {
       this.walking && cap > 0 ? Math.min(1, this.controller.speed / cap) : 0;
     sample.travelYaw = this.controller.yaw;
     sample.airborne = this.walking && this.controller.airborne;
-    sample.climbing = this.walking && this.controller.climbState !== null;
+    sample.climbing = this.walking && (this.controller.climbState !== null || this.controller.grappleState !== null);
     sample.creeping = this.creeping;
     sample.landingSpeed = this.landed ? this.controller.landingSpeed : 0;
     return sample;
@@ -171,7 +187,7 @@ export class HiderLocomotion {
     // Hiders do not need a reverse-climb mode. S is the reliable emergency
     // exit: drop the traversal immediately, then resume normal backward WASD
     // once no climb is active.
-    if (key === "s" && this.controller.disengageClimb()) {
+    if (key === "s" && (this.controller.disengageClimb() || this.controller.releaseGrapple())) {
       this.traversalRecoveryPending = true;
     }
     return true;
@@ -202,8 +218,9 @@ export class HiderLocomotion {
   /** Drops every held key, for a lost focus or a closing Forge. */
   releaseAll(): void {
     this.held.clear();
-    const wasClimbing = this.controller.climbState !== null;
+    const wasClimbing = this.controller.climbState !== null || this.controller.grappleState !== null;
     this.controller.releaseClimbInput();
+    this.controller.releaseGrapple();
     if (wasClimbing && this.controller.climbState === null) {
       this.traversalRecoveryPending = true;
     }
@@ -222,7 +239,7 @@ export class HiderLocomotion {
     // S remains an escape for as long as it is held. This also catches a climb
     // entered after the browser's one keydown edge (or a gamepad transition),
     // so recovery never depends on key-repeat delivery.
-    if (this.held.has("s") && this.controller.disengageClimb()) {
+    if (this.held.has("s") && (this.controller.disengageClimb() || this.controller.releaseGrapple())) {
       this.traversalRecoveryPending = true;
     }
     const recoveredTraversal = this.traversalRecoveryPending;
@@ -296,6 +313,7 @@ export class HiderLocomotion {
       !intent &&
       this.controller.grounded &&
       this.controller.climbState === null &&
+      this.controller.grappleState === null &&
       this.controller.speed < MOVED_EPSILON
     ) {
       this.walking = false;

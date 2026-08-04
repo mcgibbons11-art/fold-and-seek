@@ -1,6 +1,10 @@
 import {
   DEFAULT_ARRANGEMENT_ID,
   DEFAULT_MATCH_SETTINGS,
+  GRAPPLE_AUTHORITY_GRACE_MS,
+  GRAPPLE_MAX_RANGE_M,
+  GRAPPLE_MIN_RANGE_M,
+  GRAPPLE_PULL_SPEED_MPS,
   MatchPhase,
   MatchSnapshotSchema,
   decodeDisguiseWire,
@@ -253,6 +257,11 @@ interface InternalPlayer {
   stats: RoundStats;
   lastTauntAtMs: number | null;
   lastForgeUpdateAtMs: number | null;
+  /** Short-lived movement grant issued for a validated grapple latch. */
+  grapple: {
+    readonly target: readonly [number, number, number];
+    readonly expiresAtMs: number;
+  } | null;
   /** Last watched level delivered to this player, and when. */
   watchedLevel: WatchedLevel;
   watchedDeliveredAtMs: number | null;
@@ -456,6 +465,7 @@ function restorePlayer(
     },
     lastTauntAtMs: entry.tt,
     lastForgeUpdateAtMs: entry.fu,
+    grapple: null,
     watchedLevel: entry.wl,
     watchedDeliveredAtMs: entry.wa,
   };
@@ -595,6 +605,7 @@ export class MatchSimulation {
       stats: createStats(),
       lastTauntAtMs: null,
       lastForgeUpdateAtMs: null,
+      grapple: null,
       watchedLevel: 0,
       watchedDeliveredAtMs: null,
     };
@@ -722,6 +733,8 @@ export class MatchSimulation {
         return this.commandAccuse(player, command.targetObjectId);
       case "focus":
         return this.commandFocus(player, command.targetObjectId);
+      case "grapple":
+        return this.commandGrapple(player, command.target);
       case "vote_result":
         return this.commandVoteResult(player, command.category, command.targetPublicObjectId);
       case "vote_rematch":
@@ -880,16 +893,50 @@ export class MatchSimulation {
     travelled: number,
   ): CommandResult | null {
     const elapsedMs = Math.max(0, this.nowMs - record.movedAtMs);
-    const allowed = (this.settings.hiderCreepSpeed * elapsedMs) / 1_000;
+    const grapple = player.grapple;
+    const grappleActive = grapple !== null && this.nowMs <= grapple.expiresAtMs;
+    if (grapple !== null && !grappleActive) player.grapple = null;
+    if (grappleActive) {
+      const before = distanceBetween(record.rootPosition, grapple.target);
+      const after = distanceBetween(position, grapple.target);
+      if (after > before + 0.01) {
+        return reject("moved_too_fast", "grapple movement travelled away from its latch");
+      }
+    }
+    const speed = grappleActive ? GRAPPLE_PULL_SPEED_MPS : this.settings.hiderCreepSpeed;
+    const allowed = (speed * elapsedMs) / 1_000;
     if (travelled > allowed * CREEP_SPEED_TOLERANCE) {
       return reject(
         "moved_too_fast",
-        `${travelled.toFixed(3)}m in ${elapsedMs}ms exceeds ${this.settings.hiderCreepSpeed}m/s`,
+        `${travelled.toFixed(3)}m in ${elapsedMs}ms exceeds ${speed}m/s`,
       );
     }
     const decision = this.spatial.canOccupy(player.playerId, position);
     if (!decision.ok) return reject("outside_play_volume", decision.reason);
     return null;
+  }
+
+  /** Grants one live Mimic a brief, target-bound burst of airborne movement. */
+  private commandGrapple(
+    player: InternalPlayer,
+    target: readonly [number, number, number],
+  ): CommandResult {
+    if (!this.isInspectionPhase()) return reject("wrong_phase");
+    if (player.role !== "mimic") return reject("wrong_role");
+    if (player.lifeState !== "active") return reject("player_not_active");
+    const record = player.disguise;
+    if (record === null || this.resolvedObjects.has(record.publicObjectId)) {
+      return reject("player_not_active", "no_live_disguise");
+    }
+    const distance = distanceBetween(record.rootPosition, target);
+    if (distance < GRAPPLE_MIN_RANGE_M || distance > GRAPPLE_MAX_RANGE_M) {
+      return reject("spatial_rejected", "grapple latch is outside its usable range");
+    }
+    player.grapple = {
+      target,
+      expiresAtMs: this.nowMs + (distance / GRAPPLE_PULL_SPEED_MPS) * 1_000 + GRAPPLE_AUTHORITY_GRACE_MS,
+    };
+    return this.accept();
   }
 
   /**
@@ -2298,6 +2345,7 @@ export class MatchSimulation {
       player.lastValidPaint = null;
       player.caughtAtMs = null;
       player.stats = createStats();
+      player.grapple = null;
       player.lifeState = "active";
     }
   }

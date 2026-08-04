@@ -523,6 +523,7 @@ export const MatchCommandSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("lock_disguise"), payload: encodedPose, revision }),
   z.strictObject({ type: z.literal("accuse"), targetObjectId: id }),
   z.strictObject({ type: z.literal("focus"), targetObjectId: id.nullable() }),
+  z.strictObject({ type: z.literal("grapple"), target: Vec3Schema }),
   z.strictObject({
     type: z.literal("vote_result"),
     category: ResultVoteCategorySchema,

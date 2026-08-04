@@ -1,4 +1,10 @@
-import { JUMP_HEIGHT_M } from "@foldseek/shared";
+import {
+  GRAPPLE_ARRIVAL_M,
+  GRAPPLE_MAX_RANGE_M,
+  GRAPPLE_MIN_RANGE_M,
+  GRAPPLE_PULL_SPEED_MPS,
+  JUMP_HEIGHT_M,
+} from "@foldseek/shared";
 
 import {
   blocksCapsule,
@@ -168,6 +174,11 @@ export interface ClimbState {
   readonly progress: number;
 }
 
+export interface GrappleState {
+  readonly anchor: Vec3Like;
+  readonly distanceM: number;
+}
+
 /** Ground speed in metres per second for the intent of one frame. */
 export type SpeedForInput = (input: CharacterMoveInput) => number;
 
@@ -233,6 +244,7 @@ export class CharacterController {
   /** Height a surface-locked hop took off from, and null while it is resting. */
   private hopBaseY: number | null = null;
   private climb: MutableClimb | null = null;
+  private grapple: MutableGrapple | null = null;
   /**
    * The link just travelled. A climb ends standing on its own endpoint, so
    * without this a held forward key would re-enter the link and bounce the
@@ -310,6 +322,7 @@ export class CharacterController {
     this.landingSpeed = 0;
     this.hopBaseY = null;
     this.climb = null;
+    this.grapple = null;
     this.climbLatch = null;
     this.jumpActionArmed = true;
     this.lastResolution = "idle";
@@ -336,6 +349,55 @@ export class CharacterController {
     return { link: this.climb.link, ascending: this.climb.ascending, progress };
   }
 
+  /** The live cable pull, exposed for animation, diagnostics and its line renderer. */
+  get grappleState(): GrappleState | null {
+    const grapple = this.grapple;
+    if (grapple === null) return null;
+    return {
+      anchor: grapple.anchor,
+      distanceM: Math.hypot(
+        grapple.anchor.x - this.position.x,
+        grapple.anchor.y - (this.position.y + INSPECTOR_HEIGHT_M * 0.5),
+        grapple.anchor.z - this.position.z,
+      ),
+    };
+  }
+
+  /** Starts a collision-safe pull from the body's centre to a world-space latch. */
+  startGrapple(anchor: Vec3Like): boolean {
+    const distance = Math.hypot(
+      anchor.x - this.position.x,
+      anchor.y - (this.position.y + INSPECTOR_HEIGHT_M * 0.5),
+      anchor.z - this.position.z,
+    );
+    if (!Number.isFinite(distance) || distance < GRAPPLE_MIN_RANGE_M || distance > GRAPPLE_MAX_RANGE_M) {
+      return false;
+    }
+    this.climb = null;
+    this.climbLatch = null;
+    this.grapple = { anchor: { x: anchor.x, y: anchor.y, z: anchor.z } };
+    this.grounded = false;
+    this.surfaceId = null;
+    this.surfaceLocked = false;
+    this.verticalVelocity = 0;
+    this.velocityX = 0;
+    this.velocityZ = 0;
+    this.speed = 0;
+    return true;
+  }
+
+  /** Releases without snapping; ordinary gravity owns the body again. */
+  releaseGrapple(): boolean {
+    if (this.grapple === null) return false;
+    this.grapple = null;
+    this.grounded = false;
+    this.surfaceId = null;
+    this.surfaceLocked = false;
+    this.verticalVelocity = Math.min(this.verticalVelocity, -CLIMB_RELEASE_DOWN_SPEED);
+    this.speed = 0;
+    return true;
+  }
+
   update(dtSeconds: number, input: CharacterMoveInput): void {
     if (dtSeconds <= 0) return;
 
@@ -351,6 +413,12 @@ export class CharacterController {
 
     this.yaw = wrapAngle(this.yaw + input.lookYawDelta);
     this.pitch = clamp(this.pitch + input.lookPitchDelta, -MAX_PITCH_RAD, MAX_PITCH_RAD);
+
+    if (this.grapple !== null && input.disengageClimb === true) this.releaseGrapple();
+    if (this.grapple !== null) {
+      this.advanceGrapple(dtSeconds);
+      return;
+    }
 
     if (this.climb !== null && (input.disengageClimb === true || input.forward < 0)) {
       this.disengageClimb();
@@ -416,6 +484,64 @@ export class CharacterController {
   private consumeJump(): void {
     this.sinceJumpRequest = Number.POSITIVE_INFINITY;
     this.coyoteSeconds = 0;
+  }
+
+  /** Pulls in short substeps so a fast cable cannot tunnel through shelf boards. */
+  private advanceGrapple(dtSeconds: number): void {
+    const grapple = this.grapple;
+    if (grapple === null) return;
+    const centreY = this.position.y + INSPECTOR_HEIGHT_M * 0.5;
+    let dx = grapple.anchor.x - this.position.x;
+    let dy = grapple.anchor.y - centreY;
+    let dz = grapple.anchor.z - this.position.z;
+    const distance = Math.hypot(dx, dy, dz);
+    if (distance <= GRAPPLE_ARRIVAL_M) {
+      this.releaseGrapple();
+      return;
+    }
+    dx /= distance;
+    dy /= distance;
+    dz /= distance;
+    const travel = Math.min(GRAPPLE_PULL_SPEED_MPS * dtSeconds, distance - GRAPPLE_ARRIVAL_M);
+    const maxStep = Math.max(0.01, INSPECTOR_RADIUS_M * 0.35);
+    const steps = Math.max(1, Math.ceil(travel / maxStep));
+    const step = travel / steps;
+    const startX = this.position.x;
+    const startZ = this.position.z;
+
+    for (let index = 0; index < steps; index += 1) {
+      const x = this.position.x + dx * step;
+      const y = this.position.y + dy * step;
+      const z = this.position.z + dz * step;
+      if (
+        blocksCapsule(
+          this.navData.blockers,
+          x,
+          z,
+          y,
+          INSPECTOR_RADIUS_M,
+          INSPECTOR_HEIGHT_M,
+          INSPECTOR_STEP_HEIGHT_M,
+        )
+      ) {
+        this.releaseGrapple();
+        break;
+      }
+      this.position.x = x;
+      this.position.y = y;
+      this.position.z = z;
+    }
+
+    this.grounded = false;
+    this.surfaceId = null;
+    if (this.grapple !== null) this.verticalVelocity = 0;
+    this.velocityX = 0;
+    this.velocityZ = 0;
+    this.speed = Math.hypot(this.position.x - startX, this.position.z - startZ) / dtSeconds;
+    this.lastResolution = "free";
+    if (this.grapple !== null && distance - travel <= GRAPPLE_ARRIVAL_M + 1e-6) {
+      this.releaseGrapple();
+    }
   }
 
   /**
@@ -1279,6 +1405,10 @@ interface MutableClimb {
   readonly endX: number;
   readonly endY: number;
   readonly endZ: number;
+}
+
+interface MutableGrapple {
+  readonly anchor: Vec3Like;
 }
 
 function clamp(value: number, min: number, max: number): number {

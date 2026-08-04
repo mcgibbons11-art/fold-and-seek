@@ -163,6 +163,7 @@ describe("match command schema", () => {
       { type: "accuse", targetObjectId: "obj_abc" },
       { type: "focus", targetObjectId: null },
       { type: "focus", targetObjectId: "obj_abc" },
+      { type: "grapple", target: [1, 2, -3] },
       { type: "vote_result", category: "best_disguise", targetPublicObjectId: "obj_abc" },
       { type: "vote_rematch", yes: false },
     ];

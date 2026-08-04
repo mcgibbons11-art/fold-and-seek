@@ -47,7 +47,9 @@ export class InspectorInput {
 
   /** Set on the press, cleared by `takeFirePressed`, so one click is one shot. */
   private firePressed = false;
+  private grapplePressed = false;
   private gamepadFireHeld = false;
+  private gamepadGrappleHeld = false;
   private gamepadAimHeld = false;
 
   constructor(element: HTMLElement, options: InspectorInputOptions = {}) {
@@ -137,6 +139,9 @@ export class InspectorInput {
     const gamepadFire = gamepad?.fire ?? false;
     if (gamepadFire && !this.gamepadFireHeld) this.firePressed = true;
     this.gamepadFireHeld = gamepadFire;
+    const gamepadGrapple = gamepad?.grapple ?? false;
+    if (gamepadGrapple && !this.gamepadGrappleHeld) this.grapplePressed = true;
+    this.gamepadGrappleHeld = gamepadGrapple;
     this.pendingYaw = 0;
     this.pendingPitch = 0;
   }
@@ -154,6 +159,12 @@ export class InspectorInput {
     return true;
   }
 
+  takeGrapplePressed(): boolean {
+    if (!this.grapplePressed) return false;
+    this.grapplePressed = false;
+    return true;
+  }
+
   /** Consumes wheel travel accumulated since the previous rendered frame. */
   takeZoomDelta(): number {
     const delta = this.pendingZoom;
@@ -166,14 +177,19 @@ export class InspectorInput {
     this.aimHeld = false;
     this.fireHeld = false;
     this.firePressed = false;
+    this.grapplePressed = false;
     this.pendingYaw = 0;
     this.pendingPitch = 0;
     this.pendingZoom = 0;
+    this.gamepadFireHeld = false;
+    this.gamepadAimHeld = false;
+    this.gamepadGrappleHeld = false;
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
     if (!this.locked) return;
     this.held.add(event.code);
+    if (!event.repeat && actionForCode(event.code) === "grapple") this.grapplePressed = true;
   };
 
   private readonly onKeyUp = (event: KeyboardEvent): void => {

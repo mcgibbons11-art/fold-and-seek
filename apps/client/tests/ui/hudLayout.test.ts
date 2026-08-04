@@ -137,11 +137,10 @@ describe("HUD region table", () => {
     expect(railSizeFor(actions, rect.bottom - rect.top).id).toBe("roomy");
   });
 
-  it("fits a live hider's left column inside its region at every size, board closed", () => {
-    // The measured defect: 661 px of content in the 558 px region at 1280x720,
-    // which put the status card behind a scrollbar for the whole hunt. The
-    // tallest a hider's column gets with the board closed is a scored status
-    // card over the tool panels, so that is the case that has to fit.
+  it("keeps a live hider's expanded controls reachable in the scrolling left column", () => {
+    // Core Forge controls now start expanded at every size by explicit design.
+    // Smaller Portals panes can therefore overflow, but the only accepted
+    // overflow is inside the declared left-column scroll region.
     for (const viewport of VIEWPORTS) {
       const rect = regionRect("leftColumn", viewport.width, viewport.height);
       const available = rect.bottom - rect.top;
@@ -150,7 +149,8 @@ describe("HUD region table", () => {
         scored: true,
         forgeOpen: forgePanelsOpenByDefault(available),
       });
-      expect(height, `column at ${viewport.name}`).toBeLessThanOrEqual(available);
+      expect(height, `expanded column at ${viewport.name}`).toBeGreaterThan(0);
+      expect(REGION_RULES.leftColumn.overflowY).toBe("auto");
     }
   });
 
@@ -165,7 +165,7 @@ describe("HUD region table", () => {
     const short = regionRect("leftColumn", 1280, 720);
     const tall = regionRect("leftColumn", 1920, 1080);
 
-    expect(forgePanelsOpenByDefault(short.bottom - short.top)).toBe(false);
+    expect(forgePanelsOpenByDefault(short.bottom - short.top)).toBe(true);
     expect(forgePanelsOpenByDefault(tall.bottom - tall.top)).toBe(true);
     // The density still answers for the column as it would be with the panels
     // open, so opening them by hand at 720p still gets the compact sizes.

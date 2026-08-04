@@ -86,6 +86,7 @@ import type {
 
 const DEFAULT_ACCUSATION_FEED_LIMIT = 6;
 const DEFAULT_REJECTION_FEED_LIMIT = 4;
+const DEFAULT_REJECTION_LIFETIME_MS = 4_500;
 const DEFAULT_DECEPTION_FEED_LIMIT = 4;
 const DEFAULT_TICK_INTERVAL_MS = 200;
 
@@ -118,6 +119,8 @@ export interface RoundDirectorOptions {
   readonly tickIntervalMs?: number;
   readonly accusationFeedLimit?: number;
   readonly rejectionFeedLimit?: number;
+  /** How long a refused-action notice remains visible. */
+  readonly rejectionLifetimeMs?: number;
   readonly deceptionFeedLimit?: number;
 }
 
@@ -176,6 +179,7 @@ export class RoundDirector {
   private readonly localNow: () => number;
   private readonly accusationFeedLimit: number;
   private readonly rejectionFeedLimit: number;
+  private readonly rejectionLifetimeMs: number;
   private readonly deceptionFeedLimit: number;
   private readonly subscriptions: Unsubscribe[] = [];
   private readonly changed = new Signal<RoundViewState>();
@@ -252,6 +256,7 @@ export class RoundDirector {
     this.localNow = options.now ?? (() => performance.now());
     this.accusationFeedLimit = options.accusationFeedLimit ?? DEFAULT_ACCUSATION_FEED_LIMIT;
     this.rejectionFeedLimit = options.rejectionFeedLimit ?? DEFAULT_REJECTION_FEED_LIMIT;
+    this.rejectionLifetimeMs = options.rejectionLifetimeMs ?? DEFAULT_REJECTION_LIFETIME_MS;
     this.deceptionFeedLimit = options.deceptionFeedLimit ?? DEFAULT_DECEPTION_FEED_LIMIT;
 
     this.connection = adapter.getConnection();
@@ -310,8 +315,10 @@ export class RoundDirector {
    */
   tick(): void {
     if (this.disposed) return;
+    const rejectionFeedChanged = this.expireRejections();
     const next = this.build();
     if (
+      !rejectionFeedChanged &&
       next.timer.secondsRemaining === this.publishedSecondsRemaining &&
       next.timer.running === this.state.timer.running &&
       next.timer.finalTen === this.state.timer.finalTen
@@ -499,6 +506,7 @@ export class RoundDirector {
       commandType: rejection.type,
       reason: rejection.reason,
       detail: rejection.detail ?? null,
+      expiresAtLocalMs: this.localNow() + this.rejectionLifetimeMs,
     };
     this.rejections = [view, ...this.rejections].slice(0, this.rejectionFeedLimit);
     this.publish();
@@ -553,6 +561,17 @@ export class RoundDirector {
     this.ownDisguiseAutoLocked = false;
     this.assignedRole = null;
     this.watchedLevel = 0;
+    this.rejections = [];
+  }
+
+  /** Refusal feedback is transient; it may never become permanent HUD chrome. */
+  private expireRejections(): boolean {
+    if (this.rejections.length === 0) return false;
+    const now = this.localNow();
+    const visible = this.rejections.filter((entry) => entry.expiresAtLocalMs > now);
+    if (visible.length === this.rejections.length) return false;
+    this.rejections = visible;
+    return true;
   }
 
   // ------------------------------------------------------------- projection

@@ -41,6 +41,8 @@ import {
 } from "../mimic/panels";
 import type { CharacterController } from "../inspector/CharacterController";
 import { nearestBlockerEntry } from "../inspector/geometry";
+import { GrappleVisual } from "../inspector/GrappleVisual";
+import { grappleTargetFromRay } from "../inspector/grappleTarget";
 import {
   BOB_AMPLITUDE_M as CAMERA_BOB_AMPLITUDE_M,
   BOB_RATE_RAD_PER_M as CAMERA_BOB_RATE_RAD_PER_M,
@@ -292,6 +294,8 @@ export interface ForgeControllerOptions {
    * data, so it is optional rather than required.
    */
   readonly navData?: NavData;
+  /** Lets the round authority grant the matching burst of hider movement. */
+  readonly onGrapple?: (target: Vec3Like) => void;
 }
 
 interface HandleDef {
@@ -631,6 +635,8 @@ export class ForgeController {
   private readonly navData: NavData | null;
   /** Null when the map published no walkable geometry to run the body over. */
   private readonly locomotion: HiderLocomotion | null;
+  private readonly onGrapple: ((target: Vec3Like) => void) | null;
+  private readonly grappleVisual: GrappleVisual;
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointerNdc = new THREE.Vector2();
   private readonly commands = new ForgeCommandStack();
@@ -674,6 +680,7 @@ export class ForgeController {
   private gamepadPreviousToolHeld = false;
   private gamepadNextToolHeld = false;
   private gamepadMirrorHeld = false;
+  private gamepadGrappleHeld = false;
   private gamepadToolActionHeld: InputAction | null = null;
   private lockedPayload: LockedDisguise | null = null;
 
@@ -800,6 +807,8 @@ export class ForgeController {
   constructor(options: ForgeControllerOptions) {
     this.scene = options.scene;
     this.canvas = options.canvas;
+    this.onGrapple = options.onGrapple ?? null;
+    this.grappleVisual = new GrappleVisual(options.scene);
     this.roomObjects = [...options.scene.children];
     this.anchorObjects = this.roomObjects.filter(
       (object) => object.userData[MIMIC_BODY_TAG] !== true,
@@ -945,6 +954,7 @@ export class ForgeController {
     this.stepLocomotion(dtMs);
     this.writeMovementDiagnostics();
     this.stepBodyMotion(dtMs / 1_000);
+    this.stepGrappleVisual(dtMs / 1_000);
     this.stepCameraFollow(dtMs / 1_000);
     this.layoutHandles();
     // Cheap when nothing was painted: a reference check per part and an upload
@@ -970,6 +980,7 @@ export class ForgeController {
       delete dataset["hiderSpeed"];
       delete dataset["hiderClimbing"];
       delete dataset["hiderGrounded"];
+      delete dataset["hiderGrappling"];
       return;
     }
     const rotation = this.pose.rootRotation;
@@ -986,6 +997,7 @@ export class ForgeController {
     dataset["hiderSpeed"] = String(sample.speedFraction);
     dataset["hiderClimbing"] = String(locomotion.motion.climbState !== null);
     dataset["hiderGrounded"] = String(locomotion.motion.grounded);
+    dataset["hiderGrappling"] = String(locomotion.grappling);
   }
 
   /**
@@ -1178,6 +1190,43 @@ export class ForgeController {
     // Re-solves and re-captures the disguise, which is what advances the
     // revision the round publishes.
     this.solveAndRefresh();
+  }
+
+  /** Fires toward the cursor, or releases the active cable on a second press. */
+  private toggleGrapple(): void {
+    const locomotion = this.locomotion;
+    const navData = this.navData;
+    if (locomotion === null || navData === null || this.locked) return;
+    this.walkPosition.x = this.pose.rootPosition.x;
+    this.walkPosition.y = this.pose.rootPosition.y;
+    this.walkPosition.z = this.pose.rootPosition.z;
+    const active = locomotion.motion.grappleState;
+    if (active !== null) {
+      locomotion.toggleGrapple(active.anchor, this.walkPosition, this.yaw);
+      this.audio.play("wallstick_release", 0.03, 0.65);
+      return;
+    }
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const target = grappleTargetFromRay(navData, this.raycaster.ray.origin, this.raycaster.ray.direction);
+    if (target === null) {
+      this.audio.play("ui_deny", 0, 0.4);
+      return;
+    }
+    if (!locomotion.toggleGrapple(target, this.walkPosition, this.yaw)) return;
+    this.onGrapple?.(target);
+    this.audio.play("climb_grab", 0.05, 0.8);
+  }
+
+  /** Runs after body motion so the cable begins at the visible right hand. */
+  private stepGrappleVisual(dtSeconds: number): void {
+    const anchor = this.locomotion?.motion.grappleState?.anchor ?? null;
+    if (anchor === null) {
+      this.grappleVisual.update(this.pose.rootPosition, null, dtSeconds);
+      return;
+    }
+    updateWorldTransforms(this.pose);
+    const hand = this.pose.worldPositions[boneIndex("hand_R")] ?? this.pose.rootPosition;
+    this.grappleVisual.update(hand, anchor, dtSeconds);
   }
 
   /**
@@ -1459,6 +1508,7 @@ export class ForgeController {
     this.sprayAudio.dispose();
     this.stopManipulationAudio();
     this.manipulationAudio.dispose();
+    this.grappleVisual.dispose();
     this.mimic.dispose();
     this.handleGroup.removeFromParent();
     this.handleGroup.clear();
@@ -2138,7 +2188,7 @@ export class ForgeController {
   }
 
   /**
-   * Q keeps the highest-impact option for the active authoring tool under the
+   * R keeps the highest-impact option for the active authoring tool under the
    * movement hand. It deliberately does not add another always-visible HUD
    * control: the buttons remain available in the contextual panel and the key
    * lives in How to Play.
@@ -3514,6 +3564,9 @@ export class ForgeController {
         this.setMirror(!this.mirror);
         break;
       case "q":
+        this.toggleGrapple();
+        break;
+      case "r":
         this.cycleQuickOption(event.shiftKey ? -1 : 1);
         break;
       case "x":
@@ -3582,6 +3635,7 @@ export class ForgeController {
     const previous = pad?.previousTool ?? false;
     const next = pad?.nextTool ?? false;
     const mirror = pad?.mirror ?? false;
+    const grapple = pad?.grapple ?? false;
     const toolAction = pad?.toolAction ?? null;
     if (previous && !this.gamepadPreviousToolHeld) {
       const index = (FORGE_TOOL_MODES.indexOf(this.mode) - 1 + FORGE_TOOL_MODES.length) % FORGE_TOOL_MODES.length;
@@ -3592,6 +3646,7 @@ export class ForgeController {
       this.setToolMode(FORGE_TOOL_MODES[index]!);
     }
     if (mirror && !this.gamepadMirrorHeld) this.setMirror(!this.mirror);
+    if (grapple && !this.gamepadGrappleHeld) this.toggleGrapple();
     if (toolAction !== null && toolAction !== this.gamepadToolActionHeld) {
       const directMode: Partial<Record<InputAction, ForgeToolMode>> = {
         toolPose: "pose",
@@ -3606,6 +3661,7 @@ export class ForgeController {
     this.gamepadPreviousToolHeld = previous;
     this.gamepadNextToolHeld = next;
     this.gamepadMirrorHeld = mirror;
+    this.gamepadGrappleHeld = grapple;
     this.gamepadToolActionHeld = toolAction;
   }
 
@@ -4043,6 +4099,7 @@ const FORGE_ACTION_KEYS: Partial<Readonly<Record<InputAction, string>>> = {
   moveLeft: "a",
   moveRight: "d",
   jump: " ",
+  grapple: "q",
   toolPose: "1",
   toolShape: "2",
   toolPanels: "3",

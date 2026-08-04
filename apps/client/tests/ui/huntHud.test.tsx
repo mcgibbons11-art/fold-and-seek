@@ -348,7 +348,7 @@ describe("hunt HUD region ownership", () => {
     Object.defineProperty(window, "innerHeight", { value: restore.height, configurable: true });
   });
 
-  it("does not let the persistent panel be collapsed accidentally", () => {
+  it("starts the persistent panel open and collapses only from its arrow", () => {
     Object.defineProperty(window, "innerHeight", { value: 720, configurable: true });
     Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
     render(
@@ -368,8 +368,15 @@ describe("hunt HUD region ownership", () => {
     const wrapper = container.querySelector('[data-hider-forge-dock="persistent"]');
     expect(wrapper).not.toBeNull();
     expect(textOf("leftColumn")).toContain("Starter arrangements");
-    expect(wrapper?.querySelector("button[aria-expanded]")).toBeNull();
-    expect(textOf("leftColumn")).toContain("Starter arrangements");
+    const toggle = wrapper?.querySelector('button[aria-label="Collapse forge panels"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    act(() => {
+      (toggle as HTMLButtonElement).click();
+    });
+    expect(wrapper?.querySelector('[data-forge-panels="collapsed"]')).not.toBeNull();
+    expect(textOf("leftColumn")).not.toContain("Starter arrangements");
+    expect(textOf("leftColumn")).toContain("Forge tools");
   });
 
   it("unfolds the panels when the player changes tool, so a tool key is never pressed at nothing", () => {

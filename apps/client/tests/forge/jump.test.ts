@@ -211,6 +211,53 @@ describe("the hop", () => {
     expect(JUMP_HEIGHT_M).toBeGreaterThan(WORLD_SCALE.stepHeight * 2);
   });
 
+  it("latches onto a tall cabinet corner post and climbs its shelf shaft", () => {
+    const floorLink = CLIMB_LINKS.find(
+      (link) => link.from === "floor_07" && link.to === "cabinet_1_shelf_1",
+    );
+    const shaftLink = CLIMB_LINKS.find(
+      (link) => link.from === "cabinet_1_shelf_1" && link.to === "cabinet_1_shelf_2",
+    );
+    expect(floorLink).toBeDefined();
+    expect(shaftLink).toBeDefined();
+
+    for (const link of [floorLink, shaftLink]) {
+      if (link === undefined) continue;
+      const dx = link.target.x - link.position.x;
+      const dz = link.target.z - link.position.z;
+      const yaw = Math.hypot(dx, dz) < 1e-6 ? 0 : Math.atan2(-dx, -dz);
+      const controller = new CharacterController(MIMIC_NAV_DATA, () => HIDER_FORGE_RUN_SPEED);
+      controller.teleportTo({ position: link.position, yaw });
+      const climb = createMoveInput();
+      climb.forward = 1;
+      climb.jump = true;
+      controller.update(FRAME_SECONDS, climb);
+      expect(controller.climbState?.link.to).toBe(link.to);
+    }
+  });
+
+  it("climbs from the shop floor onto each short clock-wall bookcase", () => {
+    const links = CLIMB_LINKS.filter(
+      (link) => link.from === "floor_01" && link.to.startsWith("clockwall_lowshelf_"),
+    );
+    expect(links).toHaveLength(3);
+    for (const link of links) {
+      const controller = new CharacterController(MIMIC_NAV_DATA, () => HIDER_FORGE_RUN_SPEED);
+      controller.teleportTo({ position: link.position, yaw: Math.PI / 2 });
+      const climb = createMoveInput();
+      climb.forward = 1;
+      climb.jump = true;
+      controller.update(FRAME_SECONDS, climb);
+      expect(controller.climbState?.link.to, link.to).toBe(link.to);
+      for (let frame = 0; frame < 600 && controller.climbState !== null; frame += 1) {
+        controller.update(FRAME_SECONDS, climb);
+      }
+      expect(controller.climbState, link.to).toBeNull();
+      expect(controller.surfaceId, link.to).toBe(link.to);
+      expect(controller.position.y, link.to).toBeCloseTo(link.target.y, 5);
+    }
+  });
+
   it("turns a held Forward + Jump at the steel rack into a contextual climb", () => {
     const board = WALKABLE_SURFACES.find((entry) => entry.id === "shelving_board_1");
     if (board === undefined) throw new Error("the map no longer has shelving_board_1");

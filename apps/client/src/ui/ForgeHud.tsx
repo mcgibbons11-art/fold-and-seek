@@ -339,6 +339,7 @@ export function ForgeHud({
 }: ForgeHudProps): ReactElement {
   const [state, setState] = useState<ForgeHudState>(() => controller.snapshot());
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const [panelsExpanded, setPanelsExpanded] = useState(true);
 
   useEffect(() => controller.subscribe(setState), [controller]);
 
@@ -374,6 +375,30 @@ export function ForgeHud({
         </div>
       ) : null}
 
+      <button
+        {...hudProps}
+        type="button"
+        className={PRESS_CLASS}
+        data-forge-panel-toggle={panelsExpanded ? "expanded" : "collapsed"}
+        aria-label={panelsExpanded ? "Collapse forge panels" : "Expand forge panels"}
+        aria-expanded={panelsExpanded}
+        onClick={() => setPanelsExpanded((expanded) => !expanded)}
+        style={{
+          ...buttonStyle,
+          position: "absolute",
+          zIndex: 11,
+          top: FORGE_LAYOUT.topRow,
+          left: panelsExpanded ? LEFT_GUTTER - 4 : FORGE_LAYOUT.edge,
+          width: 34,
+          margin: 0,
+          padding: "8px 0",
+          textAlign: "center",
+          transition: "left 140ms ease",
+        }}
+      >
+        <span aria-hidden>{panelsExpanded ? "◀" : "▶"}</span>
+      </button>
+
       <div
         {...hudProps}
         className="fs-forge-tools"
@@ -382,6 +407,7 @@ export function ForgeHud({
           top: FORGE_LAYOUT.topRow,
           left: FORGE_LAYOUT.edge,
           width: FORGE_LAYOUT.leftColumnWidth,
+          display: panelsExpanded ? undefined : "none",
         }}
       >
         {FORGE_TOOL_MODES.map((mode) => (
@@ -443,12 +469,13 @@ export function ForgeHud({
           maxHeight: PAINT_MAX_HEIGHT,
           overflowY: "auto",
           pointerEvents: "auto",
+          display: panelsExpanded ? undefined : "none",
         }}
       >
         <PaintPanel tool={controller.paint} />
       </div>
 
-      {showContextPanel ? (
+      {showContextPanel && panelsExpanded ? (
         <div
           {...hudProps}
           className="fs-forge-context"
@@ -482,6 +509,7 @@ export function ForgeHud({
           marginRight: "auto",
           textAlign: "center",
           opacity: 0.9,
+          display: panelsExpanded ? undefined : "none",
         }}
       >
         {state.status}
@@ -618,6 +646,7 @@ export function ForgeToolPanels({
   readonly embedded?: boolean;
 }): ReactElement {
   const [state, setState] = useState<ForgeHudState>(() => controller.snapshot());
+  const [panelsExpanded, setPanelsExpanded] = useState(true);
 
   useEffect(() => controller.subscribe(setState), [controller]);
 
@@ -639,8 +668,28 @@ export function ForgeToolPanels({
     <div
       data-sound-scope="semantic"
       data-forge-command-owner="hider-dock"
+      data-forge-panels={panelsExpanded ? "expanded" : "collapsed"}
       style={{ display: "flex", flexDirection: "column", gap: embedded ? 0 : 10, width: embedded ? "100%" : width }}
     >
+      <button
+        {...hudProps}
+        type="button"
+        className={PRESS_CLASS}
+        aria-label={panelsExpanded ? "Collapse forge panels" : "Expand forge panels"}
+        aria-expanded={panelsExpanded}
+        onClick={() => setPanelsExpanded((expanded) => !expanded)}
+        style={{
+          ...buttonStyle,
+          margin: 0,
+          padding: embedded ? "7px 8px" : "8px 10px",
+          textAlign: "right",
+          borderRadius: 8,
+        }}
+      >
+        Forge tools <span aria-hidden>{panelsExpanded ? "\u25c0" : "\u25b6"}</span>
+      </button>
+
+      {panelsExpanded ? <>
       <div
         {...hudProps}
         role="group"
@@ -710,6 +759,7 @@ export function ForgeToolPanels({
           ⟳ Redo
         </button>
       </div>
+      </> : null}
     </div>
   );
 }

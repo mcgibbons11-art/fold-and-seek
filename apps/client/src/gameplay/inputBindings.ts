@@ -1,5 +1,5 @@
 export const REBINDABLE_ACTIONS = [
-  "moveForward", "moveBack", "moveLeft", "moveRight", "jump",
+  "moveForward", "moveBack", "moveLeft", "moveRight", "jump", "grapple",
   "toolPose", "toolShape", "toolPanels", "toolMaterial", "toolPaint",
   "mirror", "eyedropper", "taunt",
 ] as const;
@@ -12,19 +12,19 @@ export type GamepadBindings = Readonly<Record<InputAction, GamepadCode | null>>;
 
 export const INPUT_ACTION_LABELS: Readonly<Record<InputAction, string>> = {
   moveForward: "Move forward", moveBack: "Move back", moveLeft: "Move left", moveRight: "Move right",
-  jump: "Jump / climb", toolPose: "Pose tool", toolShape: "Shape tool", toolPanels: "Panels tool",
+  jump: "Jump / climb", grapple: "Grapple", toolPose: "Pose tool", toolShape: "Shape tool", toolPanels: "Panels tool",
   toolMaterial: "Material tool", toolPaint: "Paint tool", mirror: "Mirror", eyedropper: "Eyedropper", taunt: "Taunt",
 };
 
 const DEFAULTS: InputBindings = {
-  moveForward: "KeyW", moveBack: "KeyS", moveLeft: "KeyA", moveRight: "KeyD", jump: "Space",
+  moveForward: "KeyW", moveBack: "KeyS", moveLeft: "KeyA", moveRight: "KeyD", jump: "Space", grapple: "KeyQ",
   toolPose: "Digit1", toolShape: "Digit2", toolPanels: "Digit3", toolMaterial: "Digit4", toolPaint: "Digit5",
   mirror: "KeyM", eyedropper: "KeyF", taunt: "KeyT",
 };
 
 const GAMEPAD_DEFAULTS: GamepadBindings = {
   moveForward: "Axis1-", moveBack: "Axis1+", moveLeft: "Axis0-", moveRight: "Axis0+",
-  jump: "Button0", toolPose: "Button12", toolShape: "Button13", toolPanels: "Button14",
+  jump: "Button0", grapple: "Button10", toolPose: "Button12", toolShape: "Button13", toolPanels: "Button14",
   toolMaterial: "Button15", toolPaint: "Button9", mirror: "Button3", eyedropper: "Button2",
   taunt: "Button1",
 };
@@ -149,7 +149,7 @@ function persistGamepad(): void {
 
 export interface StandardGamepadState {
   readonly moveX: number; readonly moveY: number; readonly lookX: number; readonly lookY: number;
-  readonly jump: boolean; readonly fire: boolean; readonly aim: boolean;
+  readonly jump: boolean; readonly grapple: boolean; readonly fire: boolean; readonly aim: boolean;
   readonly previousTool: boolean; readonly nextTool: boolean; readonly mirror: boolean;
   readonly toolAction: Extract<InputAction, "toolPose" | "toolShape" | "toolPanels" | "toolMaterial" | "toolPaint"> | null;
 }
@@ -186,7 +186,9 @@ export function readStandardGamepad(): StandardGamepadState | null {
     moveX: gamepadActionValue(pad, "moveRight") - gamepadActionValue(pad, "moveLeft"),
     moveY: gamepadActionValue(pad, "moveBack") - gamepadActionValue(pad, "moveForward"),
     lookX: axis(pad.axes[2]), lookY: axis(pad.axes[3]),
-    jump: gamepadActionValue(pad, "jump") > 0.45, fire: (pad.buttons[7]?.value ?? 0) > 0.45,
+    jump: gamepadActionValue(pad, "jump") > 0.45,
+    grapple: gamepadActionValue(pad, "grapple") > 0.45,
+    fire: (pad.buttons[7]?.value ?? 0) > 0.45,
     aim: (pad.buttons[6]?.value ?? 0) > 0.45, previousTool: pad.buttons[4]?.pressed ?? false,
     nextTool: pad.buttons[5]?.pressed ?? false, mirror: gamepadActionValue(pad, "mirror") > 0.45,
     toolAction,

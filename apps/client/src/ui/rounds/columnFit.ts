@@ -135,18 +135,9 @@ export function hiderDensityFor(
 }
 
 /**
- * Whether the tool panels start unfolded: wherever the column can hold them
- * whole.
- *
- * This reverses the round-1 critic's always-folded default BY USER DIRECTIVE
- * (2026-08-02): "the player should never lose access to their fold tools even
- * mid round. they should always be able to hide and update." The sim has
- * always honoured that rule — a locked disguise stays editable through the
- * whole hunt — but a folded panel READ as the tools being taken away, and how
- * it reads is what the player experiences. The critic's clutter finding still
- * governs the case it was actually about: where the open panels would not fit
- * (720p), the column starts folded and the rail's keys remain the way in.
+ * Forge controls always begin visible. The player may deliberately collapse
+ * them with the arrow, but viewport height never silently hides a core tool.
  */
-export function forgePanelsOpenByDefault(availableHeight: number): boolean {
-  return hiderColumnHeight(ROOMY, { scored: true, forgeOpen: true }) <= availableHeight;
+export function forgePanelsOpenByDefault(_availableHeight: number): boolean {
+  return true;
 }

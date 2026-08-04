@@ -1,4 +1,4 @@
-import { Group, type Object3D, type PerspectiveCamera } from "three";
+import { Group, Vector3, type Object3D, type PerspectiveCamera } from "three";
 import type { MatchCommand } from "@foldseek/game-sim";
 import type { MatchSettings } from "@foldseek/shared";
 
@@ -11,6 +11,8 @@ import { InspectorBody } from "./InspectorBody";
 import { InspectorCamera, type InspectorCameraOptions } from "./InspectorCamera";
 import { createMoveInput, InspectorController } from "./InspectorController";
 import { InspectorInput, type InspectorInputOptions } from "./InspectorInput";
+import { GrappleVisual } from "./GrappleVisual";
+import { grappleTargetFromRay } from "./grappleTarget";
 import { BRISK_WALK_MULTIPLIER, type NavData, type SpawnPose } from "./navData";
 
 export {
@@ -180,6 +182,8 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
     gun.attachToSocket(socket);
   });
   gun.attachToHand(body.hand);
+  const grappleVisual = new GrappleVisual(deps.scene);
+  const grappleHand = new Vector3();
   const onCameraSample = deps.onCameraSample;
   const samples = new CameraSamplePublisher(
     onCameraSample === undefined ? 0 : deps.settings.cameraSampleHz,
@@ -240,6 +244,14 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
       }
       const aiming = this.enabled && (input?.aimHeld ?? false);
       const firePressed = (input?.takeFirePressed() ?? false) && this.enabled;
+      const grapplePressed = (input?.takeGrapplePressed() ?? false) && this.enabled;
+
+      if (grapplePressed) {
+        if (!controller.releaseGrapple()) {
+          const target = grappleTargetFromRay(deps.navData, cameraRig.eye, cameraRig.forward);
+          if (target !== null) controller.startGrapple(target);
+        }
+      }
 
       controller.update(dtSeconds, moveInput);
       root.position.set(controller.position.x, controller.position.y, controller.position.z);
@@ -258,6 +270,7 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
         dataset["inspectorPitch"] = String(controller.pitch);
         dataset["inspectorGrounded"] = String(controller.grounded);
         dataset["inspectorClimbing"] = String(controller.climbState !== null);
+        dataset["inspectorGrappling"] = String(controller.grappleState !== null);
       }
 
       cameraRig.update(dtSeconds, controller, aiming);
@@ -288,11 +301,13 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
         speedMps: controller.speed,
         speedCapMps: deps.settings.inspectorMoveSpeed * (moveInput.brisk ? BRISK_WALK_MULTIPLIER : 1),
         airborne: controller.airborne,
-        climbing: controller.climbState !== null,
+        climbing: controller.climbState !== null || controller.grappleState !== null,
         landingSpeed: controller.justLanded ? controller.landingSpeed : 0,
         pitch: controller.pitch,
         aimAmount: cameraRig.aimAmount,
       });
+      body.hand.getWorldPosition(grappleHand);
+      grappleVisual.update(grappleHand, controller.grappleState?.anchor ?? null, dtSeconds);
 
       // A round is shown from the weapon's own count rather than from the
       // trigger, so a shot the driver refused (cooling, still pending) never
@@ -331,12 +346,13 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
         controller.yaw,
         controller.pitch,
         controller.airborne,
-        controller.climbState !== null,
+        controller.climbState !== null || controller.grappleState !== null,
       );
     },
 
     spawnAt(pose: SpawnPose): void {
       controller.teleportTo(pose);
+      grappleVisual.update(grappleHand, null);
       weapon.cancel();
       samples.reset();
       sentFocusId = null;
@@ -382,7 +398,9 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
         delete deps.domElement.dataset["inspectorPitch"];
         delete deps.domElement.dataset["inspectorGrounded"];
         delete deps.domElement.dataset["inspectorClimbing"];
+        delete deps.domElement.dataset["inspectorGrappling"];
       }
+      grappleVisual.dispose();
       gun.dispose();
       body.dispose();
       root.removeFromParent();

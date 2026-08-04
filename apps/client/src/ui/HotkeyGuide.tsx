@@ -16,6 +16,7 @@ const GENERAL_HOTKEYS: readonly ControlHint[] = [
   { id: "game-menu", keys: ["F1"], label: "Open or close the game menu" },
   { id: "move", keys: ["W", "A", "S", "D"], label: "Move" },
   { id: "climb", keys: ["Space"], label: "Jump · hold forward at a solid to climb" },
+  { id: "grapple", keys: ["Q"], label: "Fire or release grapple · S emergency-releases" },
   { id: "board", keys: ["6"], label: "Toggle the missed-finds board" },
   { id: "taunt", keys: ["T"], label: "Taunt as a hiding Mimic" },
 ];
@@ -23,7 +24,7 @@ const GENERAL_HOTKEYS: readonly ControlHint[] = [
 const FORGE_HOTKEYS: readonly ControlHint[] = [
   { id: "tools", keys: ["1", "2", "3", "4", "5"], label: "Pose · Shape · Panels · Material · Paint" },
   { id: "cycle-tools", keys: ["Tab"], label: "Cycle tools (Shift reverses)" },
-  { id: "cycle-preset", keys: ["Q"], label: "Cycle the active pose, shape, or panel option (Shift reverses)" },
+  { id: "cycle-preset", keys: ["R"], label: "Cycle the active pose, shape, or panel option (Shift reverses)" },
   { id: "quick-preset", keys: ["Shift", "1–5"], label: "Apply a quick pose or selected-part preset" },
   { id: "mirror", keys: ["M"], label: "Mirror every supported edit live" },
   { id: "eyedropper", keys: ["F"], label: "Copy a material or paint colour" },
@@ -63,11 +64,11 @@ export function HotkeyGuide({ role = null }: HotkeyGuideProps): ReactElement {
       </details>
       <details style={detailStyle} open={role === "mimic"}>
         <summary style={sectionStyle}>Mimic</summary>
-        <ControlsLegend hints={[...GENERAL_HOTKEYS.filter((hint) => ["move", "climb", "taunt"].includes(hint.id))]} title={null} />
+        <ControlsLegend hints={[...GENERAL_HOTKEYS.filter((hint) => ["move", "climb", "grapple", "taunt"].includes(hint.id))]} title={null} />
       </details>
       <details style={detailStyle} open={role === "inspector"}>
         <summary style={sectionStyle}>Inspector</summary>
-        <ControlsLegend hints={INSPECTOR_HOTKEYS} title={null} />
+        <ControlsLegend hints={[...GENERAL_HOTKEYS.filter((hint) => hint.id === "grapple"), ...INSPECTOR_HOTKEYS]} title={null} />
       </details>
       <details style={detailStyle}>
         <summary style={sectionStyle}>Forge & hotkeys</summary>

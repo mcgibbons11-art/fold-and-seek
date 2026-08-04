@@ -7,6 +7,7 @@ import { SoundCaptionLedger, type SoundCaption } from "../audio/soundCaptions";
 import { SpatialAudioPlayer, getSpatialAudioRuntime } from "../audio/SpatialAudioPlayer";
 import { WorldAmbienceEmitters } from "../audio/WorldAmbienceEmitters";
 import { trySetPointerCapture } from "../engine/pointerCapture";
+import { focusGameplayCanvas } from "../engine/gameplayFocus";
 import { AudioPlayer, type SoundId } from "../forge/AudioPlayer";
 import { ForgeController } from "../forge/ForgeController";
 import { SHOP_FORGE_WORKSPACE } from "../world/ShopWorld";
@@ -765,6 +766,13 @@ export class RoundSession {
   }
 
   private onPhaseEntered(phase: MatchPhase, state: RoundViewState): void {
+    if (
+      phase === MatchPhase.Forge ||
+      phase === MatchPhase.Locking ||
+      INSPECTION_PHASES.has(phase)
+    ) {
+      focusGameplayCanvas(this.options.canvas);
+    }
     if (phase === MatchPhase.Loading) {
 
       // Loading clears the lobby's ready flags and waits for everyone to say
@@ -810,6 +818,10 @@ export class RoundSession {
       // with the office door shut, which is the one square metre of the shop a
       // Mimic may never stand in (§10.4).
       navData: MIMIC_NAV_DATA,
+      onGrapple: (target) => {
+        if (!INSPECTION_PHASES.has(this.state().phase)) return;
+        this.options.adapter.sendCommand({ type: "grapple", target: [target.x, target.y, target.z] });
+      },
     });
     this.forge = forge;
     this.forgeLocked = false;

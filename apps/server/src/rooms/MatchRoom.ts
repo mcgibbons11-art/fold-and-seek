@@ -47,6 +47,7 @@ const COMMAND_MESSAGE_TYPES: readonly MatchCommand["type"][] = [
   "lock_disguise",
   "accuse",
   "focus",
+  "grapple",
   "taunt",
   "vote_result",
   "vote_rematch",

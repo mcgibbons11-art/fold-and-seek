@@ -57,6 +57,7 @@ interface FixtureOptions {
   readonly seed?: number;
   /** Milliseconds the authority's clock leads this machine's clock by. */
   readonly serverClockLeadMs?: number;
+  readonly rejectionLifetimeMs?: number;
 }
 
 function createFixture(options: FixtureOptions = {}): Fixture {
@@ -68,7 +69,13 @@ function createFixture(options: FixtureOptions = {}): Fixture {
     // The simulation runs on the authority's clock, which leads this machine's.
     now: () => clock + lead,
   });
-  const director = new RoundDirector(adapter, { now: () => clock, tickIntervalMs: 0 });
+  const director = new RoundDirector(adapter, {
+    now: () => clock,
+    tickIntervalMs: 0,
+    ...(options.rejectionLifetimeMs === undefined
+      ? {}
+      : { rejectionLifetimeMs: options.rejectionLifetimeMs }),
+  });
   const states: RoundViewState[] = [];
   director.subscribe((state) => states.push(state));
 
@@ -276,6 +283,19 @@ describe("RoundDirector", () => {
     // rejected.
     expect(fixture.state().rejections.length).toBe(before);
 
+    fixture.dispose();
+  });
+
+  it("expires a refused-action notice instead of pinning it to the HUD", async () => {
+    const fixture = await startedFixture({ rejectionLifetimeMs: 250 });
+    fixture.runTo(MatchPhase.Inspection);
+
+    fixture.adapter.sendCommand({ type: "accuse", targetObjectId: "no-such-object" });
+    fixture.advance(1);
+    expect(fixture.state().rejections).toHaveLength(1);
+
+    fixture.advance(3);
+    expect(fixture.state().rejections).toHaveLength(0);
     fixture.dispose();
   });
 

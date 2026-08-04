@@ -26,7 +26,7 @@ interface PendingConflict {
 }
 
 const GROUPS: ReadonlyArray<Readonly<{ label: string; actions: readonly InputAction[] }>> = [
-  { label: "Movement", actions: ["moveForward", "moveBack", "moveLeft", "moveRight", "jump"] },
+  { label: "Movement", actions: ["moveForward", "moveBack", "moveLeft", "moveRight", "jump", "grapple"] },
   { label: "Forge", actions: ["toolPose", "toolShape", "toolPanels", "toolMaterial", "toolPaint", "mirror", "eyedropper"] },
   { label: "Hunt", actions: ["taunt"] },
 ];

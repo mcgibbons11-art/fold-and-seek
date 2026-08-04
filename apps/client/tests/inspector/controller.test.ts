@@ -1,4 +1,9 @@
-import { DEFAULT_MATCH_SETTINGS, HIDER_FORGE_RUN_SPEED } from "@foldseek/shared";
+import {
+  DEFAULT_MATCH_SETTINGS,
+  GRAPPLE_MAX_RANGE_M,
+  GRAPPLE_PULL_SPEED_MPS,
+  HIDER_FORGE_RUN_SPEED,
+} from "@foldseek/shared";
 import { describe, expect, it } from "vitest";
 
 import { CharacterController } from "../../src/inspector/CharacterController";
@@ -579,6 +584,42 @@ describe("CharacterController falling through the shop", () => {
     expect(controller.position.z).toBeLessThan(CRATE.min.z);
     expect(controller.position.y).toBe(0);
     expect(controller.surfaceId).not.toBeNull();
+  });
+});
+
+describe("mechanical grapple traversal", () => {
+  it("pulls through the air at grapple speed and releases into ordinary gravity", () => {
+    const controller = spawned(OPEN_ROOM, 0, 0, 0);
+    const anchor = { x: 2, y: 1.2, z: 0 };
+    expect(controller.startGrapple(anchor)).toBe(true);
+    const before = { ...controller.position };
+
+    controller.update(0.1, createMoveInput());
+    expect(controller.grappleState).not.toBeNull();
+    expect(Math.hypot(
+      controller.position.x - before.x,
+      controller.position.y - before.y,
+      controller.position.z - before.z,
+    )).toBeCloseTo(GRAPPLE_PULL_SPEED_MPS * 0.1, 5);
+
+    const release = createMoveInput();
+    release.disengageClimb = true;
+    const releaseHeight = controller.position.y;
+    controller.update(FRAME_SECONDS, release);
+    expect(controller.grappleState).toBeNull();
+    expect(controller.position.y).toBeLessThan(releaseHeight);
+    expect(controller.grounded).toBe(false);
+  });
+
+  it("refuses out-of-range latches and drops the cable instead of crossing a blocker", () => {
+    const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0, 0);
+    expect(controller.startGrapple({ x: GRAPPLE_MAX_RANGE_M + 1, y: 1, z: 0 })).toBe(false);
+    expect(controller.startGrapple({ x: 2, y: 1, z: 0 })).toBe(true);
+    for (let frame = 0; frame < 120 && controller.grappleState !== null; frame += 1) {
+      controller.update(FRAME_SECONDS, createMoveInput());
+    }
+    expect(controller.grappleState).toBeNull();
+    expect(controller.position.x).toBeLessThan(WALL.min.x - INSPECTOR_RADIUS_M + 0.01);
   });
 });
 

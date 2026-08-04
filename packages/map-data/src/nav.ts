@@ -197,14 +197,18 @@ const CLOCK_WALL_SHELF_Z: readonly (readonly [string, number, number])[] = [
 const ZONE_B_LEDGES: readonly WalkableSurface[] = [
   // clockwall_stool_01, seat height 0.48 plus the 0.047 lathe.
   pad("clockwall_stool_seat", 0.527, -5.6, 1.9, 0.14, 1),
+  // The three low bookcases are shallow against the west wall, so their
+  // navigation tops extend east by one body radius just like the nook shelf.
+  // This gives the capsule somewhere honest to finish a climb without moving
+  // the visible furniture or standing its centre inside the plaster.
+  ...CLOCK_WALL_SHELF_Z.map(([id, lowZ]) =>
+    ledge(`clockwall_lowshelf_${id}`, 1.12, -7.27, lowZ - 0.7, -6.93, lowZ + 0.7, 2),
+  ),
 ];
 
 /**
- * The clock wall carries no ledges. Its three bookcases are set into the wall
- * so that only 0.16 m of each top stands proud of the plaster, and the wall
- * shelves above them hang 0.23 m over those tops. Neither clears the 0.24 m
- * body, so publishing them as walkable would stand the player inside a wall.
- * Deepening those props is the fix, and it belongs in `placements.ts`.
+ * The wall shelves above the low bookcases remain decorative. They are hung
+ * high enough to leave a full player body above the climbable case tops.
  */
 
 /** Zone C, the reading nook. Footstool to armchair to side table. */
@@ -357,7 +361,7 @@ const FURNITURE_BLOCKERS: readonly AABB[] = [
   // B — three open bookcases, the wall shelves above them, the longcase clock.
   ...CLOCK_WALL_SHELF_Z.flatMap(([, lowZ, wallZ]) => [
     aabb(SHOP_MIN_X, 0, lowZ - 0.7, -7.16, 1.12, lowZ + 0.7),
-    aabb(SHOP_MIN_X, 1.33, wallZ - 0.55, -7.15, 1.368, wallZ + 0.55),
+    aabb(SHOP_MIN_X, 1.63, wallZ - 0.55, -7.15, 1.668, wallZ + 0.55),
   ]),
   aabb(-7.4, 0, 1.9, -6.85, 2.35, 2.15),
   aabb(-5.74, 0.48, 1.76, -5.46, 0.527, 2.04),
@@ -525,30 +529,86 @@ function ladder(
   };
 }
 
+const CABINET_FLOOR_NEIGHBOURS = [
+  { north: "floor_05", south: "floor_10", west: "floor_07", east: "floor_09" },
+  { north: "floor_05", south: "floor_10", west: "floor_09", east: "floor_08" },
+  { north: "floor_10", south: "floor_06", west: "floor_07", east: "floor_09" },
+  { north: "floor_10", south: "floor_06", west: "floor_09", east: "floor_08" },
+] as const;
+
 const CABINET_CLIMB_LINKS: readonly ClimbLink[] = CABINET_BLOCKS.flatMap(
   (block, cabinetIndex) => {
     const x = (block.min.x + block.max.x) * 0.5;
     const z = (block.min.z + block.max.z) * 0.5;
     const approachZ = cabinetIndex < 2 ? block.max.z + 0.05 : block.min.z - 0.05;
+    const entryGap = WORLD_SCALE.playerRadius + 0.03;
+    const laneXs = [block.min.x + 0.16, block.max.x - 0.16] as const;
+    const laneZs = [z - 0.1, z + 0.1] as const;
+    const neighbours = CABINET_FLOOR_NEIGHBOURS[cabinetIndex];
+    if (neighbours === undefined) return [];
     const baseName = `cabinet_${cabinetIndex + 1}_base`;
     const names = CABINET_SHELF_TOPS.map(
       (_top, shelfIndex) => `cabinet_${cabinetIndex + 1}_shelf_${shelfIndex + 1}`,
     );
+    const firstShelf = names[0] as string;
+    const faceLadders: ClimbLink[] = [
+      ...laneXs.map((laneX) =>
+        ladder(
+          neighbours.north,
+          firstShelf,
+          [laneX, 0, block.min.z - entryGap],
+          [laneX, CABINET_SHELF_TOPS[0], z - 0.1],
+        ),
+      ),
+      ...laneXs.map((laneX) =>
+        ladder(
+          neighbours.south,
+          firstShelf,
+          [laneX, 0, block.max.z + entryGap],
+          [laneX, CABINET_SHELF_TOPS[0], z + 0.1],
+        ),
+      ),
+      ...laneZs.map((laneZ) =>
+        ladder(
+          neighbours.west,
+          firstShelf,
+          [block.min.x - entryGap, 0, laneZ],
+          [block.min.x + 0.16, CABINET_SHELF_TOPS[0], laneZ],
+        ),
+      ),
+      ...laneZs.map((laneZ) =>
+        ladder(
+          neighbours.east,
+          firstShelf,
+          [block.max.x + entryGap, 0, laneZ],
+          [block.max.x - 0.16, CABINET_SHELF_TOPS[0], laneZ],
+        ),
+      ),
+    ];
+    const cornerShafts: ClimbLink[] = laneXs.flatMap((laneX) =>
+      laneZs.flatMap((laneZ) => [
+        ladder(
+          names[0] as string,
+          names[1] as string,
+          [laneX, CABINET_SHELF_TOPS[0], laneZ],
+          [laneX, CABINET_SHELF_TOPS[1], laneZ],
+        ),
+        ladder(
+          names[1] as string,
+          names[2] as string,
+          [laneX, CABINET_SHELF_TOPS[1], laneZ],
+          [laneX, CABINET_SHELF_TOPS[2], laneZ],
+        ),
+      ]),
+    );
     return [
+      // Each visible corner post has a real ladder lane from every exposed
+      // face. The old single centre trigger made the posts look climbable while
+      // requiring the player to abandon them and hunt for an invisible point.
+      ...faceLadders,
       mantle("floor_10", baseName, [x, 0, approachZ], [x, 0.16, z]),
       mantle(baseName, names[0] as string, [x, 0.16, z], [x, CABINET_SHELF_TOPS[0], z]),
-      mantle(
-        names[0] as string,
-        names[1] as string,
-        [x, CABINET_SHELF_TOPS[0], z],
-        [x, CABINET_SHELF_TOPS[1], z],
-      ),
-      mantle(
-        names[1] as string,
-        names[2] as string,
-        [x, CABINET_SHELF_TOPS[1], z],
-        [x, CABINET_SHELF_TOPS[2], z],
-      ),
+      ...cornerShafts,
     ];
   },
 );
@@ -570,6 +630,9 @@ export const CLIMB_LINKS: readonly ClimbLink[] = [
 
   // B — only the stool, for the reason given beside ZONE_B_LEDGES.
   mantle("floor_01", "clockwall_stool_seat", [-5.6, 0, 1.56], [-5.6, 0.527, 1.9]),
+  ...CLOCK_WALL_SHELF_Z.map(([id, lowZ]) =>
+    ladder("floor_01", `clockwall_lowshelf_${id}`, [-6.72, 0, lowZ], [-7.06, 1.12, lowZ]),
+  ),
 
   // C — footstool to armchair to side table, and the bookcase in the corner.
   mantle("floor_02", "nook_footstool", [-5.55, 0, 4.75], [-5.55, 0.35, 4.35]),

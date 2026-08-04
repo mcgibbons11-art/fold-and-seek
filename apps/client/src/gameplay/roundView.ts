@@ -303,6 +303,8 @@ export interface RejectionView {
   readonly commandType: string;
   readonly reason: string;
   readonly detail: string | null;
+  /** Local monotonic deadline after which the HUD must stop showing it. */
+  readonly expiresAtLocalMs: number;
 }
 
 export interface ConnectionView {
