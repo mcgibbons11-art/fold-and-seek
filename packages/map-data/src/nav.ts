@@ -216,7 +216,7 @@ const ZONE_B_LEDGES: readonly WalkableSurface[] = [
   // This gives the capsule somewhere honest to finish a climb without moving
   // the visible furniture or standing its centre inside the plaster.
   ...CLOCK_WALL_SHELF_Z.map(([id, lowZ]) =>
-    ledge(`clockwall_lowshelf_${id}`, 1.12, -7.27, lowZ - 0.7, -6.93, lowZ + 0.7, 2),
+    ledge(`clockwall_lowshelf_${id}`, 1.12, -7.32, lowZ - 0.7, -6.78, lowZ + 0.7, 2),
   ),
   // The wall shelves above the low bookcases, standable since the 2026-08-04
   // expansion: the shelves hang at 1.7 and are the middle stage of the west
@@ -236,7 +236,7 @@ const ZONE_C_LEDGES: readonly WalkableSurface[] = [
   // nook_sidetable_01 lathe top face at 0.67.
   pad("nook_sidetable_top", 0.67, -5.4, 3.5, 0.22, 1),
   // nook_lowshelf_01, same 1.12 carcass as the clock wall, facing east.
-  ledge("nook_lowshelf", 1.12, -7.27, 4.35, -6.93, 5.35, 2),
+  ledge("nook_lowshelf", 1.12, -7.32, 4.35, -6.78, 5.35, 2),
   // nook_stool_01, size 0.5 quantized to 0.48.
   pad("nook_stool_seat", 0.527, -3.0, 3.4, 0.14, 1),
 ];
@@ -434,8 +434,21 @@ const FURNITURE_BLOCKERS: readonly AABB[] = [
   // B — three open bookcases, the wall shelves above them, the longcase clock.
   // The wall shelves hang at 1.7 since the expansion and their blocker tops out
   // at the standable plank face, exactly like every other supporting blocker.
+  //
+  // The bookcases collide board by board since 2026-08-04 (user verdict: the
+  // old single slab was a barrier pretending to be furniture). The bays are
+  // too low for a standing walker, but a folded body may legally creep its
+  // root into one - which is exactly what a bookcase is for in this game.
   ...CLOCK_WALL_SHELF_Z.flatMap(([, lowZ, wallZ]) => [
-    aabb(SHOP_MIN_X, 0, lowZ - 0.7, -7.16, 1.12, lowZ + 0.7),
+    // Shelf boards, tops as the builder lays them (0.06/0.42/0.78 + 0.016,
+    // and the 1.12 display top).
+    ...[0.076, 0.436, 0.796, 1.12].map((topY) =>
+      aabb(-7.3, topY - 0.032, lowZ - 0.68, -6.84, topY, lowZ + 0.68),
+    ),
+    // End panels and the thin back against the plaster.
+    aabb(-7.3, 0, lowZ - 0.7, -6.84, 1.12, lowZ - 0.66),
+    aabb(-7.3, 0, lowZ + 0.66, -6.84, 1.12, lowZ + 0.7),
+    aabb(-7.32, 0, lowZ - 0.7, -7.28, 1.12, lowZ + 0.7),
     aabb(SHOP_MIN_X, 1.68, wallZ - 0.55, -7.15, 1.7175, wallZ + 0.55),
   ]),
   // B — the second longcase clock, freestanding cover on the open floor.
@@ -448,7 +461,7 @@ const FURNITURE_BLOCKERS: readonly AABB[] = [
   aabb(-6.9, 0.61, 3.0, -5.9, 1.32, 3.32),
   aabb(-5.82, 0, 4.13, -5.28, 0.35, 4.57),
   aabb(-5.74, 0, 3.16, -5.06, 0.67, 3.84),
-  aabb(-7.4, 0, 4.3, -6.93, 1.12, 5.4),
+  aabb(-7.4, 0, 4.3, -6.83, 1.12, 5.4),
   aabb(-4.4, 0, 4.9, -4.1, 0.62, 5.3),
   aabb(-3.14, 0.48, 3.26, -2.86, 0.527, 3.54),
 
@@ -825,14 +838,14 @@ export const CLIMB_LINKS: readonly ClimbLink[] = [
   // B — only the stool, for the reason given beside ZONE_B_LEDGES.
   mantle("floor_01", "clockwall_stool_seat", [-5.6, 0, 1.56], [-5.6, 0.527, 1.9]),
   ...CLOCK_WALL_SHELF_Z.map(([id, lowZ]) =>
-    ladder("floor_01", `clockwall_lowshelf_${id}`, [-6.72, 0, lowZ], [-7.06, 1.12, lowZ]),
+    ladder("floor_01", `clockwall_lowshelf_${id}`, [-6.6, 0, lowZ], [-7.06, 1.12, lowZ]),
   ),
 
   // C — footstool to armchair to side table, and the bookcase in the corner.
   mantle("floor_02", "nook_footstool", [-5.55, 0, 4.75], [-5.55, 0.35, 4.35]),
   mantle("nook_footstool", "nook_armchair_seat", [-5.75, 0.35, 4.2], [-6.4, 0.61, 3.7]),
   mantle("nook_armchair_seat", "nook_sidetable_top", [-6.06, 0.61, 3.5], [-5.5, 0.67, 3.5]),
-  ladder("floor_02", "nook_lowshelf", [-6.73, 0, 4.85], [-7.06, 1.12, 4.85]),
+  ladder("floor_02", "nook_lowshelf", [-6.6, 0, 4.85], [-7.06, 1.12, 4.85]),
   mantle("floor_02", "nook_stool_seat", [-3.0, 0, 3.06], [-3.0, 0.527, 3.4]),
 
   // D — the stools are the route onto the counter; the drawers reach the cabinet.

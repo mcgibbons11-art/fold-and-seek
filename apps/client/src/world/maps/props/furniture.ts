@@ -491,7 +491,11 @@ export function buildLowShelf(ctx: PropContext, placement: PropPlacement): void 
   const back = ctx.materials.get(swatchRole(placement, 1, "paint_verdigris_03"));
   const width = quantize(placement.size ?? 1.1, 0.15);
   const height = 1.12;
-  const depth = 0.34;
+  // Deepened 0.34 -> 0.5 (2026-08-04, user verdict): the bays were too
+  // shallow to read as places a body could fold into, and on the clock wall
+  // their collision was one solid slab besides. The nav data opens those bays
+  // board by board now, so the depth is what makes the hollow worth having.
+  const depth = 0.5;
   const b = ctx.batcher;
 
   const side = ctx.geometry.get(sized("lowShelf.side", height, depth), () => chamferedBox(0.04, height, depth, 0.01));

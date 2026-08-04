@@ -707,6 +707,9 @@ const CLOCK_WALL: readonly PropPlacement[] = [
       focus: [0.24, 0.3, 0.9],
     }),
   ),
+  // Deepened and pulled to the wall's inner face (2026-08-04): the carcass
+  // now stands proud of the plaster and its bays are open hollows a folded
+  // body can creep into, board blockers only - see EXPANSION of nav.ts.
   ...[-2.5, -0.5, 1.4].map((z, index) =>
     p({
       objectId: `clockwall_lowshelf_${String(index + 1).padStart(2, "0")}`,
@@ -714,12 +717,12 @@ const CLOCK_WALL: readonly PropPlacement[] = [
       categoryId: "low_shelf",
       family: "furniture",
       zoneId: "clock_wall",
-      position: [-7.33, 0, z],
+      position: [-7.07, 0, z],
       rotationY: WEST,
       size: 1.4,
       hero: index === 1,
       swatchIds: ["walnut_mid_02", "paint_verdigris_03"],
-      focus: [0.4, 1.12, 1.4],
+      focus: [0.56, 1.12, 1.4],
     }),
   ),
   p({
@@ -1359,11 +1362,11 @@ const READING_NOOK: readonly PropPlacement[] = [
     categoryId: "low_shelf",
     family: "furniture",
     zoneId: "reading_nook",
-    position: [-7.1, 0, 4.85],
+    position: [-7.07, 0, 4.85],
     rotationY: WEST,
     size: 1.1,
     swatchIds: ["walnut_mid_02", "velvet_burgundy_01"],
-    focus: [0.4, 1.12, 1.1],
+    focus: [0.56, 1.12, 1.1],
   }),
   p({
     objectId: "nook_bookrow_01",
