@@ -82,7 +82,7 @@ export interface InspectorSystemDeps {
   readonly sendCommand: (command: MatchCommand) => void;
   readonly onFocusChange: (focus: FocusMetadata | null) => void;
   readonly settings: MatchSettings;
-  /** Free-pointer keyboard/mouse target. Omitted in headless runs. */
+  /** Inspector pointer-lock target. Omitted in headless runs. */
   readonly domElement?: HTMLElement | null;
   readonly onCameraSample?: (sample: CameraSample) => void;
   /**
@@ -95,6 +95,7 @@ export interface InspectorSystemDeps {
   readonly onShot?: (outcome: ShotOutcome, targetObjectId: string | null) => void;
   /** Gun state for the HUD: aiming, ammo, reticle target, cooldown phase. */
   readonly onWeaponState?: (state: WeaponState) => void;
+  readonly onPointerLockChange?: (locked: boolean) => void;
   readonly cameraOptions?: InspectorCameraOptions;
   readonly inputOptions?: InspectorInputOptions;
   /**
@@ -141,6 +142,7 @@ export interface InspectorSystem {
   handleAccusationResolved(correct: boolean): void;
   /** A refusal from the adapter's `onRejection`, of any command type. */
   handleRejection(rejection: { readonly type: string; readonly reason: string }): void;
+  requestPointerLock(): void;
   dispose(): void;
 }
 
@@ -187,7 +189,10 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
 
   const input =
     deps.domElement != null
-      ? new InspectorInput(deps.domElement, deps.inputOptions)
+      ? new InspectorInput(deps.domElement, {
+          ...deps.inputOptions,
+          onLockChange: deps.onPointerLockChange,
+        })
       : null;
   input?.attach();
 
@@ -379,6 +384,10 @@ export function createInspectorSystem(deps: InspectorSystemDeps): InspectorSyste
     handleRejection(rejection: { readonly type: string; readonly reason: string }): void {
       if (rejection.type !== "accuse") return;
       weapon.handleRejection(rejection.reason);
+    },
+
+    requestPointerLock(): void {
+      input?.requestLock();
     },
 
     dispose(): void {

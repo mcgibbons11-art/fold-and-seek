@@ -13,6 +13,7 @@ interface FirstRoundGuideProps {
   readonly state: RoundViewState;
   readonly forge: ForgeController | null;
   readonly gun: InspectorGunView;
+  readonly pointerLocked: boolean;
 }
 
 interface GuideStep {
@@ -28,7 +29,7 @@ const MIMIC_STEPS: readonly GuideStep[] = [
 ];
 
 const INSPECTOR_STEPS: readonly GuideStep[] = [
-  { title: "Take control", instruction: "Move the mouse to aim. The crosshair stays visible and the cursor stays free." },
+  { title: "Take control", instruction: "Click the room · move the mouse to look and aim · Esc releases the cursor." },
   { title: "Acquire", instruction: "Aim at an object until the reticle responds." },
   { title: "Get close", instruction: "WASD moves · Space hops · move inside warrant range." },
   { title: "Accuse", instruction: "Click to fire. Every shot spends a warrant." },
@@ -62,12 +63,13 @@ function guidePhase(role: PlayerRole, phase: MatchPhase): boolean {
 }
 
 /** A small checklist that advances from real gameplay actions, never from Next buttons. */
-export function FirstRoundGuide({ state, forge, gun }: FirstRoundGuideProps): ReactElement | null {
+export function FirstRoundGuide({ state, forge, gun, pointerLocked }: FirstRoundGuideProps): ReactElement | null {
   const role = state.self.role;
   const [dismissed, setDismissed] = useState(() => role === null || readComplete(role));
   const [moved, setMoved] = useState(false);
   const [edited, setEdited] = useState(false);
   const [painted, setPainted] = useState(false);
+  const [captured, setCaptured] = useState(false);
   const [acquired, setAcquired] = useState(false);
   const [inRange, setInRange] = useState(false);
   const initialShots = useRef({ accusations: state.accusations.length, dryFires: gun.dryFires });
@@ -117,14 +119,15 @@ export function FirstRoundGuide({ state, forge, gun }: FirstRoundGuideProps): Re
   }, [dismissed, forge, role]);
 
   useEffect(() => {
+    if (pointerLocked) setCaptured(true);
     if (gun.targetObjectId !== null) setAcquired(true);
     if (gun.targetInRange) setInRange(true);
-  }, [gun.targetInRange, gun.targetObjectId]);
+  }, [gun.targetInRange, gun.targetObjectId, pointerLocked]);
 
   const progress = useMemo(() => {
     if (role === "mimic") return [moved, edited, painted, state.self.disguiseLocked];
-    return [true, acquired, inRange, state.accusations.length > initialShots.current.accusations || gun.dryFires > initialShots.current.dryFires];
-  }, [acquired, edited, gun.dryFires, inRange, moved, painted, role, state.accusations.length, state.self.disguiseLocked]);
+    return [captured, acquired, inRange, state.accusations.length > initialShots.current.accusations || gun.dryFires > initialShots.current.dryFires];
+  }, [acquired, captured, edited, gun.dryFires, inRange, moved, painted, role, state.accusations.length, state.self.disguiseLocked]);
 
   const complete = progress.every(Boolean);
   useEffect(() => {

@@ -179,7 +179,7 @@ export function RoundHud({
           onLeave={onLeave}
           role={state.self.role}
         />
-        <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} />
+        <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
         <SoundCaptionHud captions={engine.soundCaptions} />
       </>
     );
@@ -226,7 +226,7 @@ export function RoundHud({
         onLeave={onLeave}
         role={state.self.role}
       />
-      <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} />
+      <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
       <SoundCaptionHud captions={engine.soundCaptions} />
     </>
   );

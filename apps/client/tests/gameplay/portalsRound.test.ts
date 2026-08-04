@@ -184,7 +184,10 @@ function lockedTriggerElement(): HTMLElement {
   };
   element.ownerDocument = ownerDocument;
   element.dataset = {};
-  element.requestPointerLock = () => undefined;
+  element.requestPointerLock = () => {
+    ownerDocument.pointerLockElement = element as unknown as Element;
+    ownerDocument.dispatchEvent(new Event("pointerlockchange"));
+  };
   return element as unknown as HTMLElement;
 }
 
@@ -420,6 +423,7 @@ describe("a Portals round", () => {
       onEye: (eye) => inspector.round.spatial.setInspectorEye(selfId, eye),
       onShot: (outcome, targetObjectId) => shots.push({ outcome, targetObjectId }),
     });
+    system.requestPointerLock();
     system.setAmmo(
       inspector.round.adapter.getSync().privateState?.warrantsRemaining ?? 0,
     );

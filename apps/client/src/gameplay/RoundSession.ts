@@ -346,6 +346,7 @@ export class RoundSession {
       this.receiveInspectorCamera(seatId, sample);
     });
     if (unsubscribeCamera !== undefined) this.subscriptions.push(unsubscribeCamera);
+    this.options.canvas.addEventListener("click", this.onCanvasClick);
     this.options.canvas.addEventListener("pointerdown", this.onSurveyPointerDown);
     this.options.canvas.addEventListener("pointermove", this.onSurveyPointerMove);
     this.options.canvas.addEventListener("pointerup", this.onSurveyPointerUp);
@@ -534,6 +535,7 @@ export class RoundSession {
   dispose(): void {
     this.cancelGameplayFocus?.();
     this.cancelGameplayFocus = null;
+    this.options.canvas.removeEventListener("click", this.onCanvasClick);
     this.options.canvas.removeEventListener("pointerdown", this.onSurveyPointerDown);
     this.options.canvas.removeEventListener("pointermove", this.onSurveyPointerMove);
     this.options.canvas.removeEventListener("pointerup", this.onSurveyPointerUp);
@@ -994,6 +996,9 @@ export class RoundSession {
       onFocusChange: (focus) => {
         this.focus = focus;
       },
+      onPointerLockChange: (locked) => {
+        this.pointerLocked = locked;
+      },
       onCameraSample: (sample) => {
         this.options.adapter.sendCameraSample?.(sample);
       },
@@ -1011,7 +1016,10 @@ export class RoundSession {
       },
     });
     this.inspector = inspector;
-    this.options.canvas.style.cursor = "crosshair";
+    // Inspector aim is the centred responsive HUD sight. Hiding the browser's
+    // second crosshair leaves one honest shot point while pointer lock supplies
+    // unlimited head/camera rotation.
+    this.options.canvas.style.cursor = "none";
     this.inspectablesRevision = this.theatre.revision;
 
     const spawn = NAV_DATA.spawnPoints.inspectors[0];
@@ -1192,6 +1200,10 @@ export class RoundSession {
       return;
     }
     this.options.adapter.sendCommand(command);
+  };
+
+  private readonly onCanvasClick = (): void => {
+    if (this.mode === "inspect" && !this.pointerLocked) this.inspector?.requestPointerLock();
   };
 
   /**
