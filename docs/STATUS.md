@@ -1,5 +1,27 @@
 # STATUS
 
+## Live-play fix wave (2026-08-04, evening)
+
+Seven user verdicts from live editor play, each shipped and synced the same
+hour. Pose desync: a refused pose/paint packet used to wedge the room on a
+stale view (the publisher latched the revision before the authority
+answered); rejections now rearm the publisher and the update retries on the
+ordinary cadence. A hider's own taunt was silent and invisible to its owner
+under spatial audio; it now plays flat, captions, and shakes the Forge body.
+The missed-finds board opened under the Forge tools, off screen in short
+panes; it opens on top now. The clock-wall bookcases collided as one solid
+slab; they are deepened to 0.5, pulled to the wall's inner face, and collide
+board-by-board so folded bodies can creep into the bays. The Security Office
+is furnished as a real guard post (case board, filing corner, tea, ledger,
+key rack, coat stand). The Forge grew 55s -> 115s. How to play prints the
+real tariff from the scoring weights; the first-round guide returns at the
+start of every new game (its permanent localStorage flag was the bug). And
+the menu screens got their remaster: command nav with sublabels, hero fact
+chips over the old void, two-plaque tariff, dashed empty-state in
+matchmaking, one masthead across rules/settings/profile, narrow panes
+reflow the briefing instead of hiding it. All suites stayed green
+throughout; commits ee1426d, aefa8b0, c96bae0, 35416fc, each synced live.
+
 ## The 50-improvement build: room expansion and six gameplay waves (2026-08-04)
 
 One session implemented the approved slice of the 50-improvement plan, with no
