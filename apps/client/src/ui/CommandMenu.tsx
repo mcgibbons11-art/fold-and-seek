@@ -74,6 +74,7 @@ export interface CommandMenuProps {
   readonly browser: RoomBrowserProps | null;
   readonly onPlay: () => void;
   readonly onMatchmaking: () => void;
+  readonly onProfile: () => void;
   readonly onHowToPlay: () => void;
   readonly onSettings: () => void;
 }
@@ -85,6 +86,7 @@ export function CommandMenu({
   browser,
   onPlay,
   onMatchmaking,
+  onProfile,
   onHowToPlay,
   onSettings,
 }: CommandMenuProps): ReactElement {
@@ -122,6 +124,9 @@ export function CommandMenu({
           </button>
           <button type="button" className="fs-menu-nav-button" style={navButtonStyle} onClick={onHowToPlay}>
             How to play
+          </button>
+          <button type="button" className="fs-menu-nav-button" style={navButtonStyle} onClick={onProfile}>
+            Profile &amp; history
           </button>
           <button type="button" className="fs-menu-nav-button" style={navButtonStyle} onClick={onSettings}>
             Settings

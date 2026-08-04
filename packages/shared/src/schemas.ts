@@ -597,12 +597,25 @@ export const PlayerResultSchema = z.strictObject({
   observedTaunts: count,
 });
 
+export const ResultVoteTalliesSchema = z.strictObject({
+  best_disguise: z.record(id, count),
+  funniest_attempt: z.record(id, count),
+  most_audacious: z.record(id, count),
+});
+
 export const MatchResultsSchema = z.strictObject({
   round: count,
   winner: MatchWinnerSchema,
   inspectionDurationMs: timestamp,
   timeRemainingMs: timestamp,
   players: z.array(PlayerResultSchema).max(LIMITS.maxPlayersPerMatch),
+  // Default on decode for a rolling deployment; current authorities always
+  // publish it, while an older room can still fall back to live vote events.
+  voteTallies: ResultVoteTalliesSchema.default(() => ({
+    best_disguise: {},
+    funniest_attempt: {},
+    most_audacious: {},
+  })),
 });
 
 export const SimEventSchema = z.discriminatedUnion("type", [

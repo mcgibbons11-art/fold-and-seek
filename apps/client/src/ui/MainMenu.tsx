@@ -1,12 +1,14 @@
 import { useState, type CSSProperties, type ReactElement } from "react";
 
 import { type QualityTier } from "../rendering/quality";
+import { loadPlayerProfile, summarizePlayerProfile } from "../gameplay/playerProfile";
 import { CommandMenu } from "./CommandMenu";
 import { HotkeyGuide } from "./HotkeyGuide";
 import { PlayerSettingsPanel } from "./PlayerSettingsPanel";
 import { RoomBrowser, type RoomBrowserProps } from "./RoomBrowser";
 import { useScreenEntryFocus } from "./accessibility";
 import {
+  BRASS_LIT,
   CREAM,
   FONT_UI,
   PRESS_CLASS,
@@ -132,6 +134,77 @@ function Settings({
   );
 }
 
+const AWARD_LABELS = {
+  best_disguise: "Best disguise",
+  funniest_attempt: "Funniest attempt",
+  most_audacious: "Most audacious",
+} as const;
+
+function PlayerProfileCard({ onBack }: { readonly onBack: () => void }): ReactElement {
+  const profile = loadPlayerProfile();
+  const summary = summarizePlayerProfile(profile);
+  return (
+    <div style={{ ...rulesCardStyle, width: 620 }} className="fs-rise">
+      <div style={{ textAlign: "center" }}>
+        <div style={{ ...labelStyle, opacity: 0.7, marginBottom: 8 }}>Player profile</div>
+        <div style={{ ...ornamentRuleStyle(180), margin: "0 auto" }} aria-hidden />
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 18 }}>
+        {[
+          ["Rounds", summary.gamesPlayed],
+          ["Wins", summary.wins],
+          ["Awards", summary.totalAwards],
+        ].map(([label, value]) => (
+          <div key={label} style={{ ...plate(), padding: 12, textAlign: "center" }}>
+            <div style={{ ...labelStyle, color: BRASS_LIT }}>{label}</div>
+            <div style={{ marginTop: 4, fontSize: 24 }}>{value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 18, ...labelStyle, color: BRASS_LIT }}>Award cabinet</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 8 }}>
+        {Object.entries(AWARD_LABELS).map(([category, label]) => (
+          <div key={category} style={{ ...plate(), padding: 10 }}>
+            <div style={{ fontSize: 11, opacity: 0.75 }}>{label}</div>
+            <div style={{ marginTop: 3, color: BRASS_LIT }}>{summary.awards[category as keyof typeof AWARD_LABELS]}×</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 18, ...labelStyle, color: BRASS_LIT }}>Recent games</div>
+      <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+        {profile.games.length === 0 ? (
+          <div style={{ opacity: 0.65 }}>Completed rounds will appear here.</div>
+        ) : profile.games.slice(0, 10).map((game) => (
+          <div
+            key={game.id}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "92px 1fr auto auto",
+              gap: 12,
+              alignItems: "center",
+              padding: "8px 10px",
+              borderBottom: "1px solid rgba(176,138,74,.16)",
+            }}
+          >
+            <span style={{ opacity: 0.58 }}>{new Date(game.playedAt).toLocaleDateString()}</span>
+            <span>{game.role === "mimic" ? "Mimic" : "Inspector"}</span>
+            <span style={{ color: game.won ? BRASS_LIT : CREAM }}>{game.won ? "Win" : "Loss"}</span>
+            <span>{game.score} pts · {game.awards.length} award{game.awards.length === 1 ? "" : "s"}</span>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        className={PRESS_CLASS}
+        style={{ ...buttonStyle, ...buttonBlock, marginTop: 20 }}
+        onClick={onBack}
+      >
+        Back
+      </button>
+    </div>
+  );
+}
+
 export interface MainMenuProps {
   readonly onPlayRound: () => void;
   readonly qualityTier: QualityTier;
@@ -156,7 +229,7 @@ export function MainMenu({
   notice = null,
   browser = null,
 }: MainMenuProps): ReactElement {
-  const [page, setPage] = useState<"main" | "rules" | "settings" | "matchmaking">("main");
+  const [page, setPage] = useState<"main" | "rules" | "settings" | "profile" | "matchmaking">("main");
   const pageRef = useScreenEntryFocus<HTMLDivElement>(page);
 
   if (page === "matchmaking" && browser !== null) {
@@ -190,6 +263,14 @@ export function MainMenu({
     );
   }
 
+  if (page === "profile") {
+    return (
+      <div ref={pageRef} style={overlayStyle}>
+        <PlayerProfileCard onBack={() => setPage("main")} />
+      </div>
+    );
+  }
+
   return (
     <div ref={pageRef} style={{ display: "contents" }}>
       <CommandMenu
@@ -198,6 +279,7 @@ export function MainMenu({
         browser={browser}
         onPlay={onPlayRound}
         onMatchmaking={() => setPage("matchmaking")}
+        onProfile={() => setPage("profile")}
         onHowToPlay={() => setPage("rules")}
         onSettings={() => setPage("settings")}
       />

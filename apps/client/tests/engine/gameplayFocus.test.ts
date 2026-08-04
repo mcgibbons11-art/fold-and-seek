@@ -47,4 +47,15 @@ describe("gameplay keyboard focus", () => {
     window.requestAnimationFrame = originalRequest;
     window.cancelAnimationFrame = originalCancel;
   });
+
+  it("forces a stale lobby input to yield when a playable phase mounts", () => {
+    const input = document.createElement("input");
+    const canvas = document.createElement("canvas");
+    document.body.append(input, canvas);
+    input.focus();
+
+    settleGameplayCanvasFocus(canvas);
+
+    expect(document.activeElement).toBe(canvas);
+  });
 });

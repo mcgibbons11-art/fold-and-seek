@@ -349,7 +349,7 @@ export function ForgeHud({
 
   // Paint has no context panel of its own, so the whole right column stands
   // down for it and the paint panel has the width to itself on a narrow pane.
-  const showContextPanel = state.mode !== "paint";
+  const showContextPanel = state.activeMode !== null && state.activeMode !== "paint";
 
   return (
     <div className="fs-forge" data-sound-scope="semantic" style={rootStyle}>
@@ -369,7 +369,11 @@ export function ForgeHud({
           }}
         >
           <span style={{ color: state.locked ? BRASS_LIT : CREAM }}>
-            {state.locked ? "Disguise locked" : `Forge · ${state.mode}`}
+            {state.locked
+              ? "Disguise locked"
+              : state.activeMode === null
+                ? "Forge · tools stowed"
+                : `Forge · ${state.activeMode}`}
           </span>
           {state.mirror ? <span style={{ color: BRASS_LIT, marginLeft: 12 }}>mirror</span> : null}
         </div>
@@ -424,7 +428,10 @@ export function ForgeHud({
           title="Collapse Forge tools"
           aria-expanded={true}
           style={{ ...buttonStyle, margin: "0 0 6px", textAlign: "right" }}
-          onClick={() => setPanelsExpanded(false)}
+          onClick={() => {
+            controller.deactivateTools();
+            setPanelsExpanded(false);
+          }}
         >
           Collapse Forge tools <span aria-hidden>◀</span>
         </button>
@@ -433,7 +440,8 @@ export function ForgeHud({
             key={mode}
             type="button"
             className={PRESS_CLASS}
-            style={state.mode === mode ? activeButtonStyle : buttonStyle}
+            aria-pressed={state.activeMode === mode}
+            style={state.activeMode === mode ? activeButtonStyle : buttonStyle}
             onClick={() => {
               controller.setToolMode(mode);
             }}
@@ -680,6 +688,7 @@ export function ForgeToolPanels({
 
   const togglePanels = (): void => {
     const next = !panelsExpanded;
+    if (!next) controller.deactivateTools();
     if (expanded === undefined) setLocalExpanded(next);
     onExpandedChange?.(next);
   };
@@ -743,10 +752,10 @@ export function ForgeToolPanels({
           <button
             key={mode}
             type="button"
-            aria-pressed={state.mode === mode}
+            aria-pressed={state.activeMode === mode}
             className={PRESS_CLASS}
             style={{
-              ...(state.mode === mode ? activeButtonStyle : buttonStyle),
+              ...(state.activeMode === mode ? activeButtonStyle : buttonStyle),
               marginBottom: 0,
               padding: "7px 8px",
             }}
@@ -772,7 +781,7 @@ export function ForgeToolPanels({
         </button>
       </div>
 
-      {state.mode === "paint" ? null : (
+      {state.activeMode === null || state.activeMode === "paint" ? null : (
         <div {...hudProps} style={cardStyle}>
           <ContextPanel controller={controller} state={state} onCommit={commit} />
         </div>

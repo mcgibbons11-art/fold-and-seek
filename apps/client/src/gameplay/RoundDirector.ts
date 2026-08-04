@@ -4,6 +4,7 @@ import {
   SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE,
   type DisguiseOwnership,
   type InnocentReactionId,
+  type MatchResults,
   type MissedFindsEntry,
   type PrivateSimEvent,
   type ResultVoteCategory,
@@ -247,6 +248,9 @@ export class RoundDirector {
   private myVotes: Record<ResultVoteCategory, string | null> = { ...EMPTY_VOTES };
   /** Every award vote the room has cast since this client started listening. */
   private voteTallies = emptyVoteTallies();
+  /** Results event retained when a short phase passes between relay snapshots. */
+  private eventResults: MatchResults | null = null;
+  private lastResultVoteAt = Number.NEGATIVE_INFINITY;
   private rematchYesVotes = 0;
   private rematchTotalVoters = 0;
   private myRematchVote: boolean | null = null;
@@ -430,7 +434,12 @@ export class RoundDirector {
         });
         break;
 
+      case "match_ended":
+        this.eventResults = event.results;
+        break;
+
       case "result_vote_cast": {
+        this.lastResultVoteAt = Math.max(this.lastResultVoteAt, event.at);
         if (event.voterPublicId === this.selfPublicId()) {
           this.myVotes = { ...this.myVotes, [event.category]: event.targetPublicObjectId };
         }
@@ -579,6 +588,8 @@ export class RoundDirector {
     this.owners.clear();
     this.myVotes = { ...EMPTY_VOTES };
     this.voteTallies = emptyVoteTallies();
+    this.eventResults = null;
+    this.lastResultVoteAt = Number.NEGATIVE_INFINITY;
     this.rematchYesVotes = 0;
     this.rematchTotalVoters = 0;
     this.myRematchVote = null;
@@ -928,7 +939,8 @@ export class RoundDirector {
     roster: readonly RosterPlayerView[],
     voteCandidates: readonly VoteCandidateView[],
   ): RoundViewState["results"] {
-    const results = this.sync.publicState?.results ?? null;
+    const synchronizedResults = this.sync.publicState?.results ?? null;
+    const results = synchronizedResults ?? this.eventResults;
     if (results === null) return null;
 
     const rows: ResultRowView[] = results.players.map((player) => ({
@@ -960,7 +972,14 @@ export class RoundDirector {
       rows,
       voteCandidates,
       myVotes: this.myVotes,
-      voteTallies: this.voteTallies,
+      // Results can begin and end between the Portals relay's 2 Hz durable
+      // snapshots. Live events lead until a state timestamp has caught up;
+      // reconnects and later snapshots then provide the complete tally.
+      voteTallies:
+        synchronizedResults !== null &&
+        (this.sync.publicState?.now ?? Number.NEGATIVE_INFINITY) >= this.lastResultVoteAt
+          ? synchronizedResults.voteTallies
+          : this.voteTallies,
     };
   }
 }

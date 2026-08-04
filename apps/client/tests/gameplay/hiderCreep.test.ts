@@ -224,7 +224,6 @@ describe("a hider creeping through the hunt", () => {
 
     const locomotion = new HiderLocomotion(NAV_DATA);
     locomotion.setCreepLimit(DEFAULT_MATCH_SETTINGS.hiderCreepSpeed);
-    locomotion.press("w");
     locomotion.press(" ");
 
     let apexY = root.y;

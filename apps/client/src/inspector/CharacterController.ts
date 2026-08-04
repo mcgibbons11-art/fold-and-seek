@@ -76,6 +76,10 @@ const CLIMB_RELEASE_DOWN_SPEED = WORLD_SCALE.playerHeight * 0.05;
 const CLIMB_RELEASE_OUTWARD_SPEED = WORLD_SCALE.playerHeight * 0.65;
 /** Clearance outside a climbed face. This must exceed the capsule radius. */
 const CLIMB_RELEASE_CLEARANCE = INSPECTOR_RADIUS_M * 1.15;
+/** Keeps the grapple capsule wholly outside a ledge until its feet clear it. */
+const GRAPPLE_LIP_CLEARANCE = INSPECTOR_RADIUS_M * 1.2;
+/** Places both feet and capsule centre securely inside the top face. */
+const GRAPPLE_TOP_INSET = INSPECTOR_RADIUS_M * 1.08;
 
 /**
  * Shape of a mantle: the body rises before it travels, so it reads as pulling
@@ -387,6 +391,8 @@ export class CharacterController {
       // through the floor it was standing on. This also fences malformed
       // remote targets that bypass the client's ray filter.
       minFootY: this.position.y,
+      landing: this.grappleLandingFor(anchor),
+      phase: "pull",
     };
     this.grounded = false;
     this.surfaceId = null;
@@ -509,19 +515,30 @@ export class CharacterController {
   private advanceGrapple(dtSeconds: number): void {
     const grapple = this.grapple;
     if (grapple === null) return;
-    const centreY = this.position.y + INSPECTOR_HEIGHT_M * 0.5;
-    let dx = grapple.anchor.x - this.position.x;
-    let dy = grapple.anchor.y - centreY;
-    let dz = grapple.anchor.z - this.position.z;
+    const landing = grapple.landing;
+    const target = landing === null
+      ? {
+          x: grapple.anchor.x,
+          y: grapple.anchor.y - INSPECTOR_HEIGHT_M * 0.5,
+          z: grapple.anchor.z,
+        }
+      : grapple.phase === "pull"
+        ? { x: landing.lipX, y: landing.surfaceY, z: landing.lipZ }
+        : { x: landing.landingX, y: landing.surfaceY, z: landing.landingZ };
+    let dx = target.x - this.position.x;
+    let dy = target.y - this.position.y;
+    let dz = target.z - this.position.z;
     const distance = Math.hypot(dx, dy, dz);
-    if (distance <= GRAPPLE_ARRIVAL_M) {
-      this.releaseGrapple();
+    const arrival = landing === null ? GRAPPLE_ARRIVAL_M : 0.01;
+    if (distance <= arrival) {
+      if (landing !== null) this.advanceGrappleLanding(grapple);
+      else this.releaseGrapple();
       return;
     }
     dx /= distance;
     dy /= distance;
     dz /= distance;
-    const travel = Math.min(GRAPPLE_PULL_SPEED_MPS * dtSeconds, distance - GRAPPLE_ARRIVAL_M);
+    const travel = Math.min(GRAPPLE_PULL_SPEED_MPS * dtSeconds, Math.max(0, distance - arrival));
     const maxStep = Math.max(0.01, INSPECTOR_RADIUS_M * 0.35);
     const steps = Math.max(1, Math.ceil(travel / maxStep));
     const step = travel / steps;
@@ -559,9 +576,116 @@ export class CharacterController {
     this.velocityZ = 0;
     this.speed = Math.hypot(this.position.x - startX, this.position.z - startZ) / dtSeconds;
     this.lastResolution = "free";
-    if (this.grapple !== null && distance - travel <= GRAPPLE_ARRIVAL_M + 1e-6) {
-      this.releaseGrapple();
+    if (this.grapple !== null && distance - travel <= arrival + 1e-6) {
+      if (landing !== null) this.advanceGrappleLanding(grapple);
+      else this.releaseGrapple();
     }
+  }
+
+  /**
+   * Finds the elevated walkable top associated with a latch. The cable first
+   * takes the body to a point just outside its lip, then pulls horizontally
+   * onto an inset landing. That prevents a successful grapple from ending as
+   * an immediate fall or leaving the capsule balanced on a shelf edge.
+   */
+  private grappleLandingFor(anchor: Vec3Like): GrappleLanding | null {
+    const minimumTop = this.position.y + INSPECTOR_STEP_HEIGHT_M + 1e-4;
+    const maximumTop = anchor.y + INSPECTOR_STEP_HEIGHT_M;
+    const maximumHorizontalGap = INSPECTOR_RADIUS_M * 1.75;
+    let best: NavData["floors"][number] | null = null;
+    let bestTop = Number.NEGATIVE_INFINITY;
+    let bestGap = Number.POSITIVE_INFINITY;
+
+    for (const surface of this.navData.floors) {
+      const top = surface.bounds.max.y;
+      if (top < minimumTop || top > maximumTop) continue;
+      const width = surface.bounds.max.x - surface.bounds.min.x;
+      const depth = surface.bounds.max.z - surface.bounds.min.z;
+      if (width < GRAPPLE_TOP_INSET * 2 || depth < GRAPPLE_TOP_INSET * 2) continue;
+      const nearestX = clamp(anchor.x, surface.bounds.min.x, surface.bounds.max.x);
+      const nearestZ = clamp(anchor.z, surface.bounds.min.z, surface.bounds.max.z);
+      const gap = Math.hypot(anchor.x - nearestX, anchor.z - nearestZ);
+      if (gap > maximumHorizontalGap) continue;
+      if (top > bestTop + 1e-6 || (Math.abs(top - bestTop) <= 1e-6 && gap < bestGap)) {
+        best = surface;
+        bestTop = top;
+        bestGap = gap;
+      }
+    }
+    if (best === null) return null;
+
+    const bounds = best.bounds;
+    const insetMinX = bounds.min.x + GRAPPLE_TOP_INSET;
+    const insetMaxX = bounds.max.x - GRAPPLE_TOP_INSET;
+    const insetMinZ = bounds.min.z + GRAPPLE_TOP_INSET;
+    const insetMaxZ = bounds.max.z - GRAPPLE_TOP_INSET;
+    const landingX = clamp(anchor.x, insetMinX, insetMaxX);
+    const landingZ = clamp(anchor.z, insetMinZ, insetMaxZ);
+    const sides = [
+      { distance: Math.abs(this.position.x - bounds.min.x), side: "minX" as const },
+      { distance: Math.abs(this.position.x - bounds.max.x), side: "maxX" as const },
+      { distance: Math.abs(this.position.z - bounds.min.z), side: "minZ" as const },
+      { distance: Math.abs(this.position.z - bounds.max.z), side: "maxZ" as const },
+    ];
+    if (this.position.x < bounds.min.x) sides[0]!.distance = 0;
+    else if (this.position.x > bounds.max.x) sides[1]!.distance = 0;
+    if (this.position.z < bounds.min.z) sides[2]!.distance = 0;
+    else if (this.position.z > bounds.max.z) sides[3]!.distance = 0;
+    sides.sort((a, b) => a.distance - b.distance);
+
+    for (const candidate of sides) {
+      let lipX = landingX;
+      let lipZ = landingZ;
+      let topX = landingX;
+      let topZ = landingZ;
+      if (candidate.side === "minX") {
+        lipX = bounds.min.x - GRAPPLE_LIP_CLEARANCE;
+        topX = insetMinX;
+      } else if (candidate.side === "maxX") {
+        lipX = bounds.max.x + GRAPPLE_LIP_CLEARANCE;
+        topX = insetMaxX;
+      } else if (candidate.side === "minZ") {
+        lipZ = bounds.min.z - GRAPPLE_LIP_CLEARANCE;
+        topZ = insetMinZ;
+      } else {
+        lipZ = bounds.max.z + GRAPPLE_LIP_CLEARANCE;
+        topZ = insetMaxZ;
+      }
+      if (!this.hasWalkableColumn(lipX, lipZ)) continue;
+      if (blocksCapsule(this.navData.blockers, lipX, lipZ, bestTop)) continue;
+      if (blocksCapsule(this.navData.blockers, topX, topZ, bestTop)) continue;
+      return {
+        surfaceId: best.id,
+        surfaceY: bestTop,
+        lipX,
+        lipZ,
+        landingX: topX,
+        landingZ: topZ,
+      };
+    }
+    return null;
+  }
+
+  private advanceGrappleLanding(grapple: MutableGrapple): void {
+    const landing = grapple.landing;
+    if (landing === null) return;
+    if (grapple.phase === "pull") {
+      this.position.x = landing.lipX;
+      this.position.y = landing.surfaceY;
+      this.position.z = landing.lipZ;
+      grapple.phase = "topout";
+      return;
+    }
+    this.position.x = landing.landingX;
+    this.position.y = landing.surfaceY;
+    this.position.z = landing.landingZ;
+    this.grapple = null;
+    this.surfaceId = landing.surfaceId;
+    this.surfaceLocked = false;
+    this.land();
+    this.velocityX = 0;
+    this.velocityZ = 0;
+    this.speed = 0;
   }
 
   /**
@@ -699,12 +823,21 @@ export class CharacterController {
     // an edge it would fall from and a lip it would rise onto both move the body
     // vertically, and vertical distance spends the same budget as horizontal.
     if (this.surfaceLocked && destination.id !== this.surfaceId) {
+      // The shop floor is tiled into authored navigation regions. Crossing a
+      // seam between two regions at the exact same height is still movement on
+      // one plane; treating the changed id as a ledge made invisible walls at
+      // cabinet corners and room-zone boundaries during the hunt.
+      const lockedBaseY = this.hopBaseY ?? this.position.y;
+      if (Math.abs(destination.bounds.max.y - lockedBaseY) <= 1e-4) {
+        this.surfaceId = destination.id;
+      } else {
       // A body standing on an un-authored blocker top has to be able to cross
       // its lip onto the real floor below. That explicit dismount ends the
       // initial hiding-surface lock; ordinary floor-to-floor creep stays
       // protected until a climb/top-out or this edge crossing occurs.
-      if (this.supportingBlockerTopAt(this.position.x, this.position.z) === null) return false;
-      this.surfaceLocked = false;
+        if (this.supportingBlockerTopAt(this.position.x, this.position.z) === null) return false;
+        this.surfaceLocked = false;
+      }
     }
 
     this.position.x = x;
@@ -1485,6 +1618,17 @@ interface MutableClimb {
 interface MutableGrapple {
   readonly anchor: Vec3Like;
   readonly minFootY: number;
+  readonly landing: GrappleLanding | null;
+  phase: "pull" | "topout";
+}
+
+interface GrappleLanding {
+  readonly surfaceId: string;
+  readonly surfaceY: number;
+  readonly lipX: number;
+  readonly lipZ: number;
+  readonly landingX: number;
+  readonly landingZ: number;
 }
 
 function clamp(value: number, min: number, max: number): number {

@@ -115,9 +115,6 @@ export function GameMenu(props: GameMenuProps): ReactElement {
   const openTo = useCallback((nextPage: MenuPage): void => {
     restoreFocusRef.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : menuButtonRef.current;
-    if (document.pointerLockElement != null && typeof document.exitPointerLock === "function") {
-      void document.exitPointerLock();
-    }
     setPage(nextPage);
   }, []);
   const open = useCallback((): void => openTo("root"), [openTo]);

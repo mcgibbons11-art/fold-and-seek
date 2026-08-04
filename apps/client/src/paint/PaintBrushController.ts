@@ -165,6 +165,9 @@ export class PaintBrushController {
   activate(): void {
     if (this.active) return;
     this.active = true;
+    // Painting replaces the gameplay reticle with the radius-accurate circle.
+    // Every other Mimic interaction restores the shared crosshair.
+    this.options.canvas.style.cursor = "none";
 
     const onPointerDown = (event: PointerEvent): void => {
       if (!this.owns(event) || event.button !== 0) return;
@@ -247,6 +250,7 @@ export class PaintBrushController {
     this.pointerId = -1;
     if (wasPainting) this.options.onStrokeUpdate?.(0);
     this.hideCursor();
+    this.options.canvas.style.cursor = "crosshair";
     this.detach?.();
     this.detach = null;
     // Leaving paint mode mid-drag still ends the drag, so the gesture reaches

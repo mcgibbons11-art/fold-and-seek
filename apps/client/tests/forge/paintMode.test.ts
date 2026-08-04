@@ -231,6 +231,27 @@ describe("paint as a forge tool mode", () => {
     expect(harness.canvasListeners.count("pointerdown")).toBe(0);
   });
 
+  it("relinquishes paint and every tool when the Forge dock collapses", () => {
+    harness.controller.setToolMode("paint");
+    expect(harness.controller.snapshot().activeMode).toBe("paint");
+    expect(harness.controller.paint.getState().active).toBe(true);
+    expect(harness.canvas.style.cursor).toBe("none");
+
+    harness.controller.deactivateTools();
+
+    expect(harness.controller.snapshot().mode).toBe("paint");
+    expect(harness.controller.snapshot().activeMode).toBeNull();
+    expect(harness.controller.paint.getState().active).toBe(false);
+    expect(harness.canvas.style.cursor).toBe("crosshair");
+    expect(harness.canvasListeners.count("pointerdown")).toBe(0);
+
+    // Expanding the dock does not silently re-arm the old brush. A deliberate
+    // tool selection is what gives the pointer back.
+    harness.controller.setToolMode("paint");
+    expect(harness.controller.snapshot().activeMode).toBe("paint");
+    expect(harness.controller.paint.getState().active).toBe(true);
+  });
+
   it("leaves a left press alone in paint mode and consumes it everywhere else", () => {
     const posed = harness.pointer("pointerdown");
     expect(posed.stopped).toBe(true);

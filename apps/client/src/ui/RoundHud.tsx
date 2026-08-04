@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type Re
 
 import type { RoundDirector } from "../gameplay/RoundDirector";
 import type { RoundSession } from "../gameplay/RoundSession";
+import { recordProfileRound } from "../gameplay/playerProfile";
 import type { RoundViewState } from "../gameplay/roundView";
 import type { QualityTier } from "../rendering/quality";
 import { ForgeHud } from "./ForgeHud";
@@ -112,6 +113,23 @@ export function RoundHud({
   // rebinding the handler on every published state.
   const stateRef = useRef(state);
   stateRef.current = state;
+  const profileRound = useRef<{ round: number; id: string; playedAt: number } | null>(null);
+
+  useEffect(() => {
+    if (state.results === null) {
+      profileRound.current = null;
+      return;
+    }
+    if (profileRound.current === null || profileRound.current.round !== state.results.round) {
+      const playedAt = Date.now();
+      profileRound.current = {
+        round: state.results.round,
+        id: `${session.roomCode || "local"}:${state.results.round}:${playedAt.toString(36)}`,
+        playedAt,
+      };
+    }
+    recordProfileRound(profileRound.current.id, state.results, profileRound.current.playedAt);
+  }, [session, state.results]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -161,7 +179,7 @@ export function RoundHud({
           onLeave={onLeave}
           role={state.self.role}
         />
-        <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
+        <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} />
         <SoundCaptionHud captions={engine.soundCaptions} />
       </>
     );
@@ -208,7 +226,7 @@ export function RoundHud({
         onLeave={onLeave}
         role={state.self.role}
       />
-      <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
+      <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} />
       <SoundCaptionHud captions={engine.soundCaptions} />
     </>
   );

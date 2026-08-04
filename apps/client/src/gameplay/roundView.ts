@@ -269,11 +269,9 @@ export interface VoteCandidateView {
  * How each award is running: votes cast so far, per category, counted by the
  * disguise they were cast for.
  *
- * The simulation broadcasts every `result_vote_cast` to the whole room and keeps
- * no running total in its state, so this is counted from the event stream on the
- * way past. A player who joins during the results screen therefore sees only the
- * votes cast after they arrived, which is the same limit the missed-finds board
- * has and is why nothing here is presented as a final figure.
+ * Current authorities publish this total in state after every vote, so every
+ * player and reconnect sees the same figures. Live events provide immediate UI
+ * feedback and backwards compatibility with an older room.
  */
 export type VoteTallies = Readonly<
   Record<ResultVoteCategory, Readonly<Record<string, number>>>

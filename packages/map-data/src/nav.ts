@@ -239,18 +239,17 @@ const ZONE_D_LEDGES: readonly WalkableSurface[] = [
   pad("counter_crate_top", 0.55, 4.4, 2.7, 0.24, 1),
 ];
 
-/** The three open shelves inside each former glass cabinet. */
+/** The open ground bay and three shelves inside each former glass cabinet. */
 const CABINET_SHELF_TOPS = [0.693, 1.163, 1.613] as const;
 const ZONE_E_BASES: readonly WalkableSurface[] = CABINET_BLOCKS.map((block, cabinetIndex) => {
-  const centerZ = (block.min.z + block.max.z) * 0.5;
   return ledge(
     `cabinet_${cabinetIndex + 1}_base`,
-    0.16,
+    0,
     block.min.x,
-    centerZ - 0.275,
+    block.min.z,
     block.max.x,
-    centerZ + 0.275,
-    1,
+    block.max.z,
+    0,
   );
 });
 const ZONE_E_LEDGES: readonly WalkableSurface[] = CABINET_BLOCKS.flatMap((block, cabinetIndex) => {
@@ -383,14 +382,14 @@ const FURNITURE_BLOCKERS: readonly AABB[] = [
   aabb(2.36, 0.66, 2.86, 2.64, 0.707, 3.14),
   aabb(4.08, 0, 2.38, 4.72, 0.55, 3.02),
 
-  // E — four open display bookcases: base and shelf boards only.
-  // No pane or full-volume proxy remains, so the visible openings are real.
+  // E — four open display bookcases: shelf boards only. The decorative plinth
+  // cannot be a movement blocker: growing even that low slab by the capsule's
+  // step clearance creates an invisible shield across the entire bottom bay.
   ...CABINET_BLOCKS.flatMap((block) => {
     const centerZ = (block.min.z + block.max.z) * 0.5;
     const minZ = centerZ - 0.275;
     const maxZ = centerZ + 0.275;
     return [
-      aabb(block.min.x, 0, minZ, block.max.x, 0.16, maxZ),
       ...CABINET_SHELF_TOPS.map((topY) =>
         aabb(
           block.min.x + 0.05,
@@ -578,7 +577,6 @@ const CABINET_CLIMB_LINKS: readonly ClimbLink[] = CABINET_BLOCKS.flatMap(
   (block, cabinetIndex) => {
     const x = (block.min.x + block.max.x) * 0.5;
     const z = (block.min.z + block.max.z) * 0.5;
-    const approachZ = cabinetIndex < 2 ? block.max.z + 0.05 : block.min.z - 0.05;
     const entryGap = WORLD_SCALE.playerRadius + 0.03;
     const laneXs = [block.min.x + 0.16, block.max.x - 0.16] as const;
     const laneZs = [z - 0.1, z + 0.1] as const;
@@ -644,8 +642,7 @@ const CABINET_CLIMB_LINKS: readonly ClimbLink[] = CABINET_BLOCKS.flatMap(
       // face. The old single centre trigger made the posts look climbable while
       // requiring the player to abandon them and hunt for an invisible point.
       ...faceLadders,
-      mantle("floor_10", baseName, [x, 0, approachZ], [x, 0.16, z]),
-      mantle(baseName, names[0] as string, [x, 0.16, z], [x, CABINET_SHELF_TOPS[0], z]),
+      mantle(baseName, names[0] as string, [x, 0, z], [x, CABINET_SHELF_TOPS[0], z]),
       ...cornerShafts,
     ];
   },

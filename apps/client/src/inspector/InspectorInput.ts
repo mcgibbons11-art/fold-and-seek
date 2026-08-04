@@ -3,9 +3,9 @@ import { actionForCode, readStandardGamepad } from "../gameplay/inputBindings";
 
 /**
  * Samples keyboard and mouse into the action set the controller consumes
- * (§25.1). Pointer lock is entered only from an explicit user gesture and every
- * way of losing it, Escape, the browser menu, tab focus loss, ends with the same
- * cleared state rather than a key stuck down or a trigger stuck pressed (§25.2).
+ * (§25.1). Mouse aim uses ordinary movement over the canvas: the crosshair is
+ * visible, the system cursor stays free, and browser pointer lock is never
+ * requested. Tab/window focus loss clears held actions so no key can stick.
  *
  * Left mouse fires the gun, right mouse aims down the sights, and space hops.
  */
@@ -16,7 +16,6 @@ export interface InspectorInputOptions {
   readonly lookSensitivityX?: number;
   readonly lookSensitivityY?: number;
   readonly invertY?: boolean;
-  readonly onLockChange?: (locked: boolean) => void;
 }
 
 export const DEFAULT_LOOK_SENSITIVITY = 0.0022;
@@ -31,7 +30,6 @@ export class InspectorInput {
   private sensitivityX: number;
   private sensitivityY: number;
   private invertY: boolean;
-  private readonly onLockChange: ((locked: boolean) => void) | null;
 
   private readonly held = new Set<string>();
   private pendingYaw = 0;
@@ -43,8 +41,6 @@ export class InspectorInput {
   aimHeld = false;
   /** Left mouse held, for a viewmodel. The gun itself fires on the press edge. */
   fireHeld = false;
-  locked = false;
-
   /** Set on the press, cleared by `takeFirePressed`, so one click is one shot. */
   private firePressed = false;
   private grapplePressed = false;
@@ -57,7 +53,6 @@ export class InspectorInput {
     this.sensitivityX = options.lookSensitivityX ?? options.lookSensitivity ?? DEFAULT_LOOK_SENSITIVITY;
     this.sensitivityY = options.lookSensitivityY ?? options.lookSensitivity ?? DEFAULT_LOOK_SENSITIVITY;
     this.invertY = options.invertY ?? false;
-    this.onLockChange = options.onLockChange ?? null;
   }
 
   setLookPreferences(sensitivityX: number, sensitivityY: number, invertY: boolean): void {
@@ -77,7 +72,6 @@ export class InspectorInput {
     doc.addEventListener("mouseup", this.onMouseUp);
     doc.addEventListener("keydown", this.onKeyDown);
     doc.addEventListener("keyup", this.onKeyUp);
-    doc.addEventListener("pointerlockchange", this.onPointerLockChange);
     doc.defaultView?.addEventListener("blur", this.onBlur);
   }
 
@@ -92,36 +86,12 @@ export class InspectorInput {
     doc.removeEventListener("mouseup", this.onMouseUp);
     doc.removeEventListener("keydown", this.onKeyDown);
     doc.removeEventListener("keyup", this.onKeyUp);
-    doc.removeEventListener("pointerlockchange", this.onPointerLockChange);
     doc.defaultView?.removeEventListener("blur", this.onBlur);
     this.clear();
   }
 
-  /** Must be called from inside a user gesture handler, per §25.2. */
-  requestLock(): void {
-    void this.element.requestPointerLock();
-  }
-
-  exitLock(): void {
-    this.element.ownerDocument.exitPointerLock();
-  }
-
-  /**
-   * Writes this frame's intent and consumes the accumulated look delta. While
-   * pointer lock is not held the Inspector stands still, so an open menu never
-   * drifts the character.
-   */
+  /** Writes this frame's intent and consumes the accumulated look delta. */
   sample(out: InspectorMoveInput, dtSeconds = 1 / 60): void {
-    if (!this.locked) {
-      out.forward = 0;
-      out.strafe = 0;
-      out.lookYawDelta = 0;
-      out.lookPitchDelta = 0;
-      out.brisk = false;
-      out.jump = false;
-      out.disengageClimb = false;
-      return;
-    }
     const gamepad = readStandardGamepad();
     out.forward = actionAxis(this.held, "moveForward", "moveBack") + -(gamepad?.moveY ?? 0);
     out.strafe = actionAxis(this.held, "moveRight", "moveLeft") + (gamepad?.moveX ?? 0);
@@ -187,7 +157,7 @@ export class InspectorInput {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (!this.locked) return;
+    if (isEditingControl(event.target)) return;
     this.held.add(event.code);
     if (!event.repeat && actionForCode(event.code) === "grapple") this.grapplePressed = true;
   };
@@ -197,7 +167,7 @@ export class InspectorInput {
   };
 
   private readonly onMouseDown = (event: MouseEvent): void => {
-    if (!this.locked) return;
+    if (event.target !== this.element) return;
     if (event.button === MOUSE_BUTTON_AIM) this.aimHeld = true;
     if (event.button === MOUSE_BUTTON_FIRE) {
       this.fireHeld = true;
@@ -211,7 +181,7 @@ export class InspectorInput {
   };
 
   private readonly onMouseMove = (event: MouseEvent): void => {
-    if (!this.locked) return;
+    if (event.target !== this.element) return;
     this.pendingYaw -= event.movementX * this.sensitivityX;
     const pitchDelta = event.movementY * this.sensitivityY;
     this.pendingPitch += this.invertY ? pitchDelta : -pitchDelta;
@@ -222,23 +192,19 @@ export class InspectorInput {
   };
 
   private readonly onWheel = (event: WheelEvent): void => {
-    if (!this.locked) return;
+    if (event.target !== this.element) return;
     event.preventDefault();
     this.pendingZoom += event.deltaY;
-  };
-
-  private readonly onPointerLockChange = (): void => {
-    const doc = this.element.ownerDocument;
-    const locked = doc.pointerLockElement === this.element;
-    if (locked === this.locked) return;
-    this.locked = locked;
-    if (!locked) this.clear();
-    this.onLockChange?.(locked);
   };
 
   private readonly onBlur = (): void => {
     this.clear();
   };
+}
+
+function isEditingControl(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return target.matches("input, textarea, select, [contenteditable='true']");
 }
 
 function actionAxis(held: ReadonlySet<string>, positive: Parameters<typeof actionHeld>[1], negative: Parameters<typeof actionHeld>[1]): number {

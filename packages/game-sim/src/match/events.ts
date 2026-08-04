@@ -66,12 +66,18 @@ export interface PlayerResult {
 
 export type MatchWinner = "inspectors" | "mimics";
 
+export type ResultVoteTallies = Readonly<
+  Record<ResultVoteCategory, Readonly<Record<string, number>>>
+>;
+
 export interface MatchResults {
   readonly round: number;
   readonly winner: MatchWinner;
   readonly inspectionDurationMs: number;
   readonly timeRemainingMs: number;
   readonly players: readonly PlayerResult[];
+  /** Authoritative room-wide totals, included so reconnects see every vote. */
+  readonly voteTallies: ResultVoteTallies;
 }
 
 export type PlayerLeftReason = "left" | "reconnect_timeout" | "removed";

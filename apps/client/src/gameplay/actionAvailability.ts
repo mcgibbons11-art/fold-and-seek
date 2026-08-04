@@ -108,7 +108,11 @@ function tauntGate(input: AvailabilityInput): ActionGate {
 }
 
 function voteResultGate(input: AvailabilityInput): ActionGate {
-  if (input.phase !== MatchPhase.Reveal && input.phase !== MatchPhase.Results) {
+  if (
+    input.phase !== MatchPhase.Reveal &&
+    input.phase !== MatchPhase.Results &&
+    input.phase !== MatchPhase.RematchVote
+  ) {
     return blocked("wrong_phase");
   }
   if (input.role === "spectator") return blocked("wrong_role");

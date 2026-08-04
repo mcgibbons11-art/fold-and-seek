@@ -14,8 +14,11 @@ function isEditingControl(element: Element | null): boolean {
  * button can make the first WASD press belong to stale lobby chrome. Inputs are
  * respected because a phase tick must not interrupt a colour or slider edit.
  */
-export function focusGameplayCanvas(canvas: HTMLCanvasElement): boolean {
-  if (!canvas.isConnected || isEditingControl(canvas.ownerDocument.activeElement)) return false;
+export function focusGameplayCanvas(canvas: HTMLCanvasElement, force = false): boolean {
+  if (
+    !canvas.isConnected ||
+    (!force && isEditingControl(canvas.ownerDocument.activeElement))
+  ) return false;
   canvas.tabIndex = -1;
   try {
     canvas.focus({ preventScroll: true });
@@ -45,7 +48,11 @@ export function settleGameplayCanvasFocus(
   let secondFrame: number | null = null;
 
   const refocus = (): void => {
-    if (!cancelled && stillGameplay()) focusGameplayCanvas(canvas);
+    // Entering a playable phase retires every lobby/results editor. Force is
+    // intentional here: otherwise a removed room-name or colour input can keep
+    // keyboard ownership until the player clicks the Forge, dropping initial
+    // WASD in embedded Portals.
+    if (!cancelled && stillGameplay()) focusGameplayCanvas(canvas, true);
   };
 
   refocus();

@@ -1823,7 +1823,11 @@ export class MatchSimulation {
     category: ResultVoteCategory,
     targetPublicObjectId: string,
   ): CommandResult {
-    if (this.phase !== MatchPhase.Reveal && this.phase !== MatchPhase.Results) {
+    if (
+      this.phase !== MatchPhase.Reveal &&
+      this.phase !== MatchPhase.Results &&
+      this.phase !== MatchPhase.RematchVote
+    ) {
       return reject("wrong_phase");
     }
     // Only players who were in the round may judge it, which keeps spectators
@@ -2299,7 +2303,23 @@ export class MatchSimulation {
       inspectionDurationMs: Math.max(0, inspectionEnd - this.inspectionStartedAtMs),
       timeRemainingMs,
       players,
+      voteTallies: this.computeResultVoteTallies(),
     };
+  }
+
+  private computeResultVoteTallies(): MatchResults["voteTallies"] {
+    const tallies: Record<ResultVoteCategory, Record<string, number>> = {
+      best_disguise: {},
+      funniest_attempt: {},
+      most_audacious: {},
+    };
+    for (const votes of this.resultVotes.values()) {
+      for (const [category, objectId] of votes) {
+        const categoryTallies = tallies[category];
+        categoryTallies[objectId] = (categoryTallies[objectId] ?? 0) + 1;
+      }
+    }
+    return tallies;
   }
 
   private resolveRematch(): void {
@@ -2625,7 +2645,15 @@ export class MatchSimulation {
 
   private copyResults(results: MatchResults | null): MatchResults | null {
     if (!results) return null;
-    return { ...results, players: results.players.map((entry) => ({ ...entry })) };
+    return {
+      ...results,
+      players: results.players.map((entry) => ({ ...entry })),
+      voteTallies: {
+        best_disguise: { ...results.voteTallies.best_disguise },
+        funniest_attempt: { ...results.voteTallies.funniest_attempt },
+        most_audacious: { ...results.voteTallies.most_audacious },
+      },
+    };
   }
 
   private countRematchYes(): number {

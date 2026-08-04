@@ -281,6 +281,36 @@ describe("a Portals round", () => {
     room.dispose();
   });
 
+  it("publishes award tallies to every player in the room in real time", async () => {
+    vi.useFakeTimers();
+    const room = await huntingRoom();
+    room.runTo(MatchPhase.Results, 300);
+    const inspector = room.inspector();
+    const objectId = inspector.round.adapter.getSync().publicState?.disguises[0]?.publicObjectId ?? "";
+    expect(objectId).not.toBe("");
+
+    inspector.round.adapter.sendCommand({
+      type: "vote_result",
+      category: "best_disguise",
+      targetPublicObjectId: objectId,
+    });
+    room.advance(2);
+
+    for (const seat of room.seats) {
+      const diagnostics = {
+        id: seat.id,
+        phase: seat.round.director.getState().phase,
+        result: seat.round.adapter.getSync().publicState?.results,
+        votes: seat.events.filter((event) => event.type === "result_vote_cast"),
+      };
+      expect(
+        seat.round.director.getState().results?.voteTallies.best_disguise[objectId],
+        JSON.stringify(diagnostics),
+      ).toBe(1);
+    }
+    room.dispose();
+  });
+
   it("resolves an accusation the Inspector fires from another machine", async () => {
     vi.useFakeTimers();
     const room = await huntingRoom();
@@ -404,7 +434,6 @@ describe("a Portals round", () => {
       },
       yaw: Math.PI / 2,
     });
-    system.input!.locked = true;
     system.update(16, 0);
     const horizontal = Math.abs(system.cameraRig.origin.x - centre.x);
     system.controller.pitch = Math.atan2(centre.y - INSPECTOR_EYE_HEIGHT_M, horizontal);

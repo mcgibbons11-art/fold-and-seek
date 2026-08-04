@@ -612,6 +612,28 @@ describe("mechanical grapple traversal", () => {
     expect(controller.grounded).toBe(false);
   });
 
+  it("pulls over a ledge lip and leaves the player safely standing on top", () => {
+    const nav = testNavData({ climbLinks: [] });
+    const controller = spawned(nav, 0, 0, 0);
+    const anchor = {
+      x: (TABLE_TOP.bounds.min.x + TABLE_TOP.bounds.max.x) * 0.5,
+      y: TABLE_TOP.bounds.max.y + 0.12,
+      z: 0,
+    };
+
+    expect(controller.startGrapple(anchor)).toBe(true);
+    for (let frame = 0; frame < 240 && controller.grappleState !== null; frame += 1) {
+      controller.update(FRAME_SECONDS, createMoveInput());
+    }
+
+    expect(controller.grappleState).toBeNull();
+    expect(controller.grounded).toBe(true);
+    expect(controller.surfaceId).toBe(TABLE_TOP.id);
+    expect(controller.position.y).toBeCloseTo(TABLE_TOP.bounds.max.y, 6);
+    expect(controller.position.x).toBeLessThan(TABLE_TOP.bounds.max.x);
+    expect(controller.position.x).toBeGreaterThan(TABLE_TOP.bounds.min.x);
+  });
+
   it("refuses out-of-range latches and drops the cable instead of crossing a blocker", () => {
     const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0, 0);
     expect(controller.startGrapple({ x: GRAPPLE_MAX_RANGE_M + 1, y: 1, z: 0 })).toBe(false);

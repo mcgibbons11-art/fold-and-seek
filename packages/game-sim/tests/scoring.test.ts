@@ -136,6 +136,9 @@ describe("scoring", () => {
       .getPublicState()
       .results?.players.find((entry) => entry.publicPlayerId === publicId)?.score as number;
     expect(after - before).toBe(100);
+    expect(
+      harness.sim.getPublicState().results?.voteTallies.best_disguise[objectId],
+    ).toBe(1);
 
     const duplicate = harness.command(voter, {
       type: "vote_result",
@@ -143,5 +146,23 @@ describe("scoring", () => {
       targetPublicObjectId: objectId,
     });
     expect(duplicate.reason).toBe("duplicate_vote");
+  });
+
+  it("keeps award voting open while the rematch decision is on screen", () => {
+    const harness = new Harness({ players: 4, seed: 224 });
+    harness.toInspection();
+    harness.tickUntil(MatchPhase.RematchVote);
+    const mimicId = harness.mimicIds()[0] as string;
+    const objectId = harness.objectIdOf(mimicId);
+    const voter = harness.inspectorIds()[0] as string;
+
+    expect(harness.command(voter, {
+      type: "vote_result",
+      category: "most_audacious",
+      targetPublicObjectId: objectId,
+    }).accepted).toBe(true);
+    expect(
+      harness.sim.getPublicState().results?.voteTallies.most_audacious[objectId],
+    ).toBe(1);
   });
 });

@@ -152,6 +152,7 @@ function huntState(overrides: {
 function stubForge(mode: ForgeToolMode): ForgeController {
   const state: ForgeHudState = {
     mode,
+    activeMode: mode,
     locked: true,
     mirror: false,
     canUndo: true,
@@ -178,6 +179,7 @@ function stubForge(mode: ForgeToolMode): ForgeController {
     },
     swatches: [],
     setToolMode: () => undefined,
+    deactivateTools: () => undefined,
     setMirror: () => undefined,
     applyArrangement: () => undefined,
     undo: () => undefined,
@@ -612,7 +614,7 @@ describe("hunt HUD grammar", () => {
     expect(claimedRegions()).not.toContain("bottomCenter");
   });
 
-  it("keeps controls out of the persistent HUD before pointer lock", () => {
+  it("keeps controls out of the persistent Inspector HUD", () => {
     render(
       <HuntHud
         state={huntState({ role: "inspector" })}
