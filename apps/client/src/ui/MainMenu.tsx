@@ -32,6 +32,7 @@ import {
   ornamentRuleStyle,
   plate,
   RULE,
+  FONT_DISPLAY,
 } from "./rounds/theme";
 
 /**
@@ -92,6 +93,30 @@ const rulesBodyStyle: CSSProperties = {
   opacity: 0.85,
 };
 
+/** The big serif title every menu card opens with, kicker above, rule below. */
+function CardMasthead({ kicker, title }: { readonly kicker: string; readonly title: string }): ReactElement {
+  return (
+    <div style={{ textAlign: "center" }}>
+      <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.85, marginBottom: 6 }}>{kicker}</div>
+      <h2
+        className="fs-candle"
+        style={{
+          margin: "0 0 10px",
+          font: `600 30px/1.1 ${FONT_DISPLAY}`,
+          letterSpacing: "0.14em",
+          textIndent: "0.14em",
+          textTransform: "uppercase",
+          color: CREAM,
+          textShadow: "0 2px 18px rgba(255, 190, 107, 0.22)",
+        }}
+      >
+        {title}
+      </h2>
+      <div style={{ ...ornamentRuleStyle(200), margin: "0 auto" }} aria-hidden />
+    </div>
+  );
+}
+
 /** One line of the tariff: what a deed pays, printed from the real weights. */
 function ScoreRow({ label, value }: { readonly label: string; readonly value: string }): ReactElement {
   return (
@@ -105,35 +130,55 @@ function ScoreRow({ label, value }: { readonly label: string; readonly value: st
 /** The rules, told in the order a first round meets them. */
 function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
   return (
-    <div style={rulesCardStyle} className="fs-rise">
-      <div style={{ textAlign: "center" }}>
-        <div style={{ ...labelStyle, opacity: 0.7, marginBottom: 8 }}>How to play</div>
-        <div style={{ ...ornamentRuleStyle(180), margin: "0 auto" }} aria-hidden />
-      </div>
+    <div style={{ ...rulesCardStyle, width: 860 }} className="fs-rise">
+      <CardMasthead kicker="Field manual" title="How to Play" />
 
-      <p style={{ ...rulesBodyStyle, marginTop: 16 }}>
+      <p style={{ ...rulesBodyStyle, marginTop: 16, textAlign: "center", maxWidth: 560, marginLeft: "auto", marginRight: "auto" }}>
         One Inspector hunts the Mimics hidden among the shop clutter. Roles rotate each round,
-        and the four sections below let you learn only what you need next.
+        and the sections below let you learn only what you need next.
       </p>
 
-      <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, marginTop: 18 }}>
-        Scores and bonuses
+      <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, marginTop: 22, textAlign: "center" }}>
+        The tariff · what every deed pays
       </div>
-      <div style={{ ...rulesBodyStyle, marginTop: 8 }}>
-        <div style={{ fontWeight: 700, color: CREAM, marginBottom: 4 }}>Hiding pays for nerve:</div>
-        <ScoreRow label="Every second you survive" value={`+${SCORE_MIMIC_PER_SURVIVAL_SECOND}`} />
-        <ScoreRow label="Stared at directly and still missed" value={`+${SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE}`} />
-        <ScoreRow label="A seeker brushes right past you" value={`+${SCORE_MIMIC_PER_CLOSE_PASS}`} />
-        <ScoreRow label={`… and a third pass by the same seeker`} value={`+${SCORE_MIMIC_CLOSE_PASS_JACKPOT} once`} />
-        <ScoreRow label="A taunt performed while watched" value={`+${SCORE_MIMIC_PER_OBSERVED_TAUNT}`} />
-        <ScoreRow label={`… each consecutive watched taunt`} value={`+${SCORE_MIMIC_TAUNT_STREAK_STEP} extra`} />
-        <ScoreRow label="Never caught at the final bell" value={`+${SCORE_MIMIC_FULL_ROUND_SURVIVAL}`} />
-        <ScoreRow label="Each style award vote from the room" value={`+${SCORE_MIMIC_PER_PEER_STYLE_VOTE}`} />
-        <div style={{ fontWeight: 700, color: CREAM, margin: "10px 0 4px" }}>Hunting pays for judgement:</div>
-        <ScoreRow label="Each Mimic exposed" value={`+${SCORE_INSPECTOR_PER_CORRECT}`} />
-        <ScoreRow label="Each warrant wasted on furniture" value={`−${SCORE_INSPECTOR_PER_WRONG}`} />
-        <ScoreRow label="Every second left when your side wins" value={`+${SCORE_INSPECTOR_PER_SECOND_REMAINING_ON_WIN}`} />
-        <ScoreRow label="Each distinct object examined" value={`+${SCORE_INSPECTOR_PER_FOCUSED_OBJECT}`} />
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
+          gap: 12,
+          marginTop: 10,
+        }}
+      >
+        <div style={{ ...plate(), borderRadius: 10, padding: "12px 16px" }}>
+          <div style={{ font: `600 15px/1.3 ${FONT_DISPLAY}`, color: CREAM, marginBottom: 6 }}>
+            Hiding pays for nerve
+          </div>
+          <div style={rulesBodyStyle}>
+            <ScoreRow label="Every second you survive" value={`+${SCORE_MIMIC_PER_SURVIVAL_SECOND}`} />
+            <ScoreRow label="Stared at directly and still missed" value={`+${SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE}`} />
+            <ScoreRow label="A seeker brushes right past you" value={`+${SCORE_MIMIC_PER_CLOSE_PASS}`} />
+            <ScoreRow label={`… a third pass by the same seeker`} value={`+${SCORE_MIMIC_CLOSE_PASS_JACKPOT} once`} />
+            <ScoreRow label="A taunt performed while watched" value={`+${SCORE_MIMIC_PER_OBSERVED_TAUNT}`} />
+            <ScoreRow label={`… each consecutive watched taunt`} value={`+${SCORE_MIMIC_TAUNT_STREAK_STEP} extra`} />
+            <ScoreRow label="Never caught at the final bell" value={`+${SCORE_MIMIC_FULL_ROUND_SURVIVAL}`} />
+            <ScoreRow label="Each style award vote" value={`+${SCORE_MIMIC_PER_PEER_STYLE_VOTE}`} />
+          </div>
+        </div>
+        <div style={{ ...plate(), borderRadius: 10, padding: "12px 16px" }}>
+          <div style={{ font: `600 15px/1.3 ${FONT_DISPLAY}`, color: CREAM, marginBottom: 6 }}>
+            Hunting pays for judgement
+          </div>
+          <div style={rulesBodyStyle}>
+            <ScoreRow label="Each Mimic exposed" value={`+${SCORE_INSPECTOR_PER_CORRECT}`} />
+            <ScoreRow label="Each warrant wasted on furniture" value={`−${SCORE_INSPECTOR_PER_WRONG}`} />
+            <ScoreRow label="Every second left on a win" value={`+${SCORE_INSPECTOR_PER_SECOND_REMAINING_ON_WIN}`} />
+            <ScoreRow label="Each distinct object examined" value={`+${SCORE_INSPECTOR_PER_FOCUSED_OBJECT}`} />
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.6, lineHeight: 1.6 }}>
+              A wrong shot also loses the warrant, and the hunt ends on the
+              clock — hiders win whatever ammunition remains.
+            </div>
+          </div>
+        </div>
       </div>
 
       <HotkeyGuide />
@@ -161,10 +206,7 @@ function Settings({
 }): ReactElement {
   return (
     <div style={{ ...rulesCardStyle, width: 430 }} className="fs-rise">
-      <div style={{ textAlign: "center" }}>
-        <div style={{ ...labelStyle, opacity: 0.7, marginBottom: 8 }}>Settings</div>
-        <div style={{ ...ornamentRuleStyle(180), margin: "0 auto" }} aria-hidden />
-      </div>
+      <CardMasthead kicker="The back room" title="Settings" />
 
       <PlayerSettingsPanel qualityTier={tier} onQualityTierChange={onTierChange} />
 
@@ -191,10 +233,7 @@ function PlayerProfileCard({ onBack }: { readonly onBack: () => void }): ReactEl
   const summary = summarizePlayerProfile(profile);
   return (
     <div style={{ ...rulesCardStyle, width: 620 }} className="fs-rise">
-      <div style={{ textAlign: "center" }}>
-        <div style={{ ...labelStyle, opacity: 0.7, marginBottom: 8 }}>Player profile</div>
-        <div style={{ ...ornamentRuleStyle(180), margin: "0 auto" }} aria-hidden />
-      </div>
+      <CardMasthead kicker="The ledger" title="Profile & History" />
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 18 }}>
         {[
           ["Rounds", summary.gamesPlayed],

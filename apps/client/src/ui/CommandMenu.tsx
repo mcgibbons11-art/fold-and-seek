@@ -16,6 +16,7 @@ import {
   ornamentRuleStyle,
   plate,
   primaryButtonStyle,
+  buttonStyle,
 } from "./rounds/theme";
 
 const screenStyle: CSSProperties = {
@@ -45,7 +46,7 @@ const headerStyle: CSSProperties = {
 
 const navButtonStyle: CSSProperties = {
   width: "100%",
-  padding: "13px 0 13px 17px",
+  padding: "15px 0 15px 17px",
   borderTop: 0,
   borderRight: 0,
   borderBottom: "1px solid rgba(176, 138, 74, .16)",
@@ -53,10 +54,28 @@ const navButtonStyle: CSSProperties = {
   background: "transparent",
   color: "rgba(232, 221, 205, .66)",
   textAlign: "left",
-  font: `600 12px/1.25 ${FONT_UI}`,
+  font: `600 13px/1.25 ${FONT_UI}`,
   letterSpacing: ".17em",
   textTransform: "uppercase",
   cursor: "pointer",
+};
+
+/** The quiet line under a nav verb that says what the door leads to. */
+const navSubStyle: CSSProperties = {
+  display: "block",
+  marginTop: 4,
+  font: `10px/1.4 ${FONT_UI}`,
+  letterSpacing: ".06em",
+  textTransform: "none",
+  opacity: 0.52,
+};
+
+/** One fact chip in the hero's bottom strip. */
+const statChipStyle: CSSProperties = {
+  ...plate(),
+  borderRadius: 8,
+  padding: "10px 14px",
+  minWidth: 0,
 };
 
 const featureStyle: CSSProperties = {
@@ -112,6 +131,7 @@ export function CommandMenu({
 
       <main className="fs-command-grid">
         <nav className="fs-command-nav" aria-label="Main navigation">
+          <div style={{ ...labelStyle, padding: "0 0 10px 17px", opacity: 0.4 }}>Command</div>
           <button
             type="button"
             className="fs-menu-nav-button"
@@ -121,15 +141,21 @@ export function CommandMenu({
             data-entry-focus="true"
           >
             {browser === null ? "Start game" : "Matchmaking"}
+            <span className="fs-nav-sub" style={navSubStyle}>
+              {browser === null ? "Open the shop with bots" : "Find or host a shop"}
+            </span>
           </button>
           <button type="button" className="fs-menu-nav-button" style={navButtonStyle} onClick={onHowToPlay}>
             How to play
+            <span className="fs-nav-sub" style={navSubStyle}>Roles, controls, and the tariff</span>
           </button>
           <button type="button" className="fs-menu-nav-button" style={navButtonStyle} onClick={onProfile}>
             Profile &amp; history
+            <span className="fs-nav-sub" style={navSubStyle}>Your rounds and award cabinet</span>
           </button>
           <button type="button" className="fs-menu-nav-button" style={navButtonStyle} onClick={onSettings}>
             Settings
+            <span className="fs-nav-sub" style={navSubStyle}>Picture, sound, and controls</span>
           </button>
           <div
             style={{
@@ -148,6 +174,7 @@ export function CommandMenu({
         <section className="fs-command-hero fs-rise">
           <FoldedObjectMark />
           <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.9 }}>Featured operation</div>
+          <div style={{ ...ornamentRuleStyle(150), margin: "8px 0 0" }} aria-hidden />
           <h2
             style={{
               maxWidth: 760,
@@ -163,19 +190,60 @@ export function CommandMenu({
             Fold a mechanical body into the shop’s clutter, or hunt the one object whose story
             does not hold up. Every round changes who hides and who carries the warrants.
           </p>
-          <button
-            type="button"
-            className={PRESS_CLASS}
-            style={
-              starting
-                ? disabledButtonStyle({ ...primaryButtonStyle, minWidth: 245, padding: "12px 24px" })
-                : { ...primaryButtonStyle, minWidth: 245, padding: "12px 24px" }
-            }
-            onClick={primary}
-            disabled={starting}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" }}>
+            <button
+              type="button"
+              className={PRESS_CLASS}
+              style={
+                starting
+                  ? disabledButtonStyle({ ...primaryButtonStyle, minWidth: 245, padding: "12px 24px" })
+                  : { ...primaryButtonStyle, minWidth: 245, padding: "12px 24px" }
+              }
+              onClick={primary}
+              disabled={starting}
+            >
+              {starting ? "Connecting…" : browser === null ? "Begin solo round" : "Find a lobby"}
+            </button>
+            <button
+              type="button"
+              className={PRESS_CLASS}
+              style={{ ...buttonStyle, padding: "12px 20px" }}
+              onClick={onHowToPlay}
+            >
+              How to play
+            </button>
+          </div>
+
+          {/* The strip that used to be a dark void: what tonight's shop holds. */}
+          <div
+            className="fs-hero-stats"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+              gap: 10,
+              marginTop: "clamp(26px, 5vh, 54px)",
+              maxWidth: 620,
+            }}
           >
-            {starting ? "Connecting…" : browser === null ? "Begin solo round" : "Find a lobby"}
-          </button>
+            <div style={statChipStyle}>
+              <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.9 }}>Session</div>
+              <div style={{ marginTop: 5, fontSize: 13 }}>
+                {browser === null
+                  ? starting
+                    ? "Connecting…"
+                    : "Solo ready"
+                  : `${browser.rooms.length} room${browser.rooms.length === 1 ? "" : "s"} live`}
+              </div>
+            </div>
+            <div style={statChipStyle}>
+              <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.9 }}>Company</div>
+              <div style={{ marginTop: 5, fontSize: 13 }}>2–12 players &amp; bots</div>
+            </div>
+            <div style={statChipStyle}>
+              <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.9 }}>The shop</div>
+              <div style={{ marginTop: 5, fontSize: 13 }}>300 curiosities · two storeys</div>
+            </div>
+          </div>
         </section>
 
         <aside style={featureStyle} className="fs-command-feature">
@@ -220,11 +288,14 @@ export function CommandMenu({
       <footer
         style={{
           ...headerStyle,
-          justifyContent: "flex-end",
+          justifyContent: "space-between",
           borderBottom: 0,
           borderTop: "1px solid rgba(176,138,74,.18)",
         }}
       >
+        <span style={{ ...labelStyle, opacity: 0.42 }}>
+          A game of impossible objects · The Curiosity Shop
+        </span>
         <span style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.62 }}>Fold &amp; Seek</span>
       </footer>
     </div>

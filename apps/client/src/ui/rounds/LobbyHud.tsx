@@ -391,9 +391,17 @@ export function LobbyHud({
             hidden={narrowLobby && !briefingOpen}
           >
             <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1 }}>Operation briefing</div>
-            <h3 style={{ margin: "10px 0 8px", font: `600 31px/1.1 ${FONT_DISPLAY}` }}>
+            <h3
+              className="fs-candle"
+              style={{
+                margin: "10px 0 8px",
+                font: `600 31px/1.1 ${FONT_DISPLAY}`,
+                textShadow: "0 2px 18px rgba(255, 190, 107, 0.2)",
+              }}
+            >
               Blend into the Curiosity Shop
             </h3>
+            <div style={{ width: 160, height: 1, background: "rgba(176,138,74,.4)", margin: "2px 0 4px" }} aria-hidden />
             <p style={{ margin: 0, maxWidth: 520, opacity: 0.74, lineHeight: 1.7 }}>
               Mimics forge a convincing object and choose a hiding place. Inspectors wait in Security, then spend limited warrants finding the players.
             </p>
@@ -404,7 +412,7 @@ export function LobbyHud({
               ["03", "Hunt", "Every wrong accusation burns a warrant."],
             ].map(([number, title, copy]) => (
               <div key={number} style={{ display: "grid", gridTemplateColumns: "38px 82px 1fr", gap: 10, alignItems: "baseline", paddingTop: 9, borderTop: RULE }}>
-                <span style={{ color: BRASS_LIT, font: `600 15px/1 ${FONT_DISPLAY}` }}>{number}</span>
+                <span style={{ color: BRASS_LIT, font: `600 19px/1 ${FONT_DISPLAY}`, opacity: 0.9 }}>{number}</span>
                 <span style={{ color: CREAM, fontWeight: 600 }}>{title}</span>
                 <span style={{ opacity: 0.62 }}>{copy}</span>
               </div>

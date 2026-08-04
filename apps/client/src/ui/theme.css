@@ -263,9 +263,21 @@
 @media (max-width: 920px) {
   .fs-command-grid {
     grid-template-columns: minmax(170px, 220px) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    overflow-y: auto;
+  }
+  /* The briefing drops under the hero instead of vanishing: hiding it left
+     the lower half of a narrow pane as bare lacquer. */
+  .fs-command-nav {
+    grid-row: 1 / -1;
   }
   .fs-command-feature {
-    display: none;
+    grid-column: 2;
+    margin-bottom: 16px;
+  }
+  .fs-command-hero {
+    padding-top: clamp(40px, 8vh, 110px);
+    align-self: center;
   }
 }
 
@@ -290,6 +302,13 @@
   }
   .fs-command-hero {
     align-self: center;
+  }
+  .fs-hero-stats {
+    grid-template-columns: 1fr !important;
+    gap: 6px !important;
+  }
+  .fs-nav-sub {
+    display: none !important;
   }
 }
 

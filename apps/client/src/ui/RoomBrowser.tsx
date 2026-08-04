@@ -319,7 +319,7 @@ export function RoomBrowser({
       <header style={headerStyle} className="fs-matchmaking-header">
         <div>
           <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 0.85 }}>
-            Online · Matchmaking
+            Online · Matchmaking · tonight’s shops
           </div>
           <div
             style={{
@@ -352,9 +352,23 @@ export function RoomBrowser({
           </div>
           <div style={{ ...ornamentRuleStyle("100%"), margin: "10px 0 4px" }} aria-hidden />
           {rooms.length === 0 ? (
-            <p style={{ margin: "14px 2px", fontSize: 12, lineHeight: 1.7, opacity: 0.7 }}>
-              Nobody has opened a room yet. Open one and everyone in this Portals session will see it here.
-            </p>
+            <div
+              style={{
+                margin: "18px 2px",
+                padding: "18px 14px",
+                borderRadius: 10,
+                border: "1px dashed rgba(176, 138, 74, 0.35)",
+                textAlign: "center",
+              }}
+            >
+              <div style={{ font: `600 26px/1 ${FONT_DISPLAY}`, color: BRASS_LIT, opacity: 0.7 }} aria-hidden>
+                ❖
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, lineHeight: 1.7, opacity: 0.72 }}>
+                Nobody has opened a room yet. Open one and everyone in this
+                Portals session will see it listed here within a breath.
+              </div>
+            </div>
           ) : (
             <ul role="listbox" aria-label="Available rooms" style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {rooms.map((room, index) => {
