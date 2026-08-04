@@ -7,7 +7,6 @@ import type { InspectorGunView } from "./rounds/InspectorHud";
 import { BRASS_LIT, CREAM, FONT_UI, PRESS_CLASS, buttonStyle, labelStyle, plate } from "./rounds/theme";
 
 export const REPLAY_ONBOARDING_EVENT = "foldseek:replay-onboarding";
-const STORAGE_PREFIX = "foldseek.onboarding.v1.";
 
 interface FirstRoundGuideProps {
   readonly state: RoundViewState;
@@ -35,26 +34,6 @@ const INSPECTOR_STEPS: readonly GuideStep[] = [
   { title: "Accuse", instruction: "Click to fire. Every shot spends a warrant." },
 ];
 
-function storageKey(role: PlayerRole): string {
-  return `${STORAGE_PREFIX}${role}`;
-}
-
-function readComplete(role: PlayerRole): boolean {
-  try {
-    return window.localStorage.getItem(storageKey(role)) === "complete";
-  } catch {
-    return false;
-  }
-}
-
-function writeComplete(role: PlayerRole): void {
-  try {
-    window.localStorage.setItem(storageKey(role), "complete");
-  } catch {
-    // Storage is optional in embedded/privacy-restricted Portals contexts.
-  }
-}
-
 function guidePhase(role: PlayerRole, phase: MatchPhase): boolean {
   if (role === "mimic") {
     return phase === MatchPhase.Forge || phase === MatchPhase.Locking || phase === MatchPhase.InspectionIntro || phase === MatchPhase.Inspection;
@@ -65,7 +44,11 @@ function guidePhase(role: PlayerRole, phase: MatchPhase): boolean {
 /** A small checklist that advances from real gameplay actions, never from Next buttons. */
 export function FirstRoundGuide({ state, forge, gun, pointerLocked }: FirstRoundGuideProps): ReactElement | null {
   const role = state.self.role;
-  const [dismissed, setDismissed] = useState(() => role === null || readComplete(role));
+  // Shown at the start of every NEW game, per role, and never between rematch
+  // rounds (2026-08-04, user verdict). It used to write a permanent
+  // localStorage flag, so one Skip months ago hid it forever; the flag is
+  // gone, and the dismissal now lives only as long as the match does.
+  const [dismissed, setDismissed] = useState(false);
   const [moved, setMoved] = useState(false);
   const [edited, setEdited] = useState(false);
   const [painted, setPainted] = useState(false);
@@ -75,23 +58,16 @@ export function FirstRoundGuide({ state, forge, gun, pointerLocked }: FirstRound
   const initialShots = useRef({ accusations: state.accusations.length, dryFires: gun.dryFires });
 
   useEffect(() => {
-    if (role === null) return;
-    setDismissed(readComplete(role));
-  }, [role]);
-
-  useEffect(() => {
-    const replay = (): void => {
-      if (role === null) return;
-      try {
-        window.localStorage.removeItem(storageKey(role));
-      } catch {
-        // The guide still reopens for this page even when storage is blocked.
-      }
-      setDismissed(false);
-    };
+    const replay = (): void => setDismissed(false);
     window.addEventListener(REPLAY_ONBOARDING_EVENT, replay);
     return () => window.removeEventListener(REPLAY_ONBOARDING_EVENT, replay);
-  }, [role]);
+  }, []);
+
+  // A fresh deal re-arms the guide for the next game. Rematch rounds keep it
+  // away through the round guard below rather than through this reset.
+  useEffect(() => {
+    if (state.round === 0) setDismissed(false);
+  }, [state.round]);
 
   useEffect(() => {
     if (role !== "mimic" || dismissed) return undefined;
@@ -132,11 +108,12 @@ export function FirstRoundGuide({ state, forge, gun, pointerLocked }: FirstRound
   const complete = progress.every(Boolean);
   useEffect(() => {
     if (!complete || role === null || dismissed) return;
-    writeComplete(role);
     const timeout = window.setTimeout(() => setDismissed(true), 1_400);
     return () => window.clearTimeout(timeout);
   }, [complete, dismissed, role]);
 
+  // Round 0 is the start of a game; every later round is a rematch of it.
+  if (state.round > 0) return null;
   if (role === null || role === "spectator" || dismissed || !guidePhase(role, state.phase)) return null;
   const steps = role === "mimic" ? MIMIC_STEPS : INSPECTOR_STEPS;
   const activeIndex = progress.findIndex((done) => !done);
@@ -168,7 +145,6 @@ export function FirstRoundGuide({ state, forge, gun, pointerLocked }: FirstRound
           className={PRESS_CLASS}
           style={{ ...buttonStyle, padding: "4px 8px", fontSize: 9 }}
           onClick={() => {
-            writeComplete(role);
             setDismissed(true);
           }}
         >

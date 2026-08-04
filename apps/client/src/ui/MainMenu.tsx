@@ -1,4 +1,18 @@
 import { useState, type CSSProperties, type ReactElement } from "react";
+import {
+  SCORE_INSPECTOR_PER_CORRECT,
+  SCORE_INSPECTOR_PER_FOCUSED_OBJECT,
+  SCORE_INSPECTOR_PER_SECOND_REMAINING_ON_WIN,
+  SCORE_INSPECTOR_PER_WRONG,
+  SCORE_MIMIC_CLOSE_PASS_JACKPOT,
+  SCORE_MIMIC_FULL_ROUND_SURVIVAL,
+  SCORE_MIMIC_PER_CLOSE_PASS,
+  SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE,
+  SCORE_MIMIC_PER_OBSERVED_TAUNT,
+  SCORE_MIMIC_PER_PEER_STYLE_VOTE,
+  SCORE_MIMIC_PER_SURVIVAL_SECOND,
+  SCORE_MIMIC_TAUNT_STREAK_STEP,
+} from "@foldseek/game-sim";
 
 import { type QualityTier } from "../rendering/quality";
 import { loadPlayerProfile, summarizePlayerProfile } from "../gameplay/playerProfile";
@@ -17,6 +31,7 @@ import {
   labelStyle,
   ornamentRuleStyle,
   plate,
+  RULE,
 } from "./rounds/theme";
 
 /**
@@ -77,6 +92,16 @@ const rulesBodyStyle: CSSProperties = {
   opacity: 0.85,
 };
 
+/** One line of the tariff: what a deed pays, printed from the real weights. */
+function ScoreRow({ label, value }: { readonly label: string; readonly value: string }): ReactElement {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, padding: "3px 0", borderTop: RULE }}>
+      <span style={{ opacity: 0.78 }}>{label}</span>
+      <span style={{ color: BRASS_LIT, fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" }}>{value}</span>
+    </div>
+  );
+}
+
 /** The rules, told in the order a first round meets them. */
 function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
   return (
@@ -90,6 +115,27 @@ function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
         One Inspector hunts the Mimics hidden among the shop clutter. Roles rotate each round,
         and the four sections below let you learn only what you need next.
       </p>
+
+      <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, marginTop: 18 }}>
+        Scores and bonuses
+      </div>
+      <div style={{ ...rulesBodyStyle, marginTop: 8 }}>
+        <div style={{ fontWeight: 700, color: CREAM, marginBottom: 4 }}>Hiding pays for nerve:</div>
+        <ScoreRow label="Every second you survive" value={`+${SCORE_MIMIC_PER_SURVIVAL_SECOND}`} />
+        <ScoreRow label="Stared at directly and still missed" value={`+${SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE}`} />
+        <ScoreRow label="A seeker brushes right past you" value={`+${SCORE_MIMIC_PER_CLOSE_PASS}`} />
+        <ScoreRow label={`… and a third pass by the same seeker`} value={`+${SCORE_MIMIC_CLOSE_PASS_JACKPOT} once`} />
+        <ScoreRow label="A taunt performed while watched" value={`+${SCORE_MIMIC_PER_OBSERVED_TAUNT}`} />
+        <ScoreRow label={`… each consecutive watched taunt`} value={`+${SCORE_MIMIC_TAUNT_STREAK_STEP} extra`} />
+        <ScoreRow label="Never caught at the final bell" value={`+${SCORE_MIMIC_FULL_ROUND_SURVIVAL}`} />
+        <ScoreRow label="Each style award vote from the room" value={`+${SCORE_MIMIC_PER_PEER_STYLE_VOTE}`} />
+        <div style={{ fontWeight: 700, color: CREAM, margin: "10px 0 4px" }}>Hunting pays for judgement:</div>
+        <ScoreRow label="Each Mimic exposed" value={`+${SCORE_INSPECTOR_PER_CORRECT}`} />
+        <ScoreRow label="Each warrant wasted on furniture" value={`−${SCORE_INSPECTOR_PER_WRONG}`} />
+        <ScoreRow label="Every second left when your side wins" value={`+${SCORE_INSPECTOR_PER_SECOND_REMAINING_ON_WIN}`} />
+        <ScoreRow label="Each distinct object examined" value={`+${SCORE_INSPECTOR_PER_FOCUSED_OBJECT}`} />
+      </div>
+
       <HotkeyGuide />
 
       <button

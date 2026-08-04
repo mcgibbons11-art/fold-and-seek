@@ -158,7 +158,9 @@ export const DEFAULT_MATCH_SETTINGS = {
   // Kept on the wire for old snapshots only. New rounds go directly from the
   // role reveal to Forge; the old memorize-the-room phase is gone.
   baselineScanMs: 0,
-  forgeMs: 55_000,
+  // Raised 55s -> 115s (2026-08-04, user order): the expanded room offers far
+  // more hiding places and routes, and a fold worth finding takes the minute.
+  forgeMs: 115_000,
   lockGraceMs: 5_000,
   inspectionIntroMs: 4_000,
   inspectionMs: 75_000,
