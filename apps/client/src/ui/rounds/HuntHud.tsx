@@ -200,6 +200,10 @@ function leftColumn({
         dangerBearingRad={dangerBearingRad}
         forgeToolsExpanded={forgeToolsExpanded}
       >
+        {/* The board opens ABOVE the tool panels and regardless of them: it
+            used to append below a column the Forge tools already filled, so
+            in a short pane the toggle read as a button that did nothing. */}
+        {board}
         {forge === null ? null : (
           <ForgeToolPanels
             controller={forge}
@@ -217,7 +221,6 @@ function leftColumn({
             onTaunt={onTaunt}
           />
         ) : null}
-        {forgeToolsExpanded ? board : null}
       </HiderHud>
     );
   }

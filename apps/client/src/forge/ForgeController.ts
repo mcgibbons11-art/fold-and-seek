@@ -642,6 +642,14 @@ export class ForgeController {
   get grappleActive(): boolean {
     return this.locomotion !== null && this.locomotion.motion.grappleState !== null;
   }
+
+  /**
+   * The owner's view of their own taunt: the theatre animates everyone else's
+   * copy of the disguise, and this shakes the one the Forge is drawing.
+   */
+  tauntFlourish(): void {
+    this.gaitRig.settle();
+  }
   private readonly onGrapple: ((target: Vec3Like) => void) | null;
   private readonly grappleVisual: GrappleVisual;
   private readonly raycaster = new THREE.Raycaster();

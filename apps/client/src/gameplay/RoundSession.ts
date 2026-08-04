@@ -409,6 +409,16 @@ export class RoundSession {
       }),
       options.adapter.onRejection((rejection) => {
         this.inspector?.handleRejection(rejection);
+        // A refused pose or paint packet must not wedge the room on a stale
+        // view. The publisher marks a revision as sent the moment it goes out,
+        // so without this a single refusal (a rate window, a creep cap read
+        // against a lag spike, a grapple's grace) left the hider seeing one
+        // pose and everyone else another until their NEXT edit - and a hider
+        // holding a finished pose never edits again. Rearming the marker makes
+        // the same revision go out again on the ordinary cadence, when the
+        // clock has moved on and the refusal has usually cured itself.
+        if (rejection.type === "forge_snapshot") this.publishedRevision = -1;
+        if (rejection.type === "paint_update") this.publishedPaintRevision = -1;
         // An Inspector who pulls the trigger with no warrants left gets an empty
         // chamber; everything else the authority refuses is a flat deny.
         //
@@ -829,10 +839,19 @@ export class RoundSession {
    */
   private presentEvent(event: SimEvent): void {
     switch (event.type) {
-      case "taunt_performed":
+      case "taunt_performed": {
         // A hider's own disguise is drawn by their Forge rather than by the
-        // theatre, so their own taunt has no body here and only the sound
-        // reaches them.
+        // theatre, so their own taunt needs its own feedback: the theatre has
+        // no body for it and the spatial position lookup answers null, which
+        // used to leave the taunting player with a button that did nothing
+        // they could see or hear. Peers always saw it; now its owner does too.
+        const ownObjectId = this.state().self.ownDisguise?.publicObjectId ?? null;
+        if (event.publicObjectId === ownObjectId) {
+          this.audio.play(TAUNT_SOUND, TAUNT_PITCH_JITTER);
+          this.forge?.tauntFlourish();
+          this.captions.push({ label: "you taunt", importance: "gameplay", bearingRad: null });
+          break;
+        }
         if (this.spatialAudio !== null) {
           this.theatre.taunt(event.publicObjectId, event.tauntId, event.seed);
           this.playAtObject(TAUNT_SOUND, event.publicObjectId, 0.85);
@@ -841,6 +860,7 @@ export class RoundSession {
         }
         this.captionAtObject("Mechanical taunt", event.publicObjectId);
         break;
+      }
 
       case "innocent_reaction":
         this.reactions.play(event.objectId, event.reactionId);
