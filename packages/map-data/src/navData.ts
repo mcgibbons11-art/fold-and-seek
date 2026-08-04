@@ -136,6 +136,11 @@ export interface NavData {
    * separate list (see `FocusSystem`), exactly as §26.5 requires.
    */
   readonly blockers: readonly AABB[];
+  /**
+   * Small visual latch surfaces that must not become movement blockers: books,
+   * cabinet posts and other thin details a grapple can visibly catch.
+   */
+  readonly grappleTargets?: readonly AABB[];
   readonly climbLinks: readonly ClimbLink[];
   readonly spawnPoints: SpawnPoints;
   /** The Inspector's entry room (§5.9), for staging the theatrical door. */

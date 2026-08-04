@@ -46,6 +46,7 @@ export interface HuntHudProps {
 export function HuntHud(props: HuntHudProps): ReactElement {
   const { state, gun, forge, boardOpen, onToggleBoard, onTaunt } = props;
   const [actionsOpen, setActionsOpen] = useState(false);
+  const [forgeToolsExpanded, setForgeToolsExpanded] = useState(true);
 
   const role = state.self.role;
   const isInspector = role === "inspector";
@@ -84,6 +85,8 @@ export function HuntHud(props: HuntHudProps): ReactElement {
       isInspector,
       isLiveHider,
       forge,
+      forgeToolsExpanded,
+      onForgeToolsExpandedChange: setForgeToolsExpanded,
       board,
       density,
       traversal,
@@ -148,6 +151,8 @@ function leftColumn({
   isInspector,
   isLiveHider,
   forge,
+  forgeToolsExpanded,
+  onForgeToolsExpandedChange,
   board,
   density,
   traversal,
@@ -160,6 +165,8 @@ function leftColumn({
   readonly isInspector: boolean;
   readonly isLiveHider: boolean;
   readonly forge: ForgeController | null;
+  readonly forgeToolsExpanded: boolean;
+  readonly onForgeToolsExpandedChange: (expanded: boolean) => void;
   readonly board: ReactNode;
   readonly density: ColumnDensity;
   readonly traversal: "climbing" | "topout" | "airborne" | null;
@@ -178,15 +185,31 @@ function leftColumn({
   }
   if (isLiveHider) {
     return (
-      <HiderHud state={state} density={density} traversal={traversal} dangerBearingRad={dangerBearingRad}>
-        {forge === null ? null : <ForgeToolPanels controller={forge} width="100%" embedded />}
-        <HiderDockUtilities
-          state={state}
-          boardOpen={boardOpen}
-          onToggleBoard={onToggleBoard}
-          onTaunt={onTaunt}
-        />
-        {board}
+      <HiderHud
+        state={state}
+        density={density}
+        traversal={traversal}
+        dangerBearingRad={dangerBearingRad}
+        forgeToolsExpanded={forgeToolsExpanded}
+      >
+        {forge === null ? null : (
+          <ForgeToolPanels
+            controller={forge}
+            width="100%"
+            embedded
+            expanded={forgeToolsExpanded}
+            onExpandedChange={onForgeToolsExpandedChange}
+          />
+        )}
+        {forgeToolsExpanded ? (
+          <HiderDockUtilities
+            state={state}
+            boardOpen={boardOpen}
+            onToggleBoard={onToggleBoard}
+            onTaunt={onTaunt}
+          />
+        ) : null}
+        {forgeToolsExpanded ? board : null}
       </HiderHud>
     );
   }

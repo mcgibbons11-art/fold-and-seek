@@ -29,9 +29,9 @@ const MIMIC_STEPS: readonly GuideStep[] = [
 ];
 
 const INSPECTOR_STEPS: readonly GuideStep[] = [
-  { title: "Take control", instruction: "Click the room · WASD moves · Space hops." },
+  { title: "Take control", instruction: "Click the room · the reticle replaces your cursor · Esc releases it." },
   { title: "Acquire", instruction: "Aim at an object until the reticle responds." },
-  { title: "Get close", instruction: "Move until the target is inside warrant range." },
+  { title: "Get close", instruction: "WASD moves · Space hops · move inside warrant range." },
   { title: "Accuse", instruction: "Click to fire. Every shot spends a warrant." },
 ];
 

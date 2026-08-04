@@ -368,15 +368,18 @@ describe("hunt HUD region ownership", () => {
     const wrapper = container.querySelector('[data-hider-forge-dock="persistent"]');
     expect(wrapper).not.toBeNull();
     expect(textOf("leftColumn")).toContain("Starter arrangements");
-    const toggle = wrapper?.querySelector('button[aria-label="Collapse forge panels"]');
+    const toggle = wrapper?.querySelector('button[aria-label="Collapse Forge tools"]');
     expect(toggle).not.toBeNull();
     expect(toggle?.getAttribute("aria-expanded")).toBe("true");
     act(() => {
       (toggle as HTMLButtonElement).click();
     });
-    expect(wrapper?.querySelector('[data-forge-panels="collapsed"]')).not.toBeNull();
+    const collapsed = wrapper?.querySelector<HTMLElement>('[data-forge-panels="collapsed"]');
+    expect(collapsed).not.toBeNull();
+    expect(collapsed?.style.width).toBe("30px");
+    expect((wrapper as HTMLElement).style.width).toBe("30px");
     expect(textOf("leftColumn")).not.toContain("Starter arrangements");
-    expect(textOf("leftColumn")).toContain("Forge tools");
+    expect(textOf("leftColumn")).toContain("Expand Forge tools");
   });
 
   it("unfolds the panels when the player changes tool, so a tool key is never pressed at nothing", () => {

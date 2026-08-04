@@ -7,6 +7,7 @@ import type {
   WalkableSurface,
 } from "./navData";
 import { WORLD_SCALE } from "./navData";
+import { focusBoundsFor } from "./objects";
 import { SHOP_PLACEMENTS, type PropPlacement } from "./placements";
 import {
   CABINET_BLOCKS,
@@ -468,6 +469,43 @@ export const CLUTTER_BLOCKERS: readonly AABB[] = SHOP_PLACEMENTS.filter(
   (placement) => placement.obstacle === true,
 ).map(clutterBlocker);
 
+/**
+ * Grapple-only geometry. Books and the open cabinet frames are intentionally
+ * absent from movement collision, but the cable still needs a truthful solid
+ * point where their visible geometry sits.
+ */
+const BOOK_GRAPPLE_TARGETS: readonly AABB[] = SHOP_PLACEMENTS.filter(
+  (placement) => placement.family === "book",
+).map(focusBoundsFor);
+
+const CABINET_GRAPPLE_TARGETS: readonly AABB[] = CABINET_BLOCKS.flatMap((block) => {
+  const centreZ = (block.min.z + block.max.z) * 0.5;
+  const postZ = [centreZ - 0.245, centreZ + 0.245] as const;
+  const postX = [block.min.x + 0.03, block.max.x - 0.03] as const;
+  const posts = postX.flatMap((x) =>
+    postZ.map((z) => aabb(x - 0.04, 0.16, z - 0.04, x + 0.04, 1.95, z + 0.04)),
+  );
+  // Procedural stock on these shelves is visual dressing rather than a
+  // placement record. Shallow bands make those visible books latchable while
+  // leaving the shelf openings physically traversable.
+  const stock = CABINET_SHELF_TOPS.map((topY) =>
+    aabb(
+      block.min.x + 0.12,
+      topY,
+      centreZ - 0.18,
+      block.max.x - 0.12,
+      Math.min(topY + 0.3, 1.94),
+      centreZ + 0.18,
+    ),
+  );
+  return [...posts, ...stock];
+});
+
+export const GRAPPLE_TARGETS: readonly AABB[] = [
+  ...BOOK_GRAPPLE_TARGETS,
+  ...CABINET_GRAPPLE_TARGETS,
+];
+
 export const NAV_BLOCKERS: readonly AABB[] = [
   ...SHELL_BLOCKERS,
   ...FURNITURE_BLOCKERS,
@@ -742,6 +780,7 @@ export const SECURITY_OFFICE: AABB = aabb(
 export const NAV_DATA: NavData = {
   floors: WALKABLE_SURFACES,
   blockers: NAV_BLOCKERS,
+  grappleTargets: GRAPPLE_TARGETS,
   climbLinks: CLIMB_LINKS,
   spawnPoints: SPAWN_POINTS,
   securityOffice: SECURITY_OFFICE,

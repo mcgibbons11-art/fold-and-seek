@@ -389,14 +389,6 @@
   .fs-matchmaking-footer > span:first-child {
     display: none;
   }
-  .fs-matchmaking-request-sheet {
-    top: 72px !important;
-    right: 8px !important;
-    bottom: auto !important;
-    width: min(330px, calc(100vw - 16px)) !important;
-    max-height: calc(100vh - 118px);
-    overflow-y: auto;
-  }
 }
 
 /* A joined room must remain operable inside Portals' tall, narrow preview. */

@@ -621,6 +621,13 @@ describe("mechanical grapple traversal", () => {
     expect(controller.grappleState).toBeNull();
     expect(controller.position.x).toBeLessThan(WALL.min.x - INSPECTOR_RADIUS_M + 0.01);
   });
+
+  it("refuses a low grapple before it can pull the capsule through its starting floor", () => {
+    const controller = spawned(OPEN_ROOM, 0, 0, 0);
+    expect(controller.startGrapple({ x: 2, y: -0.4, z: 0 })).toBe(false);
+    expect(controller.grappleState).toBeNull();
+    expect(controller.position.y).toBeGreaterThanOrEqual(0);
+  });
 });
 
 /**

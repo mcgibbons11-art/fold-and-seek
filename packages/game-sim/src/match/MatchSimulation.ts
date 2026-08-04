@@ -1896,7 +1896,9 @@ export class MatchSimulation {
 
       case MatchPhase.Loading:
         if (this.allPresentReady() || expired) {
-          this.enterPhase(MatchPhase.MapIntro);
+          this.enterPhase(
+            this.settings.mapIntroMs > 0 ? MatchPhase.MapIntro : MatchPhase.RoleReveal,
+          );
           return true;
         }
         return false;

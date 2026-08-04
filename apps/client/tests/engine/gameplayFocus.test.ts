@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { focusGameplayCanvas } from "../../src/engine/gameplayFocus";
+import { focusGameplayCanvas, settleGameplayCanvasFocus } from "../../src/engine/gameplayFocus";
 
 describe("gameplay keyboard focus", () => {
   it("takes focus back from a stale lobby button", () => {
@@ -24,5 +24,27 @@ describe("gameplay keyboard focus", () => {
 
     expect(focusGameplayCanvas(canvas)).toBe(false);
     expect(document.activeElement).toBe(input);
+  });
+
+  it("reclaims focus after stale round UI finishes rendering", () => {
+    const callbacks: FrameRequestCallback[] = [];
+    const originalRequest = window.requestAnimationFrame;
+    const originalCancel = window.cancelAnimationFrame;
+    window.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      callbacks.push(callback);
+      return callbacks.length;
+    }) as typeof window.requestAnimationFrame;
+    window.cancelAnimationFrame = (() => undefined) as typeof window.cancelAnimationFrame;
+
+    const button = document.createElement("button");
+    const canvas = document.createElement("canvas");
+    document.body.append(button, canvas);
+    settleGameplayCanvasFocus(canvas);
+    button.focus();
+    callbacks.shift()?.(0);
+
+    expect(document.activeElement).toBe(canvas);
+    window.requestAnimationFrame = originalRequest;
+    window.cancelAnimationFrame = originalCancel;
   });
 });

@@ -370,7 +370,7 @@ describe("the room browser", () => {
     expect(newRoom?.disabled).toBe(true);
   });
 
-  it("keeps selected-room and host request controls reachable in the narrow composition", async () => {
+  it("keeps one set of host request controls reachable in the narrow composition", async () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 640 });
     Object.defineProperty(window, "innerHeight", { configurable: true, value: 660 });
     const host = await browsingClient("a", "Ada");
@@ -402,10 +402,13 @@ describe("the room browser", () => {
     expect(screen?.style.inset).toBe("0px");
     expect(columns?.style.overflow).toBe("hidden");
     expect(container.querySelector('[aria-label="Selected room"]')?.textContent).toContain("Narrow Room");
-    expect(container.querySelector('[aria-label="Pending join request"]')).not.toBeNull();
+    expect(container.querySelector('[aria-label="Pending join request"]')).toBeNull();
     expect([...container.querySelectorAll("button")].map((button) => button.textContent)).toEqual(
-      expect.arrayContaining(["Accept", "Decline", "Cancel hosted room"]),
+      expect.arrayContaining(["Accept player", "Not now", "Cancel hosted room"]),
     );
+    expect([...container.querySelectorAll("button")].filter((button) =>
+      button.textContent?.toLowerCase().includes("accept"),
+    )).toHaveLength(1);
   });
 
   it("runs one recovery action, categorizes it, and returns focus after dismissal", async () => {

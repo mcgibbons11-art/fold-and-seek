@@ -145,6 +145,12 @@ describe("RoundDirector", () => {
     ).toBe(false);
     expect(
       isPlayerFacingRejection({ type: "paint_update", reason: "invalid_paint" }, MatchPhase.Forge),
+    ).toBe(false);
+    expect(
+      isPlayerFacingRejection({ type: "vote_result", reason: "wrong_phase" }, MatchPhase.Forge),
+    ).toBe(false);
+    expect(
+      isPlayerFacingRejection({ type: "accuse", reason: "target_unknown" }, MatchPhase.Inspection),
     ).toBe(true);
   });
 

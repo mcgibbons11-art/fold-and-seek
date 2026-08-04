@@ -23,6 +23,7 @@ import {
 import { isBotSeat } from "../networking/botSeats";
 import { Signal } from "../networking/signal";
 import { computeAvailability } from "./actionAvailability";
+import { recordRejectionDiagnostic } from "./rejectionDiagnostics";
 
 /** A ready acknowledgement that lost the race with host start is not a player error. */
 export function isStaleReadyRejection(
@@ -54,8 +55,24 @@ export function isPlayerFacingRejection(
   ) {
     return false;
   }
-  return true;
+  // Only failures with a concrete recovery the player can act on belong in
+  // the HUD. Protocol, phase-race, pose, paint and movement refusals remain in
+  // the bounded diagnostic log instead of becoming generic red cards.
+  return PLAYER_VISIBLE_REJECTION_REASONS.has(rejection.reason);
 }
+
+const PLAYER_VISIBLE_REJECTION_REASONS: ReadonlySet<string> = new Set([
+  "not_connected",
+  "not_host",
+  "not_enough_players",
+  "players_not_ready",
+  "no_warrants",
+  "accusation_cooldown",
+  "taunt_cooldown",
+  "target_unknown",
+  "out_of_range",
+  "obstructed",
+]);
 import { correctAccusationStamp, phaseLabel, wrongAccusationStamp } from "./copy";
 import type {
   AccusationFeedEntry,
@@ -496,9 +513,16 @@ export class RoundDirector {
   }
 
   private applyRejection(rejection: CommandRejection): void {
-    if (!isPlayerFacingRejection(rejection, this.sync.publicState?.phase ?? null)) return;
+    const phase = this.sync.publicState?.phase ?? null;
+    recordRejectionDiagnostic(rejection, phase, this.localNow());
+    let capabilityChanged = false;
     if (rejection.type === "taunt" && !KNOWN_TAUNT_REFUSALS.has(rejection.reason)) {
+      capabilityChanged = this.tauntSupported;
       this.tauntSupported = false;
+    }
+    if (!isPlayerFacingRejection(rejection, phase)) {
+      if (capabilityChanged) this.publish();
+      return;
     }
     this.rejectionCounter += 1;
     const view: RejectionView = {

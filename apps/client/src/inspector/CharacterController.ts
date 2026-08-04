@@ -365,17 +365,29 @@ export class CharacterController {
 
   /** Starts a collision-safe pull from the body's centre to a world-space latch. */
   startGrapple(anchor: Vec3Like): boolean {
+    const bodyCenterY = this.position.y + INSPECTOR_HEIGHT_M * 0.5;
     const distance = Math.hypot(
       anchor.x - this.position.x,
-      anchor.y - (this.position.y + INSPECTOR_HEIGHT_M * 0.5),
+      anchor.y - bodyCenterY,
       anchor.z - this.position.z,
     );
-    if (!Number.isFinite(distance) || distance < GRAPPLE_MIN_RANGE_M || distance > GRAPPLE_MAX_RANGE_M) {
+    if (
+      !Number.isFinite(distance) ||
+      distance < GRAPPLE_MIN_RANGE_M ||
+      distance > GRAPPLE_MAX_RANGE_M ||
+      anchor.y < bodyCenterY
+    ) {
       return false;
     }
     this.climb = null;
     this.climbLatch = null;
-    this.grapple = { anchor: { x: anchor.x, y: anchor.y, z: anchor.z } };
+    this.grapple = {
+      anchor: { x: anchor.x, y: anchor.y, z: anchor.z },
+      // A grapple is an ascent/traverse tool, never a way to tow the capsule
+      // through the floor it was standing on. This also fences malformed
+      // remote targets that bypass the client's ray filter.
+      minFootY: this.position.y,
+    };
     this.grounded = false;
     this.surfaceId = null;
     this.surfaceLocked = false;
@@ -511,7 +523,7 @@ export class CharacterController {
 
     for (let index = 0; index < steps; index += 1) {
       const x = this.position.x + dx * step;
-      const y = this.position.y + dy * step;
+      const y = Math.max(grapple.minFootY, this.position.y + dy * step);
       const z = this.position.z + dz * step;
       if (
         blocksCapsule(
@@ -1409,6 +1421,7 @@ interface MutableClimb {
 
 interface MutableGrapple {
   readonly anchor: Vec3Like;
+  readonly minFootY: number;
 }
 
 function clamp(value: number, min: number, max: number): number {

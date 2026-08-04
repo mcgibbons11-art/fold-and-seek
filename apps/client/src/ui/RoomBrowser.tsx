@@ -721,50 +721,6 @@ export function RoomBrowser({
         </section>
       </main>
 
-      {pendingRequests[0] === undefined ? null : (
-        <aside
-          role="alert"
-          aria-live="assertive"
-          aria-label="Pending join request"
-          className="fs-matchmaking-request-sheet"
-          style={{
-            position: "fixed",
-            zIndex: 35,
-            top: 92,
-            right: 18,
-            width: "min(330px, calc(100vw - 36px))",
-            ...plate(true),
-            borderRadius: 10,
-            padding: 13,
-            boxSizing: "border-box",
-            boxShadow: "0 18px 52px rgba(0,0,0,.68)",
-          }}
-        >
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-            <div>
-              <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1 }}>Player wants to join</div>
-              <strong>{pendingRequests[0].displayName}</strong>
-            </div>
-            <span style={countStyle}>{secondsLeft(pendingRequests[0].expiresAt)}</span>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr", gap: 7, marginTop: 10 }}>
-            <button type="button" data-sound="none" className={PRESS_CLASS} style={{ ...primaryButtonStyle, padding: "7px 9px" }} onClick={() => {
-              requestAudio.current?.play("ui_confirm");
-              onAcceptRequest?.(pendingRequests[0]?.id ?? "");
-            }}>
-              Accept
-            </button>
-            <button type="button" data-sound="none" className={PRESS_CLASS} style={{ ...smallButtonStyle, padding: "7px 9px" }} onClick={() => {
-              requestAudio.current?.play("ui_back");
-              onDeclineRequest?.(pendingRequests[0]?.id ?? "");
-            }}>
-              Decline
-            </button>
-          </div>
-          {pendingRequests.length > 1 ? <div style={{ ...metaStyle, marginTop: 7 }}>+{pendingRequests.length - 1} more waiting</div> : null}
-        </aside>
-      )}
-
       <footer
         className="fs-matchmaking-footer"
         style={{

@@ -41,7 +41,6 @@ describe("match flow", () => {
     const phases = harness.eventsOfType("phase_changed").map((event) => event.phase);
     expect(phases).toEqual([
       MatchPhase.Loading,
-      MatchPhase.MapIntro,
       MatchPhase.RoleReveal,
       MatchPhase.Forge,
       MatchPhase.Locking,
@@ -51,6 +50,17 @@ describe("match flow", () => {
       MatchPhase.Reveal,
       MatchPhase.Results,
       MatchPhase.RematchVote,
+    ]);
+  });
+
+  it("goes straight from loading to the role card with production settings", () => {
+    const harness = new Harness({ players: 3, seed: 4 });
+    harness.readyAll();
+    expect(harness.command(harness.hostId, { type: "start_match" }).accepted).toBe(true);
+    harness.tickUntil(MatchPhase.RoleReveal);
+    expect(harness.eventsOfType("phase_changed").map((event) => event.phase)).toEqual([
+      MatchPhase.Loading,
+      MatchPhase.RoleReveal,
     ]);
   });
 

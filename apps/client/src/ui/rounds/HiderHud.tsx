@@ -150,6 +150,7 @@ export interface HiderHudProps {
   readonly children?: ReactNode;
   readonly traversal?: "climbing" | "topout" | "airborne" | null;
   readonly dangerBearingRad?: number | null;
+  readonly forgeToolsExpanded?: boolean;
 }
 
 function hiderUrgencyCopy(
@@ -165,28 +166,37 @@ function hiderUrgencyCopy(
 }
 
 /** One persistent dock: status, urgent cue, authoring controls, then utilities. */
-export function HiderHud({ state, density, children, traversal, dangerBearingRad }: HiderHudProps): ReactElement {
+export function HiderHud({
+  state,
+  density,
+  children,
+  traversal,
+  dangerBearingRad,
+  forgeToolsExpanded = true,
+}: HiderHudProps): ReactElement {
   return (
     <div
       data-hider-forge-dock="persistent"
       data-persistent-plate="hider-forge"
       style={{
         ...plate(),
-        width: "100%",
+        width: forgeToolsExpanded ? "100%" : 30,
         boxSizing: "border-box",
         borderRadius: 10,
-        padding: 8,
+        padding: forgeToolsExpanded ? 8 : 0,
         color: CREAM,
         pointerEvents: "auto",
       }}
     >
-      <HiderStatusCard
-        state={state}
-        density={density}
-        embedded
-        traversal={traversal}
-        dangerBearingRad={dangerBearingRad}
-      />
+      {forgeToolsExpanded ? (
+        <HiderStatusCard
+          state={state}
+          density={density}
+          embedded
+          traversal={traversal}
+          dangerBearingRad={dangerBearingRad}
+        />
+      ) : null}
       {children}
     </div>
   );

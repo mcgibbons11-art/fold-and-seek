@@ -1,5 +1,5 @@
 import { RESULT_VOTE_CATEGORIES, type ResultVoteCategory } from "@foldseek/game-sim";
-import { useState, type CSSProperties, type ReactElement, type ReactNode } from "react";
+import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import {
   RESULTS_COLUMN_CAUGHT,
@@ -278,7 +278,6 @@ function AwardRow({
 }
 
 export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): ReactElement | null {
-  const [detailsOpen, setDetailsOpen] = useState(false);
   const results = state.results;
   if (results === null) return null;
 
@@ -361,17 +360,9 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
           </div>
         </div>
 
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          aria-expanded={detailsOpen}
-          style={{ ...buttonStyle, width: "100%", marginTop: 14 }}
-          onClick={() => setDetailsOpen((open) => !open)}
-        >
-          {detailsOpen ? "Hide round details" : "Round details and awards"}
-        </button>
-
-        {detailsOpen ? <>
+        <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, marginTop: 20 }}>
+          Round details and awards
+        </div>
           <Ledger heading={RESULTS_MIMIC_HEADING} columns={mimicColumns(mimicRows)} rows={mimicRows} />
           <Ledger heading={RESULTS_INSPECTOR_HEADING} columns={INSPECTOR_COLUMNS} rows={inspectorRows} />
           <Ledger heading={RESULTS_SPECTATOR_HEADING} columns={[PLAYER_COLUMN, SCORE_COLUMN]} rows={otherRows} />
@@ -394,7 +385,6 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
             />
           ))}
         </div>
-        </> : null}
       </div>
     </div>
   );

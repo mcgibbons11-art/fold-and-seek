@@ -7,7 +7,7 @@ import { SoundCaptionLedger, type SoundCaption } from "../audio/soundCaptions";
 import { SpatialAudioPlayer, getSpatialAudioRuntime } from "../audio/SpatialAudioPlayer";
 import { WorldAmbienceEmitters } from "../audio/WorldAmbienceEmitters";
 import { trySetPointerCapture } from "../engine/pointerCapture";
-import { focusGameplayCanvas } from "../engine/gameplayFocus";
+import { settleGameplayCanvasFocus } from "../engine/gameplayFocus";
 import { AudioPlayer, type SoundId } from "../forge/AudioPlayer";
 import { ForgeController } from "../forge/ForgeController";
 import { SHOP_FORGE_WORKSPACE } from "../world/ShopWorld";
@@ -247,6 +247,7 @@ export class RoundSession {
   private readonly remoteInspectors = new Map<string, RemoteInspectorPresentation>();
   private focus: FocusMetadata | null = null;
   private pointerLocked = false;
+  private cancelGameplayFocus: (() => void) | null = null;
   private inspectablesRevision = -1;
 
   private surveyAngle = 0.6;
@@ -532,6 +533,8 @@ export class RoundSession {
   }
 
   dispose(): void {
+    this.cancelGameplayFocus?.();
+    this.cancelGameplayFocus = null;
     this.options.canvas.removeEventListener("click", this.onCanvasClick);
     this.options.canvas.removeEventListener("pointerdown", this.onSurveyPointerDown);
     this.options.canvas.removeEventListener("pointermove", this.onSurveyPointerMove);
@@ -766,12 +769,20 @@ export class RoundSession {
   }
 
   private onPhaseEntered(phase: MatchPhase, state: RoundViewState): void {
+    this.cancelGameplayFocus?.();
+    this.cancelGameplayFocus = null;
     if (
       phase === MatchPhase.Forge ||
       phase === MatchPhase.Locking ||
       INSPECTION_PHASES.has(phase)
     ) {
-      focusGameplayCanvas(this.options.canvas);
+      this.cancelGameplayFocus = settleGameplayCanvasFocus(
+        this.options.canvas,
+        () => {
+          const livePhase = this.state().phase;
+          return livePhase === MatchPhase.Forge || livePhase === MatchPhase.Locking || INSPECTION_PHASES.has(livePhase);
+        },
+      );
     }
     if (phase === MatchPhase.Loading) {
 
@@ -1001,6 +1012,7 @@ export class RoundSession {
       },
     });
     this.inspector = inspector;
+    this.options.canvas.style.cursor = "crosshair";
     this.inspectablesRevision = this.theatre.revision;
 
     const spawn = NAV_DATA.spawnPoints.inspectors[0];
@@ -1020,6 +1032,7 @@ export class RoundSession {
     if (selfId !== null) this.options.spatial.setInspectorEye(selfId, null);
     this.inspector?.dispose();
     this.inspector = null;
+    this.options.canvas.style.cursor = "default";
     this.focus = null;
     this.pointerLocked = false;
     this.inspectablesRevision = -1;

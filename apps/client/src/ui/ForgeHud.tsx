@@ -375,29 +375,35 @@ export function ForgeHud({
         </div>
       ) : null}
 
-      <button
-        {...hudProps}
-        type="button"
-        className={PRESS_CLASS}
-        data-forge-panel-toggle={panelsExpanded ? "expanded" : "collapsed"}
-        aria-label={panelsExpanded ? "Collapse forge panels" : "Expand forge panels"}
-        aria-expanded={panelsExpanded}
-        onClick={() => setPanelsExpanded((expanded) => !expanded)}
-        style={{
-          ...buttonStyle,
-          position: "absolute",
-          zIndex: 11,
-          top: FORGE_LAYOUT.topRow,
-          left: panelsExpanded ? LEFT_GUTTER - 4 : FORGE_LAYOUT.edge,
-          width: 34,
-          margin: 0,
-          padding: "8px 0",
-          textAlign: "center",
-          transition: "left 140ms ease",
-        }}
-      >
-        <span aria-hidden>{panelsExpanded ? "◀" : "▶"}</span>
-      </button>
+      {!panelsExpanded ? (
+        <button
+          {...hudProps}
+          type="button"
+          className={PRESS_CLASS}
+          data-forge-panel-toggle="collapsed"
+          aria-label="Expand Forge tools"
+          title="Expand Forge tools"
+          aria-expanded={false}
+          onClick={() => setPanelsExpanded(true)}
+          style={{
+            ...buttonStyle,
+            position: "absolute",
+            zIndex: 11,
+            top: FORGE_LAYOUT.topRow,
+            left: 0,
+            width: 30,
+            minHeight: 142,
+            margin: 0,
+            padding: "9px 5px",
+            borderRadius: "0 8px 8px 0",
+            writingMode: "vertical-rl",
+            textOrientation: "mixed",
+            textAlign: "center",
+          }}
+        >
+          Expand Forge tools <span aria-hidden>▶</span>
+        </button>
+      ) : null}
 
       <div
         {...hudProps}
@@ -410,6 +416,18 @@ export function ForgeHud({
           display: panelsExpanded ? undefined : "none",
         }}
       >
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          data-forge-panel-toggle="expanded"
+          aria-label="Collapse Forge tools"
+          title="Collapse Forge tools"
+          aria-expanded={true}
+          style={{ ...buttonStyle, margin: "0 0 6px", textAlign: "right" }}
+          onClick={() => setPanelsExpanded(false)}
+        >
+          Collapse Forge tools <span aria-hidden>◀</span>
+        </button>
         {FORGE_TOOL_MODES.map((mode) => (
           <button
             key={mode}
@@ -639,14 +657,20 @@ export function ForgeToolPanels({
   controller,
   width = 236,
   embedded = false,
+  expanded,
+  onExpandedChange,
 }: {
   readonly controller: ForgeController;
   readonly width?: number | string;
   /** Draw inside the hunt's single persistent dock instead of making sub-plates. */
   readonly embedded?: boolean;
+  /** Optional owner state lets the entire hider dock leave the screen with the tools. */
+  readonly expanded?: boolean;
+  readonly onExpandedChange?: (expanded: boolean) => void;
 }): ReactElement {
   const [state, setState] = useState<ForgeHudState>(() => controller.snapshot());
-  const [panelsExpanded, setPanelsExpanded] = useState(true);
+  const [localExpanded, setLocalExpanded] = useState(true);
+  const panelsExpanded = expanded ?? localExpanded;
 
   useEffect(() => controller.subscribe(setState), [controller]);
 
@@ -654,12 +678,18 @@ export function ForgeToolPanels({
     controller.commitEdits();
   };
 
+  const togglePanels = (): void => {
+    const next = !panelsExpanded;
+    if (expanded === undefined) setLocalExpanded(next);
+    onExpandedChange?.(next);
+  };
+
   const cardStyle: CSSProperties = {
     ...(embedded ? {} : plate()),
     borderRadius: 10,
     padding: embedded ? "10px 4px" : "12px 14px",
     pointerEvents: "auto",
-    width: embedded ? "100%" : width,
+    width: "100%",
     boxSizing: "border-box",
     ...(embedded ? { borderTop: EDGE } : {}),
   };
@@ -669,24 +699,37 @@ export function ForgeToolPanels({
       data-sound-scope="semantic"
       data-forge-command-owner="hider-dock"
       data-forge-panels={panelsExpanded ? "expanded" : "collapsed"}
-      style={{ display: "flex", flexDirection: "column", gap: embedded ? 0 : 10, width: embedded ? "100%" : width }}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: embedded ? 0 : 10,
+        width: panelsExpanded ? (embedded ? "100%" : width) : 30,
+        alignSelf: "flex-start",
+        transition: "width 140ms ease",
+      }}
     >
       <button
         {...hudProps}
         type="button"
         className={PRESS_CLASS}
-        aria-label={panelsExpanded ? "Collapse forge panels" : "Expand forge panels"}
+        aria-label={panelsExpanded ? "Collapse Forge tools" : "Expand Forge tools"}
+        title={panelsExpanded ? "Collapse Forge tools" : "Expand Forge tools"}
         aria-expanded={panelsExpanded}
-        onClick={() => setPanelsExpanded((expanded) => !expanded)}
+        onClick={togglePanels}
         style={{
           ...buttonStyle,
           margin: 0,
-          padding: embedded ? "7px 8px" : "8px 10px",
-          textAlign: "right",
-          borderRadius: 8,
+          width: panelsExpanded ? "100%" : 30,
+          minHeight: panelsExpanded ? undefined : 142,
+          padding: panelsExpanded ? (embedded ? "7px 8px" : "8px 10px") : "9px 5px",
+          textAlign: "center",
+          borderRadius: panelsExpanded ? 8 : "0 8px 8px 0",
+          writingMode: panelsExpanded ? undefined : "vertical-rl",
+          textOrientation: panelsExpanded ? undefined : "mixed",
         }}
       >
-        Forge tools <span aria-hidden>{panelsExpanded ? "\u25c0" : "\u25b6"}</span>
+        {panelsExpanded ? "Collapse Forge tools" : "Expand Forge tools"}{" "}
+        <span aria-hidden>{panelsExpanded ? "\u25c0" : "\u25b6"}</span>
       </button>
 
       {panelsExpanded ? <>

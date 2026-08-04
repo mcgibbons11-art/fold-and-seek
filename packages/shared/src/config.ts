@@ -151,7 +151,9 @@ export const DEFAULT_MATCH_SETTINGS = {
    * however this is set.
    */
   seekerCount: 1,
-  mapIntroMs: 5_000,
+  // Start goes straight to the Inspector/Mimic card. The old five-second
+  // generic countdown delayed the only information players were waiting for.
+  mapIntroMs: 0,
   roleRevealMs: 4_000,
   // Kept on the wire for old snapshots only. New rounds go directly from the
   // role reveal to Forge; the old memorize-the-room phase is gone.
