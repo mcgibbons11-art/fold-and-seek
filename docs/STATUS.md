@@ -1,5 +1,29 @@
 # STATUS
 
+## Gait retune: the Mimic strides, the Inspector calms down (2026-08-04, night)
+
+User verdict from live play: the Inspector "looks super saucy running
+around" and the Mimic "feels like he's tip toeing". One LocomotionRig serves
+both bodies, so the fix is a per-role GaitProfile over the shared math
+(forge/LocomotionRig.ts). The Mimic and its remote theatre view stride with
+more hip reach, higher knees, more pelvis roll and about double the stride
+sink; the procedural Inspector fallback takes the opposite profile, torso
+twist and pelvis roll cut below half, the coat following the hips one-to-one
+instead of 1.6x. STRIDE_FACTOR rose 0.62 -> 0.78 for everyone, which was
+most of the tip-toe read, and the footfall audio tracks it automatically
+because it is the same constant. The authored Inspector's swagger is baked
+into the Mixamo run clip, so calmInspectorRunClip pulls the hip, spine and
+shoulder rotation keys toward their loop average: posture survives, sway
+shrinks (hips keep 45%, spine 50%, shoulders 65%), the legs keep full
+stride. Two tests had been passing on phase luck at the old stride and now
+assert their intent (the running knee's cycle minimum beats the creep
+crouch; a ramping body earns its first footfall later than a body at speed
+spaces two). Client suite 1,108 green, typecheck clean, commit c6e3776
+synced to the editor (two SOURCE_ARCHIVE_FAILED refusals from the build
+worker, clean on the third try) and smoke-driven headless into a live round
+with zero page errors. The feel verdict itself remains the user's, in their
+own Chrome.
+
 ## Live-play fix wave (2026-08-04, evening)
 
 Seven user verdicts from live editor play, each shipped and synced the same
