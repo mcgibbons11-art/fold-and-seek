@@ -63,6 +63,7 @@ export const LADDER_TO_SHELF: ClimbLink = {
 export function testNavData(overrides: Partial<NavData> = {}): NavData {
   return {
     floors: [SHOP_FLOOR, TABLE_TOP, SHELF_TOP, OPEN_CRAWL, TIGHT_CRAWL],
+    groundPlane: SHOP_FLOOR.bounds,
     blockers: [WALL, TABLE_SLAB],
     climbLinks: [MANTLE_TO_TABLE, LADDER_TO_SHELF],
     spawnPoints: {

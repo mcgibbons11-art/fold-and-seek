@@ -131,6 +131,13 @@ export interface SpawnPoints {
 export interface NavData {
   readonly floors: readonly WalkableSurface[];
   /**
+   * The room's permanent base collision slab. Unlike `floors`, this is not a
+   * candidate gameplay target and it never disappears because a body crossed
+   * below its top between frames. The character solver uses only its top face
+   * and XZ footprint as the final ground boundary.
+   */
+  readonly groundPlane: AABB;
+  /**
    * Walls, furniture, and blocked volumes. These stop movement, pull the camera
    * in, and occlude accusation line of sight. Inspectable pick proxies are a
    * separate list (see `FocusSystem`), exactly as §26.5 requires.

@@ -777,8 +777,23 @@ export const SECURITY_OFFICE: AABB = aabb(
   SHOP_MAX_Z,
 );
 
+/**
+ * Permanent physics ground beneath the whole shop shell. This is deliberately
+ * separate from walkable surfaces, blockers, and grapple targets: it catches a
+ * downward collision from either side, but no ray can select or latch onto it.
+ */
+export const SHOP_GROUND_PLANE: AABB = aabb(
+  SHOP_MIN_X,
+  -0.1,
+  SHOP_MIN_Z,
+  SHOP_MAX_X,
+  0,
+  SHOP_MAX_Z,
+);
+
 export const NAV_DATA: NavData = {
   floors: WALKABLE_SURFACES,
+  groundPlane: SHOP_GROUND_PLANE,
   blockers: NAV_BLOCKERS,
   grappleTargets: GRAPPLE_TARGETS,
   climbLinks: CLIMB_LINKS,

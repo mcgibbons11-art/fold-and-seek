@@ -411,9 +411,16 @@ export class CharacterController {
   }
 
   update(dtSeconds: number, input: CharacterMoveInput): void {
-    if (dtSeconds <= 0) return;
+    if (dtSeconds <= 0) {
+      this.resolveGroundPlanePenetration();
+      return;
+    }
 
     this.justLanded = false;
+    // Collision is resolved before any traversal branch. The base floor is a
+    // permanent plane, so even a bad transform from an interrupted frame starts
+    // this update standing on its top instead of continuing through the void.
+    this.resolveGroundPlanePenetration();
     this.sinceJumpRequest = input.jump ? 0 : this.sinceJumpRequest + dtSeconds;
     if (!input.jump && !this.jumpActionArmed) {
       this.jumpActionArmed = true;
@@ -526,6 +533,7 @@ export class CharacterController {
       const y = Math.max(grapple.minFootY, this.position.y + dy * step);
       const z = this.position.z + dz * step;
       if (
+        !this.hasWalkableColumn(x, z) ||
         blocksCapsule(
           this.navData.blockers,
           x,
@@ -752,6 +760,7 @@ export class CharacterController {
 
   /** Snaps to the surface underfoot, or keeps falling toward the one below. */
   private resolveVertical(dtSeconds: number): void {
+    const groundY = this.groundPlaneYAt(this.position.x, this.position.z);
     const ceilingY = this.position.y + INSPECTOR_STEP_HEIGHT_M;
     const below = surfaceAt(this.navData.floors, this.position.x, this.position.z, ceilingY);
     if (below === null) {
@@ -767,6 +776,10 @@ export class CharacterController {
         this.position.y = landedOn;
         this.land();
         this.surfaceId = null;
+        return;
+      }
+      if (groundY !== null && nextY <= groundY) {
+        this.landOnGroundPlane(groundY);
         return;
       }
       this.position.y = nextY;
@@ -978,6 +991,56 @@ export class CharacterController {
     this.justLanded = !this.grounded;
     this.verticalVelocity = 0;
     this.grounded = true;
+  }
+
+  /** The permanent room-ground height under an XZ point, or null outside it. */
+  private groundPlaneYAt(x: number, z: number): number | null {
+    return containsXZ(this.navData.groundPlane, x, z) ? this.navData.groundPlane.max.y : null;
+  }
+
+  /**
+   * Resolves an already-penetrating body against the base plane in place. This
+   * is collision correction, not checkpoint recovery: X/Z and yaw are retained,
+   * and the feet move only to the surface they penetrated.
+   */
+  private resolveGroundPlanePenetration(): boolean {
+    const groundY = this.groundPlaneYAt(this.position.x, this.position.z);
+    if (groundY === null || this.position.y >= groundY) return false;
+
+    this.grapple = null;
+    this.climb = null;
+    this.climbLatch = null;
+    this.position.y = groundY;
+    this.separateLandingFromBlockers(groundY);
+    this.land();
+    this.surfaceId = surfaceAt(
+      this.navData.floors,
+      this.position.x,
+      this.position.z,
+      groundY + INSPECTOR_STEP_HEIGHT_M,
+    )?.id ?? null;
+    return true;
+  }
+
+  /** Lands on the permanent base plane after a downward sweep crosses it. */
+  private landOnGroundPlane(groundY: number): void {
+    this.position.y = groundY;
+    this.separateLandingFromBlockers(groundY);
+    this.land();
+    this.surfaceId = surfaceAt(
+      this.navData.floors,
+      this.position.x,
+      this.position.z,
+      groundY + INSPECTOR_STEP_HEIGHT_M,
+    )?.id ?? null;
+  }
+
+  /** True when the permanent ground or another walkable surface occupies this column. */
+  private hasWalkableColumn(x: number, z: number): boolean {
+    return (
+      this.groundPlaneYAt(x, z) !== null ||
+      surfaceAt(this.navData.floors, x, z, Number.POSITIVE_INFINITY) !== null
+    );
   }
 
   /**

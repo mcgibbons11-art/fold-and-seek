@@ -468,6 +468,7 @@ describe("the Inspector hops on the same key with the same physics", () => {
     );
     const navData: NavData = {
       floors: [SHOP_FLOOR, shelf],
+      groundPlane: SHOP_FLOOR.bounds,
       blockers: [],
       climbLinks: [],
       spawnPoints: { inspectors: [], mimics: [] },

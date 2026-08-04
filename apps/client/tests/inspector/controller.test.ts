@@ -530,6 +530,7 @@ describe("CharacterController falling through the shop", () => {
     const slab = box(-1, 0.8, -1, 1, 0.84, 1);
     const navData: NavData = {
       floors: [SHOP_FLOOR],
+      groundPlane: SHOP_FLOOR.bounds,
       blockers: [slab],
       climbLinks: [],
       spawnPoints: { inspectors: [], mimics: [] },
@@ -627,6 +628,34 @@ describe("mechanical grapple traversal", () => {
     expect(controller.startGrapple({ x: 2, y: -0.4, z: 0 })).toBe(false);
     expect(controller.grappleState).toBeNull();
     expect(controller.position.y).toBeGreaterThanOrEqual(0);
+  });
+
+  it("cuts the cable before a grapple can enter a column with no world floor", () => {
+    const controller = spawned(OPEN_ROOM, 0, 2.8, 0, 0);
+    expect(controller.startGrapple({ x: 4, y: 1, z: 0 })).toBe(true);
+
+    for (let frame = 0; frame < 180; frame += 1) {
+      controller.update(FRAME_SECONDS, createMoveInput());
+      expect(controller.position.y).toBeGreaterThanOrEqual(0);
+    }
+
+    expect(controller.grappleState).toBeNull();
+    expect(controller.position.x).toBeLessThanOrEqual(SHOP_FLOOR.bounds.max.x);
+    expect(controller.grounded).toBe(true);
+  });
+
+  it("keeps the ground collidable when a frame begins below its top face", () => {
+    const controller = spawned(OPEN_ROOM, 0, 0.4, -0.3, 0);
+
+    // A one-sided walkable-surface query cannot see a floor from underneath.
+    // The permanent collision plane must still resolve that penetration in
+    // place instead of restoring some unrelated checkpoint.
+    controller.position.y = -100;
+    controller.update(0, createMoveInput());
+
+    expect(controller.position).toEqual({ x: 0.4, y: 0, z: -0.3 });
+    expect(controller.grounded).toBe(true);
+    expect(controller.grappleState).toBeNull();
   });
 });
 
