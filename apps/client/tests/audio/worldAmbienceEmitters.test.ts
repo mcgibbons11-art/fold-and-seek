@@ -7,7 +7,7 @@ import {
 import type { SpatialVoice } from "../../src/audio/SpatialAudioPlayer";
 
 describe("WorldAmbienceEmitters", () => {
-  it("starts only the four directional landmarks and tears every loop down", async () => {
+  it("starts only the five directional landmarks and tears every loop down", async () => {
     const stopped: number[] = [];
     const voices: SpatialVoice[] = WORLD_AMBIENCE_LANDMARKS.map((_, index) => ({
       ended: Promise.resolve(),
@@ -19,16 +19,17 @@ describe("WorldAmbienceEmitters", () => {
     const emitters = new WorldAmbienceEmitters({ playAt });
 
     await emitters.start();
-    expect(playAt).toHaveBeenCalledTimes(4);
+    expect(playAt).toHaveBeenCalledTimes(5);
     expect(playAt.mock.calls.map((call) => call[0])).toEqual([
       "amb_clock_ticks",
       "amb_glass_hum",
       "amb_counter_paper",
       "amb_workshop_creak",
+      "amb_candle_flicker",
     ]);
     expect(playAt.mock.calls.every((call) => call[2]?.loop === true)).toBe(true);
 
     emitters.stop(150);
-    expect(stopped).toHaveLength(4);
+    expect(stopped).toHaveLength(5);
   });
 });

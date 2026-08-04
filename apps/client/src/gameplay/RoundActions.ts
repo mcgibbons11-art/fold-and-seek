@@ -32,6 +32,8 @@ function refused(reason: ActionBlockReason): ActionOutcome {
 export class RoundActions {
   private readonly adapter: NetworkAdapter;
   private readonly director: RoundDirector;
+  /** Cursor through the taunt vocabulary, so the button never repeats itself. */
+  private tauntCycle = 0;
 
   constructor(adapter: NetworkAdapter, director: RoundDirector) {
     this.adapter = adapter;
@@ -78,8 +80,14 @@ export class RoundActions {
    * something it does not recognise, so a room on an older build degrades to a
    * disabled button rather than a stream of refusals.
    */
-  taunt(tauntId: TauntId = DEFAULT_TAUNT_ID): ActionOutcome {
-    return this.send("taunt", { type: "taunt", tauntId });
+  taunt(tauntId?: TauntId): ActionOutcome {
+    // The button cycles the whole vocabulary (2026-08-04): five authored
+    // gestures existed and one was ever sent, so repeat presses played the
+    // same shudder all round. A caller naming a gesture still gets it.
+    const chosen = tauntId ?? TAUNT_IDS[this.tauntCycle % TAUNT_IDS.length] ?? DEFAULT_TAUNT_ID;
+    const outcome = this.send("taunt", { type: "taunt", tauntId: chosen });
+    if (outcome.sent && tauntId === undefined) this.tauntCycle += 1;
+    return outcome;
   }
 
   voteResult(category: ResultVoteCategory, targetPublicObjectId: string): ActionOutcome {

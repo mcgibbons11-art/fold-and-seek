@@ -73,9 +73,17 @@ export function HuntHud(props: HuntHudProps): ReactElement {
     }
   };
 
-  const toasts = state.rejections.map((entry) =>
-    rejectionToast(entry.id, entry.commandType, entry.reason),
-  );
+  const toasts = [
+    ...state.notices.map((entry) => ({
+      id: entry.id + 1_000_000,
+      title: entry.title,
+      body: entry.body,
+      tone: "brass" as const,
+    })),
+    ...state.rejections.map((entry) =>
+      rejectionToast(entry.id, entry.commandType, entry.reason),
+    ),
+  ];
 
   const regions: RegionAssignment = {
     topCenter: <HuntStatus state={state} />,
@@ -247,7 +255,11 @@ function HiderDockUtilities({
         onClick={onTaunt}
         style={{ ...buttonStyle, margin: 0, padding: "7px 8px", opacity: tauntEnabled ? 1 : 0.45 }}
       >
-        T · {tauntEnabled ? "Taunt" : `${Math.ceil(state.self.tauntCooldownMs / 1_000)}s`}
+        T · {tauntEnabled
+          ? state.self.tauntStreak > 1
+            ? `Taunt ×${String(state.self.tauntStreak)}`
+            : "Taunt"
+          : `${Math.ceil(state.self.tauntCooldownMs / 1_000)}s`}
       </button>
       <button
         type="button"

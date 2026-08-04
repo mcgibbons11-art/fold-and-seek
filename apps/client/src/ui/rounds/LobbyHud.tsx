@@ -466,6 +466,23 @@ export function LobbyHud({
                     onChange={(inspectionMs) => onSettingsChange?.({ inspectionMs })}
                   />
                 </SettingRow>
+                <SettingRow label="Extra warrants">
+                  <select
+                    aria-label="Extra warrants"
+                    style={settingSelectStyle}
+                    value={settings.warrantsBonus}
+                    disabled={!canEditSettings}
+                    onChange={(event) => {
+                      onSettingsChange?.({ warrantsBonus: Number(event.target.value) });
+                    }}
+                  >
+                    {[0, 1, 2, 3, 4].map((bonus) => (
+                      <option key={bonus} value={bonus}>
+                        {bonus === 0 ? "None" : `+${String(bonus)} each`}
+                      </option>
+                    ))}
+                  </select>
+                </SettingRow>
                 <div style={{ ...labelStyle, marginTop: 10, opacity: 0.72 }}>
                   {roleSplitCopy(state.roster.length, settings.seekerCount)}
                 </div>

@@ -358,7 +358,52 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
             </button>
             <span style={labelStyle}>{state.rematch.yesVotes} / {state.rematch.totalVoters} want another</span>
           </div>
+          <div style={{ fontSize: 12, opacity: 0.65, marginTop: 8 }}>
+            A rematch deals new roles and new hiding places: the gun goes to whoever has
+            held it least.
+          </div>
         </div>
+
+        {state.myHuntLedger === null ? null : (
+          <div style={{ marginTop: 18, paddingTop: 14, borderTop: RULE }}>
+            <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1 }}>Your hunt, audited</div>
+            <div style={{ display: "flex", gap: 22, marginTop: 10, flexWrap: "wrap" }}>
+              <div>
+                <div style={labelStyle}>Shots</div>
+                <div style={{ font: `600 22px/1.2 ${FONT_DISPLAY}`, color: CREAM }}>
+                  {state.myHuntLedger.shots}
+                </div>
+              </div>
+              <div>
+                <div style={labelStyle}>Mimics exposed</div>
+                <div style={{ font: `600 22px/1.2 ${FONT_DISPLAY}`, color: BRASS_LIT }}>
+                  {state.myHuntLedger.correct}
+                </div>
+              </div>
+              <div>
+                <div style={labelStyle}>Furniture accused</div>
+                <div style={{ font: `600 22px/1.2 ${FONT_DISPLAY}`, color: CREAM }}>
+                  {state.myHuntLedger.wrong}
+                </div>
+              </div>
+              <div>
+                <div style={labelStyle}>Accuracy</div>
+                <div style={{ font: `600 22px/1.2 ${FONT_DISPLAY}`, color: CREAM }}>
+                  {Math.round((state.myHuntLedger.correct / state.myHuntLedger.shots) * 100)}%
+                </div>
+              </div>
+            </div>
+            {state.myHuntLedger.wrongByZone.length === 0 ? null : (
+              <div style={{ fontSize: 12, opacity: 0.7, marginTop: 8 }}>
+                Warrants wasted in{" "}
+                {state.myHuntLedger.wrongByZone
+                  .map((zone) => `${zone.label} (${String(zone.count)})`)
+                  .join(", ")}
+                .
+              </div>
+            )}
+          </div>
+        )}
 
         <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, marginTop: 20 }}>
           Round details and awards

@@ -5,6 +5,8 @@ import {
   SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE,
   type MatchSettingsPatch,
   type SimEvent,
+  CLOSE_PASS_JACKPOT_COUNT,
+  SCORE_MIMIC_CLOSE_PASS_JACKPOT,
 } from "@foldseek/game-sim";
 import { CLOSE_PASS_DISTANCE_M, DEFAULT_MATCH_SETTINGS, MatchPhase } from "@foldseek/shared";
 import * as THREE from "three/webgpu";
@@ -422,10 +424,14 @@ describe("close passes", () => {
     expect([MatchPhase.Inspection, MatchPhase.FinalCountdown]).toContain(fixture.state().phase);
 
     // One at the dwell, then one per cooldown for the rest of the stay. A
-    // hundred and twenty ticks in the same spot, paid three times.
+    // hundred and twenty ticks in the same spot, paid three times - and the
+    // third pass with the same seeker also trips the 2026-08-04 jackpot.
     const windows = 1 + Math.floor((loiterMs - CLOSE_PASS_DWELL_MS) / CLOSE_PASS_COOLDOWN_MS);
     expect(fixture.state().deception.closePasses).toBe(windows);
-    expect(fixture.state().deception.points).toBe(windows * SCORE_MIMIC_PER_CLOSE_PASS);
+    const jackpots = windows >= CLOSE_PASS_JACKPOT_COUNT ? 1 : 0;
+    expect(fixture.state().deception.points).toBe(
+      windows * SCORE_MIMIC_PER_CLOSE_PASS + jackpots * SCORE_MIMIC_CLOSE_PASS_JACKPOT,
+    );
     expect(windows).toBeLessThan(loiterMs / STEP_MS);
 
     fixture.dispose();

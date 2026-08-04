@@ -6,10 +6,20 @@ import { chamferedBox, chamferedSlab, makeRandom } from "./geometry";
 import { GLASS_PANE_MATERIAL, MOON_BACKDROP_MATERIAL, WALL_PLASTER_MATERIAL } from "./materials";
 import { PLANK_TILE_LENGTH_M, WALL_TILE_LENGTH_M } from "./surfaces";
 import {
+  ANNEX_SCREEN_HEIGHT,
+  ANNEX_SCREEN_NORTH,
+  ANNEX_SCREEN_WEST,
+  CEILING_BEAM_DEPTH,
+  CEILING_BEAM_HEIGHT,
+  CEILING_BEAM_TOP_Y,
+  CEILING_BEAM_ZS,
   DOOR_HEIGHT,
   DOOR_MAX_X,
   DOOR_MIN_X,
   FLOOR_THICKNESS,
+  GALLERY_LEGS,
+  GALLERY_THICKNESS,
+  GALLERY_TOP_Y,
   OFFICE_DOOR_MAX_Z,
   OFFICE_DOOR_MIN_Z,
   OFFICE_MIN_X,
@@ -24,6 +34,7 @@ import {
   WINDOW_MAX_X,
   WINDOW_MIN_X,
   WINDOW_SILL_Y,
+  type GalleryLeg,
 } from "../zones";
 
 /**
@@ -58,6 +69,8 @@ export function buildArchitecture(ctx: PropContext): void {
   buildOfficeDoor(ctx);
   buildOfficeStaffBarrier(ctx);
   buildDisplayPlatform(ctx);
+  buildGallery(ctx);
+  buildAnnexScreens(ctx);
   buildThresholds(ctx);
   buildNightExterior(ctx);
   // Dressing, and the last thing laid down: it scatters over the floor the
@@ -306,10 +319,176 @@ function buildCeiling(ctx: PropContext): void {
   );
   b.end();
 
+  // The beams hang below the slab at standing headroom: they are walkable
+  // bridges since the 2026-08-04 expansion, and their heights live in
+  // `zones.ts` because the navigation contract stands players on them.
   b.begin("shop.beams", [0, 0, 0], 0, false, 1, "standard", true);
-  const beam = ctx.geometry.get("ceiling.beam", () => chamferedBox(WIDTH, 0.26, 0.22, 0.016));
-  for (const z of [-3.6, -1.2, 1.2, 3.6]) {
-    b.part(beam, beamMaterial, { y: WALL_HEIGHT - 0.13, z }, { shadow: false });
+  const beam = ctx.geometry.get("ceiling.beam", () =>
+    chamferedBox(WIDTH, CEILING_BEAM_HEIGHT, CEILING_BEAM_DEPTH, 0.016),
+  );
+  const hanger = ctx.geometry.get("ceiling.beamHanger", () => chamferedBox(0.08, 0.5, 0.08, 0.01));
+  for (const z of CEILING_BEAM_ZS) {
+    b.part(beam, beamMaterial, { y: CEILING_BEAM_TOP_Y - CEILING_BEAM_HEIGHT / 2, z }, { shadow: false });
+    // Iron drop rods tie each beam back to the slab so the lowered beams read
+    // as hung, not floating.
+    for (const x of [-6.2, -2.1, 2.1, 6.2]) {
+      b.part(hanger, ctx.materials.get("iron_dark_03"), { x, y: CEILING_BEAM_TOP_Y + 0.22, z }, { shadow: false });
+    }
+  }
+  b.end();
+}
+
+/**
+ * The gallery: wall-hung mezzanine walkways at 2.42 with turned balusters and
+ * a brass handrail, the room's second storey (2026-08-04 expansion). The deck
+ * boxes come from `zones.ts`, where the navigation contract reads the same
+ * numbers, so the floor a player stands on and the slab the map draws cannot
+ * drift apart.
+ *
+ * The support posts under the deck are visual only, exactly like the display
+ * cabinets' corner posts: growing 6 cm posts by the capsule radius would strew
+ * invisible pillars through the aisles below.
+ */
+function buildGallery(ctx: PropContext): void {
+  const b = ctx.batcher;
+  const deckMaterial = ctx.materials.get("walnut_mid_02");
+  const fascia = ctx.materials.get("walnut_dark_01");
+  const rail = ctx.materials.get("brass_tarnished_01");
+  const balusterMaterial = ctx.materials.get("iron_dark_03");
+
+  const baluster = ctx.geometry.get("gallery.baluster", () => new THREE.CylinderGeometry(0.016, 0.02, 0.3, 7));
+  const post = ctx.geometry.get("gallery.post", () =>
+    chamferedBox(0.07, GALLERY_TOP_Y - GALLERY_THICKNESS, 0.07, 0.012),
+  );
+
+  const railFor = (length: number): THREE.BufferGeometry =>
+    ctx.geometry.get(`gallery.rail#${length.toFixed(2)}`, () => new THREE.CylinderGeometry(0.022, 0.022, length, 8));
+  const deckFor = (leg: GalleryLeg): THREE.BufferGeometry =>
+    ctx.geometry.get(`gallery.deck#${leg.id}`, () =>
+      chamferedSlab(leg.maxX - leg.minX, GALLERY_THICKNESS, leg.maxZ - leg.minZ, 0.014),
+    );
+  const fasciaFor = (length: number): THREE.BufferGeometry =>
+    ctx.geometry.get(`gallery.fascia#${length.toFixed(2)}`, () => chamferedBox(length, 0.12, 0.04, 0.008));
+
+  b.begin("shop.gallery", [0, 0, 0], 0, true, 1, "standard", true);
+  for (const leg of GALLERY_LEGS) {
+    const centreX = (leg.minX + leg.maxX) / 2;
+    const centreZ = (leg.minZ + leg.maxZ) / 2;
+    const width = leg.maxX - leg.minX;
+    const depth = leg.maxZ - leg.minZ;
+    b.part(deckFor(leg), deckMaterial, { x: centreX, y: GALLERY_TOP_Y - GALLERY_THICKNESS / 2, z: centreZ });
+
+    // The open edge: fascia board, brass handrail, and a run of balusters.
+    // Wall legs open toward the room on x; the north and south runs open on z.
+    const alongX = width > depth;
+    const openEdge =
+      leg.id === "gallery_south"
+        ? { x: centreX, z: leg.minZ + 0.02 }
+        : leg.id === "gallery_north_east"
+          ? { x: centreX, z: leg.maxZ - 0.02 }
+          : leg.id === "gallery_east"
+            ? { x: leg.minX + 0.02, z: centreZ }
+            : { x: leg.maxX - 0.02, z: centreZ };
+    const runLength = alongX ? width : depth;
+    const railY = GALLERY_TOP_Y + 0.3;
+
+    b.part(
+      fasciaFor(runLength),
+      fascia,
+      { x: openEdge.x, y: GALLERY_TOP_Y - 0.02, z: openEdge.z, ry: alongX ? 0 : Math.PI / 2 },
+      { shadow: false },
+    );
+    b.part(
+      railFor(runLength),
+      rail,
+      { x: openEdge.x, y: railY, z: openEdge.z, rz: alongX ? Math.PI / 2 : 0, rx: alongX ? 0 : Math.PI / 2 },
+      { shadow: false },
+    );
+    const balusters = Math.max(Math.round(runLength / 0.45), 2);
+    for (let i = 0; i < balusters; i += 1) {
+      const t = (i + 0.5) / balusters - 0.5;
+      b.part(
+        baluster,
+        balusterMaterial,
+        {
+          x: openEdge.x + (alongX ? t * runLength : 0),
+          y: GALLERY_TOP_Y + 0.15,
+          z: openEdge.z + (alongX ? 0 : t * runLength),
+        },
+        { shadow: false },
+      );
+    }
+
+    // Support posts down to the floor, spaced along the open edge.
+    const posts = Math.max(Math.round(runLength / 2.4), 1);
+    for (let i = 0; i < posts; i += 1) {
+      const t = (i + 0.5) / posts - 0.5;
+      b.part(
+        post,
+        fascia,
+        {
+          x: openEdge.x + (alongX ? t * runLength : 0),
+          y: (GALLERY_TOP_Y - GALLERY_THICKNESS) / 2,
+          z: openEdge.z + (alongX ? 0 : t * runLength),
+        },
+        { shadow: false },
+      );
+    }
+  }
+  b.end();
+}
+
+/**
+ * The Curio Annex screens: two tall folding panels that close the salon
+ * alcove against the south wall (2026-08-04 expansion). Their boxes come from
+ * `zones.ts`, where the navigation contract blocks movement and sight with
+ * the same volumes.
+ */
+function buildAnnexScreens(ctx: PropContext): void {
+  const b = ctx.batcher;
+  const panel = ctx.materials.get("paint_midnight_02");
+  const trim = ctx.materials.get("walnut_dark_01");
+
+  b.begin("shop.annexScreens", [0, 0, 0], 0, true, 1, "standard", true);
+  for (const screen of [ANNEX_SCREEN_WEST, ANNEX_SCREEN_NORTH]) {
+    const width = screen.max.x - screen.min.x;
+    const depth = screen.max.z - screen.min.z;
+    const centreX = (screen.min.x + screen.max.x) / 2;
+    const centreZ = (screen.min.z + screen.max.z) / 2;
+    const alongZ = depth > width;
+    const run = alongZ ? depth : width;
+    // Three hinged panels, each turned a touch, read as a folding screen where
+    // one flat slab reads as a wall.
+    const panels = 3;
+    for (let i = 0; i < panels; i += 1) {
+      const t = (i + 0.5) / panels - 0.5;
+      const lean = (i % 2 === 0 ? 1 : -1) * 0.06;
+      b.part(
+        ctx.geometry.get(`annex.panel#${(run / panels).toFixed(2)}`, () =>
+          chamferedBox(run / panels - 0.03, ANNEX_SCREEN_HEIGHT - 0.08, 0.05, 0.012),
+        ),
+        panel,
+        {
+          x: centreX + (alongZ ? 0 : t * run),
+          y: (ANNEX_SCREEN_HEIGHT - 0.08) / 2,
+          z: centreZ + (alongZ ? t * run : 0),
+          ry: (alongZ ? Math.PI / 2 : 0) + lean,
+        },
+      );
+      b.part(
+        ctx.geometry.get(`annex.cap#${(run / panels).toFixed(2)}`, () =>
+          chamferedBox(run / panels - 0.01, 0.06, 0.07, 0.01),
+        ),
+        trim,
+        {
+          x: centreX + (alongZ ? 0 : t * run),
+          y: ANNEX_SCREEN_HEIGHT - 0.05,
+          z: centreZ + (alongZ ? t * run : 0),
+          ry: (alongZ ? Math.PI / 2 : 0) + lean,
+        },
+        { shadow: false },
+      );
+    }
   }
   b.end();
 }

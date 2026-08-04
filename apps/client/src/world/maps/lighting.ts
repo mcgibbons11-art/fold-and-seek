@@ -23,6 +23,16 @@ import {
  */
 
 const MOON_COLOR = 0x8fb2e8;
+/** Findable by the round, which drifts the moon across the sky (2026-08-04). */
+export const MOON_LIGHT_NAME = "shop.moonlight";
+/** Where the moon starts, restated for the drift to swing about. */
+export const MOON_BASE_POSITION: readonly [number, number, number] = [
+  (WINDOW_MIN_X + WINDOW_MAX_X) / 2 + 2.5,
+  6.5,
+  SHOP_MIN_Z - 8,
+];
+/** Radians of azimuth the moon crosses over one full phase. */
+export const MOON_DRIFT_RAD = 0.14;
 const MOON_KEY_INTENSITY = 4.2;
 const MOON_FILL_INTENSITY = 1.6;
 
@@ -407,6 +417,7 @@ export class ShopLighting {
    */
   private buildMoon(settings: QualitySettings): THREE.DirectionalLight {
     const light = new THREE.DirectionalLight(MOON_COLOR, MOON_KEY_INTENSITY);
+    light.name = MOON_LIGHT_NAME;
     light.position.set(WINDOW_CENTRE_X + 2.5, 6.5, SHOP_MIN_Z - 8);
     light.target.position.set(WINDOW_CENTRE_X + 1.5, 0.2, 1.5);
     // Set before the light is first rendered: a light built with castShadow

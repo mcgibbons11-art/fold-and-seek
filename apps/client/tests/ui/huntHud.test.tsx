@@ -125,6 +125,8 @@ function huntState(overrides: {
     results: null,
     rematch: { yesVotes: 0, totalVoters: 0, myVote: null },
     rejections: [],
+    notices: [],
+    myHuntLedger: null,
     actions: {
       ready: gate,
       startMatch: gate,

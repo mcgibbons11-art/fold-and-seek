@@ -27,10 +27,15 @@ describe("Curiosity Shop object registry", () => {
     }
   });
 
-  it("keeps the inspectable set inside the §10.2 target of 70 to 110", () => {
+  it("keeps the inspectable set inside the expanded target of 70 to 190", () => {
+    // The §10.2 ceiling was 110. Raised by user override (2026-08-04 room
+    // expansion): the verdict was that the room offered too few blendable
+    // objects, so the gallery, the cabinet summits, the Curio Annex and the
+    // density pass all publish accusable twins. The ceiling still exists so a
+    // future pass cannot silently flood the registry without a ruling.
     const inspectable = CURIOSITY_SHOP_OBJECTS.filter((entry) => entry.inspectable);
     expect(inspectable.length).toBeGreaterThanOrEqual(70);
-    expect(inspectable.length).toBeLessThanOrEqual(110);
+    expect(inspectable.length).toBeLessThanOrEqual(190);
   });
 
   it("gives every object focus bounds that contain its origin and have volume", () => {

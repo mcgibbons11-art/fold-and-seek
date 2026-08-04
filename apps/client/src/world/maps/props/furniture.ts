@@ -419,10 +419,12 @@ export function buildDisplayCabinet(ctx: PropContext, placement: PropPlacement):
     y: 0.08,
   });
 
-  const post = ctx.geometry.get(sized("cabinet.post", height), () => chamferedBox(0.06, height - 0.25, 0.06, 0.012));
+  // Posts run to the summit board's underside: the cabinets carry a walkable
+  // top since the 2026-08-04 expansion, and a board on shorter posts floated.
+  const post = ctx.geometry.get(sized("cabinet.post", height), () => chamferedBox(0.06, height - 0.17, 0.06, 0.012));
   for (const dx of [-1, 1]) {
     for (const dz of [-1, 1]) {
-      b.part(post, wood, { x: (dx * (width - 0.06)) / 2, y: height / 2 + 0.04, z: (dz * (depth - 0.06)) / 2 });
+      b.part(post, wood, { x: (dx * (width - 0.06)) / 2, y: height / 2 + 0.105, z: (dz * (depth - 0.06)) / 2 });
     }
   }
 
@@ -448,6 +450,17 @@ export function buildDisplayCabinet(ctx: PropContext, placement: PropPlacement):
     });
   }
 
+  // The summit board, top face at 2.0. Its height is part of the navigation
+  // contract (`cabinet_N_top` in map-data nav), so it is stated absolutely
+  // rather than derived from the carcass. Left undressed: the authored
+  // `maze_top_*` placements stand here.
+  b.part(
+    ctx.geometry.get(sized("cabinet.top", width, depth), () =>
+      chamferedSlab(width - 0.04, 0.03, depth - 0.04, 0.01),
+    ),
+    wood,
+    { y: 1.985 },
+  );
 }
 
 /** Wall-hung shelf. Swatch roles: 0 = plank, 1 = brackets. `size` is width. */

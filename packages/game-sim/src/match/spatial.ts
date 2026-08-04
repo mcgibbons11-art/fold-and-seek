@@ -40,6 +40,13 @@ export interface SpatialValidator {
    * cannot say they walked past anybody.
    */
   isNearby(inspectorId: string, targetObjectId: string): SpatialDecision;
+  /**
+   * Whether this seeker is standing at the warrant restock case right now
+   * (2026-08-04 expansion). A gate like canAccuse: optional because older
+   * validators predate it, and a validator without it refuses by absence —
+   * the simulation treats a missing answer as "no".
+   */
+  canClaimRestock?(inspectorId: string): SpatialDecision;
 }
 
 export interface SpatialDecision {

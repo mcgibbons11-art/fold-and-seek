@@ -111,6 +111,19 @@ export const CLOSE_PASS_DWELL_MS = 400;
  * is what makes performing one a real risk rather than free points.
  */
 export const SCORE_MIMIC_PER_OBSERVED_TAUNT = 40;
+/**
+ * Bait-streak bonus (2026-08-04): each consecutive watched taunt beyond the
+ * first pays this on top, up to the cap. An unwatched taunt resets the run,
+ * which is what makes a late-round taunt spree a wager rather than a grind.
+ */
+export const SCORE_MIMIC_TAUNT_STREAK_STEP = 20;
+export const SCORE_MIMIC_TAUNT_STREAK_CAP = 4;
+/** One-time bonus for a third close pass with the same seeker (2026-08-04). */
+export const SCORE_MIMIC_CLOSE_PASS_JACKPOT = 40;
+/** Close passes with one seeker that trip the jackpot. */
+export const CLOSE_PASS_JACKPOT_COUNT = 3;
+/** Warrants one restock claim refills (2026-08-04 expansion). */
+export const WARRANT_RESTOCK_COUNT = 1;
 export const SCORE_MIMIC_MAX_OBSERVED_TAUNTS = 5;
 export const TAUNT_COOLDOWN_MS = 5_000;
 

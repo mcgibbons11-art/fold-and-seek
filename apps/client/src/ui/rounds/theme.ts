@@ -61,19 +61,33 @@ export const PLATE_EDGE = "1px solid rgba(176, 138, 74, 0.34)";
 /* ------------------------------------------------------------- surfaces ---- */
 
 /**
- * The lacquer plate every panel is cut from: a warm vertical wash, a brass
- * hairline, a lit top edge where the candle catches it, and a shadow deep
- * enough to lift it off the room behind.
+ * The plate's finish, in layers (2026-08-04 richness pass): a faint candle
+ * bloom in the upper corner, a woven lacquer grain in two directions so the
+ * surface reads as material rather than as flat glass, and the warm vertical
+ * wash underneath it all. The grains are two-percent alpha — texture at
+ * reading distance, invisible in a screenshot's histogram.
  */
-export const PLATE_BACKGROUND =
-  "linear-gradient(178deg, rgba(41, 30, 19, 0.90) 0%, rgba(22, 16, 10, 0.93) 46%, rgba(13, 10, 7, 0.94) 100%)";
+export const PLATE_BACKGROUND = [
+  "radial-gradient(140% 60% at 18% 0%, rgba(255, 205, 130, 0.075), transparent 55%)",
+  "repeating-linear-gradient(93deg, rgba(232, 221, 205, 0.020) 0 1px, transparent 1px 5px)",
+  "repeating-linear-gradient(2deg, rgba(0, 0, 0, 0.055) 0 1px, transparent 1px 6px)",
+  "linear-gradient(178deg, rgba(41, 30, 19, 0.92) 0%, rgba(22, 16, 10, 0.94) 46%, rgba(13, 10, 7, 0.95) 100%)",
+].join(", ");
+
+/**
+ * The double-line brass edge of an engraved plaque: the border carries the
+ * outer line and these two inset rings carry the gap and the inner line, so
+ * every panel reads as trimmed rather than merely outlined.
+ */
+const PLATE_INNER_LINE =
+  "inset 0 0 0 1px rgba(8, 6, 4, 0.6), inset 0 0 0 2px rgba(176, 138, 74, 0.16)";
 
 export const PLATE_SHADOW =
-  "0 12px 34px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 232, 186, 0.13)";
+  `0 12px 34px rgba(0, 0, 0, 0.55), ${PLATE_INNER_LINE}, inset 0 1px 0 rgba(255, 232, 186, 0.13)`;
 
 /** The same plate with the candle sitting behind it, for full-screen cards. */
 export const PLATE_SHADOW_LIT =
-  "0 18px 52px rgba(0, 0, 0, 0.62), 0 0 46px rgba(255, 190, 107, 0.10), inset 0 1px 0 rgba(255, 232, 186, 0.18)";
+  `0 18px 52px rgba(0, 0, 0, 0.62), 0 0 46px rgba(255, 190, 107, 0.10), ${PLATE_INNER_LINE}, inset 0 1px 0 rgba(255, 232, 186, 0.18)`;
 
 /**
  * A panel surface. `lit` is for the handful of cards that own the whole screen
@@ -129,6 +143,9 @@ export const headlineStyle: CSSProperties = {
   letterSpacing: "0.2em",
   textTransform: "uppercase",
   margin: 0,
+  // Letterpress: a hairline of shadow under each stroke, and the candle's
+  // faint answer above it, so a headline sits IN the plate, not on it.
+  textShadow: "0 1px 1px rgba(0, 0, 0, 0.7), 0 0 18px rgba(255, 190, 107, 0.12)",
 };
 
 /** The small capitals that name a field. */
@@ -137,6 +154,7 @@ export const labelStyle: CSSProperties = {
   textTransform: "uppercase",
   fontSize: 10,
   opacity: 0.62,
+  textShadow: "0 1px 0 rgba(0, 0, 0, 0.55)",
 };
 
 /** A counted value, sized to be read across the room. */
@@ -144,6 +162,7 @@ export const figureStyle: CSSProperties = {
   font: `600 22px/1.2 ${FONT_NUMERIC}`,
   fontVariantNumeric: "tabular-nums",
   color: BRASS_LIT,
+  textShadow: "0 0 14px rgba(255, 190, 107, 0.28), 0 1px 1px rgba(0, 0, 0, 0.6)",
 };
 
 /* ------------------------------------------------------------- controls ---- */
@@ -156,7 +175,8 @@ export const figureStyle: CSSProperties = {
 export const PRESS_CLASS = "fs-press";
 
 export const buttonStyle: CSSProperties = {
-  background: "linear-gradient(180deg, rgba(232, 221, 205, 0.10), rgba(232, 221, 205, 0.03))",
+  background:
+    "linear-gradient(180deg, rgba(232, 221, 205, 0.12) 0%, rgba(232, 221, 205, 0.04) 55%, rgba(0, 0, 0, 0.12) 100%)",
   color: CREAM,
   border: "1px solid rgba(176, 138, 74, 0.38)",
   borderRadius: 7,
@@ -166,7 +186,10 @@ export const buttonStyle: CSSProperties = {
   textTransform: "uppercase",
   cursor: "pointer",
   pointerEvents: "auto",
-  boxShadow: "inset 0 1px 0 rgba(255, 232, 186, 0.10)",
+  // A machined cap: lit top edge, seated bottom edge.
+  boxShadow:
+    "inset 0 1px 0 rgba(255, 232, 186, 0.14), inset 0 -1px 0 rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.35)",
+  textShadow: "0 1px 0 rgba(0, 0, 0, 0.5)",
 };
 
 /** The one control on a screen that the player is meant to press. */

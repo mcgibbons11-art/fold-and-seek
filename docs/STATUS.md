@@ -1,5 +1,71 @@
 # STATUS
 
+## The 50-improvement build: room expansion and six gameplay waves (2026-08-04)
+
+One session implemented the approved slice of the 50-improvement plan, with no
+agents, every wave verified by the full suite before the next began. Totals at
+the end: 1,402 tests green across five test suites (shared 47, game-sim 203, map-data 8, server 38, client 1,106), typecheck clean, client build
+green, portals bundle republished.
+
+**The room expansion (items 1-12).** The shop has a second storey. A wall-hung
+gallery runs at 2.42 m in five legs (west split around the longcase clock's
+hood, south to the drawer cabinet, a north-east run over the door and an east
+run over the workshop), reached by three rolling library ladders, a three-stage
+climb up the clock wall (bookcase top, wall shelf at 1.7, deck), the drawer
+cabinet top, and the workshop rack. The ceiling beams dropped to 3.13 and are
+walkable: they are the only bridges between the west and east galleries. The
+display cabinets grew a summit board at 2.0 with a mantle from their third
+shelf. The Curio Annex, a folding-screen salon alcove with its own chaise,
+mannequin, hatboxes, candle practical, and drape, fills the reading nook's
+south-east reach. ~55 new placements (gallery stock, drapes hung from the
+beams, beam signs, floor cover including a second longcase) and a wide
+inspectable flip took accusable objects from 104 to 182; the §10.2 registry
+band was raised to 70-190 by user override. Grapple latches were authored for
+every beam, deck rail, pendant, and sign. Three new mimic spawns start players
+on the gallery and a cabinet summit. The bot Inspector's shortlist became
+census-adaptive (TARGET_SHORTLIST_COUNT) so the density did not drown its
+hunts.
+
+**Sim beats (14-16, 18-21).** Bait streak: consecutive watched taunts build a
+scored streak (private taunt_streak events, streak bonus in scoring). Close
+pass jackpot: a third pass with the same seeker pays the hider once per
+seeker. Midpoint hunt hint: each seeker privately learns how many live hiders
+they brushed past. Warrant restock: a case on the south gallery refills one
+warrant per seeker in the hunt's second half, gated by the spatial seam
+(canClaimRestock through both bridges), claimed by standing at it. Lobby
+settings gained the warrants-bonus control; the results screen gained the
+personal hunt ledger (shots, exposures, accuracy, wasted warrants by zone) and
+the rematch reshuffle note. Snapshot bumped to v4 for the new state.
+
+**Movement (23, 30).** The upward coyote: a jump cresting just short of a lip
+still catches it within a third of launch speed of falling. Caught hiders get
+a drivable spectator orbit (WASD pans the pivot, wheel zooms, bounded to the
+shell). 26/27 were verified already present (landing scale, forward+Space
+vaulting).
+
+**Audio (38-42).** Quarter-hour strikes on the authority clock (a masked creep
+window), proximity-scaled nearness bed for unseen hiders, annex rug footsteps
+and an annex candle emitter, grapple foley chain from the shop's mechanical
+vocabulary, and a verticality shimmer the score adds above 1.8 m. 37 (distinct
+zone beds) was already live.
+
+**Animation (43-47).** Inspector idle vocabulary (breath, watch-check dip,
+weight shift, suppressed while aiming/moving), fold-flourish servo settle on
+lock, grapple anticipation coil, the taunt button now cycles all five authored
+gestures (one was ever sent before), and the room's flames flicker (candle and
+task-light practicals wander a few percent).
+
+**Imagery and UI (48, 50 + redesign).** The moon drifts azimuth with each
+phase clock so the window shadows creep; 160 dust motes drift in the moonbeam.
+The shared plate/typography tokens gained the richness pass: layered lacquer
+grain and candle bloom, double-line brass plaque edges, letterpress headlines,
+glowing figures, machined button caps - every panel inherits it.
+
+**Deferred by user cut:** 13, 17, 24, 25, 28, 29, 31-36, 49. Item 22 resolved
+by striking wall-stick from the overrides (never existed in code; #32 closed
+won't-do). Item 20's core (role rotation on rematch) already existed in
+assignInspectors and is now stated on the results screen.
+
 ## Matchmaking is live in the real two-player Portals editor (2026-08-02)
 
 The full redesign and gameplay pass shipped through GitHub sync at `cc0f140`,

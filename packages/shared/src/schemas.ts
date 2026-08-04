@@ -531,6 +531,7 @@ export const MatchCommandSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({ type: z.literal("vote_rematch"), yes: z.boolean() }),
   z.strictObject({ type: z.literal("taunt"), tauntId: TauntIdSchema }),
+  z.strictObject({ type: z.literal("claim_restock") }),
 ]);
 
 export type MatchCommandPayload = z.infer<typeof MatchCommandSchema>;
@@ -748,6 +749,12 @@ export const SimEventSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     ...eventBase,
+    type: z.literal("warrant_restock"),
+    inspectorPublicId: id,
+    warrantsRemaining: count,
+  }),
+  z.strictObject({
+    ...eventBase,
     type: z.literal("result_vote_cast"),
     voterPublicId: id,
     category: ResultVoteCategorySchema,
@@ -805,6 +812,21 @@ export const PrivateSimEventSchema = z.discriminatedUnion("type", [
     /** 0 unobserved, 1 in the Inspector's cone, 2 held at close range. */
     level: z.union([z.literal(0), z.literal(1), z.literal(2)]),
   }),
+  z.strictObject({
+    ...eventBase,
+    type: z.literal("hunt_hint"),
+    closePasses: count,
+  }),
+  z.strictObject({
+    ...eventBase,
+    type: z.literal("close_pass_jackpot"),
+    inspectorPublicId: id,
+  }),
+  z.strictObject({
+    ...eventBase,
+    type: z.literal("taunt_streak"),
+    streak: count,
+  }),
 ]);
 
 export type PrivateSimEventPayload = z.infer<typeof PrivateSimEventSchema>;
@@ -847,6 +869,7 @@ const SnapshotStatsSchema = z.strictObject({
   /** Accumulated line-of-sight milliseconds, and taunts counted while watched. */
   los: z.number().min(0),
   ot: counter,
+  cj: counter,
 });
 
 const SnapshotPlayerSchema = z.strictObject({
@@ -871,6 +894,10 @@ const SnapshotPlayerSchema = z.strictObject({
   st: SnapshotStatsSchema,
   /** Taunt cooldown clock and forge-command rate clock. */
   tt: simTime.nullable(),
+  /** Bait streak: current run, best run, and the seeker's restock flag. */
+  ts: counter,
+  tb: counter,
+  rk: z.boolean(),
   fu: simTime.nullable(),
   /** Last watched level delivered, and when, for the change throttle. */
   wl: z.union([z.literal(0), z.literal(1), z.literal(2)]),
@@ -937,6 +964,12 @@ export const MatchSnapshotSchema = z.strictObject({
   pes: z.array(z.tuple([id, id, simTime])).max(LIMITS.maxCount),
   le: nestedClocks.max(LIMITS.maxPlayersPerMatch),
   lc: nestedClocks.max(LIMITS.maxPlayersPerMatch),
+  /** Close-pass pair counts, paid jackpot pairs, and the hint round. */
+  cpn: z
+    .array(z.tuple([id, z.array(z.tuple([id, counter])).max(LIMITS.maxCount)]))
+    .max(LIMITS.maxPlayersPerMatch),
+  cpj: z.array(z.string().max(LIMITS.idLength * 2 + 1)).max(LIMITS.maxCount),
+  hh: z.number().int(),
   rv: z
     .array(z.tuple([id, z.array(z.tuple([ResultVoteCategorySchema, id])).max(LIMITS.maxCount)]))
     .max(LIMITS.maxPlayersPerMatch),

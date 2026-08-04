@@ -19,6 +19,7 @@ import { containsXZ, type AABB, type Vec3Like, type WalkableSurface } from "./na
  */
 
 export type SpatialRejectionReason =
+  | "not_at_restock"
   | "inspector_position_unknown"
   | "target_bounds_unknown"
   | "out_of_range"
@@ -38,6 +39,8 @@ export interface SpatialValidatorDeps {
   readonly accusationDistance: number;
   /** `inspectorFocusDistance` from the match settings. */
   readonly focusDistance: number;
+  /** Where a seeker may claim the warrant restock, if this map offers one. */
+  readonly restockVolume?: AABB;
   /**
    * Latest authoritative eye position of an Inspector, or null when the
    * authority has never heard from them. Unknown is refused, never assumed.
@@ -138,6 +141,27 @@ export class SpatialValidatorImpl implements SpatialValidator {
       ) {
         return refuse("inside_blocked_geometry");
       }
+    }
+    return OK;
+  }
+
+  /**
+   * Whether this seeker is standing at the warrant restock case right now
+   * (2026-08-04 expansion). The eye is the same authoritative position every
+   * other gate reads, and the volume is grown by nothing: the case is on a
+   * gallery deck and the claim is meant to cost the walk up to it.
+   */
+  canClaimRestock(inspectorId: string): SpatialDecision {
+    const volume = this.deps.restockVolume;
+    if (volume === undefined) return refuse("not_at_restock");
+    const eye = this.deps.inspectorEye(inspectorId);
+    if (eye === null) return refuse("inspector_position_unknown");
+    if (
+      eye.x < volume.min.x || eye.x > volume.max.x ||
+      eye.y < volume.min.y || eye.y > volume.max.y + 1 ||
+      eye.z < volume.min.z || eye.z > volume.max.z
+    ) {
+      return refuse("not_at_restock");
     }
     return OK;
   }

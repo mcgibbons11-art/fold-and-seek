@@ -260,6 +260,15 @@ export class LocomotionRig {
   /** Positive folds the knees under a landing, negative drives them straight. */
   private readonly squash = new Blend(ANGLE_EPSILON_RAD);
 
+  /**
+   * The fold-flourish (2026-08-04): the body tucks and settles as its pose
+   * locks, the same spring the landing squash rides, pushed as though from a
+   * modest hop. A gesture, not a state - it decays on its own.
+   */
+  settle(): void {
+    this.squash.push(this.landingImpulse(HOP_LANDING_SPEED * 0.8));
+  }
+
   /** Ground covered since the last footfall, which is what places the step. */
   private stridePhase = 0;
   private wasAirborne = false;

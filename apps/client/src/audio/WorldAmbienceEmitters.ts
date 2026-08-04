@@ -2,17 +2,24 @@ import { WORLD_SCALE } from "../inspector/navData";
 import type { AudioPoint, SpatialAudioPlayer, SpatialVoice } from "./SpatialAudioPlayer";
 
 export interface WorldAmbienceLandmark {
-  readonly id: "amb_clock_ticks" | "amb_glass_hum" | "amb_counter_paper" | "amb_workshop_creak";
+  readonly id:
+    | "amb_clock_ticks"
+    | "amb_glass_hum"
+    | "amb_counter_paper"
+    | "amb_workshop_creak"
+    | "amb_candle_flicker";
   readonly position: AudioPoint;
   readonly gain: number;
 }
 
-/** Four readable anchors, deliberately fewer than the seven zone beds. */
+/** Five readable anchors, deliberately fewer than the seven zone beds. */
 export const WORLD_AMBIENCE_LANDMARKS: readonly WorldAmbienceLandmark[] = [
   { id: "amb_clock_ticks", position: { x: -7.1, y: 1.55, z: -0.5 }, gain: 0.2 },
   { id: "amb_glass_hum", position: { x: 0.1, y: 1.15, z: -0.1 }, gain: 0.1 },
   { id: "amb_counter_paper", position: { x: 2.7, y: 1.05, z: 4.55 }, gain: 0.11 },
   { id: "amb_workshop_creak", position: { x: 6.45, y: 1.25, z: -1.5 }, gain: 0.15 },
+  // The Curio Annex candle (2026-08-04): the salon has its own small fire.
+  { id: "amb_candle_flicker", position: { x: -0.85, y: 1.1, z: 4.85 }, gain: 0.12 },
 ] as const;
 
 /**

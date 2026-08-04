@@ -203,6 +203,15 @@ export type SimEvent =
       readonly inspectorPublicId: string;
     })
   | (SimEventBase & {
+      /**
+       * A seeker refilled one warrant at the gallery restock case (2026-08-04
+       * expansion). Public: everyone hears the case snap shut.
+       */
+      readonly type: "warrant_restock";
+      readonly inspectorPublicId: string;
+      readonly warrantsRemaining: number;
+    })
+  | (SimEventBase & {
       readonly type: "result_vote_cast";
       readonly voterPublicId: string;
       readonly category: ResultVoteCategory;
@@ -257,6 +266,28 @@ export type PrivateSimEvent =
        */
       readonly type: "watched";
       readonly level: WatchedLevel;
+    })
+  | (SimEventBase & {
+      /**
+       * Delivered to each seeker once, at the hunt's midpoint: how many live
+       * hiders they have already brushed right past. A nudge, not a radar —
+       * it names no object and no place.
+       */
+      readonly type: "hunt_hint";
+      readonly closePasses: number;
+    })
+  | (SimEventBase & {
+      /**
+       * The bravest blend: a third close pass with the same seeker. Delivered
+       * to the hider it pays, once per seeker.
+       */
+      readonly type: "close_pass_jackpot";
+      readonly inspectorPublicId: string;
+    })
+  | (SimEventBase & {
+      /** This hider's current bait streak, for their own HUD alone. */
+      readonly type: "taunt_streak";
+      readonly streak: number;
     });
 
 export type PrivateSimEventType = PrivateSimEvent["type"];

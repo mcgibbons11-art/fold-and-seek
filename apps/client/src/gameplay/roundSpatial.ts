@@ -3,7 +3,7 @@ import { DEFAULT_MATCH_SETTINGS, type MatchSettings } from "@foldseek/shared";
 
 import { SpatialValidatorImpl } from "../inspector/SpatialValidatorImpl";
 import type { AABB, Vec3Like } from "../inspector/navData";
-import { NAV_DATA } from "../world/maps/nav";
+import { NAV_DATA, WARRANT_RESTOCK_VOLUME } from "../world/maps/nav";
 import { CURIOSITY_SHOP_OBJECTS } from "../world/maps/registry";
 
 /**
@@ -60,6 +60,10 @@ export class RoundSpatialBridge implements SpatialValidator {
 
   isNearby(inspectorId: string, targetObjectId: string): SpatialDecision {
     return this.impl.isNearby(inspectorId, targetObjectId);
+  }
+
+  canClaimRestock(inspectorId: string): SpatialDecision {
+    return this.impl.canClaimRestock(inspectorId);
   }
 
   /**
@@ -156,6 +160,7 @@ export class RoundSpatialBridge implements SpatialValidator {
       forbiddenOccupancy: [NAV_DATA.securityOffice],
       accusationDistance: this.accusationDistance,
       focusDistance: this.focusDistance,
+      restockVolume: WARRANT_RESTOCK_VOLUME,
       inspectorEye: (inspectorId) => this.eyes.get(inspectorId) ?? null,
       objectBounds: (objectId) => this.boundsOf(objectId),
     });

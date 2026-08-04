@@ -121,6 +121,25 @@ const CROWN_HEIGHT = 0.062;
  */
 const HEAD_PITCH_SHARE = 0.55;
 
+// Idle vocabulary tuning (2026-08-04). Radians are small on purpose: these
+// read as life at a glance and vanish the moment the body moves or aims.
+const IDLE_BREATH_RATE = 1.7;
+const IDLE_BREATH_RAD = 0.012;
+const IDLE_FIDGET_PERIOD_S = 7.5;
+const IDLE_WATCH_DIP_RAD = 0.22;
+const IDLE_WATCH_TWIST_RAD = 0.12;
+const IDLE_SHIFT_RATE = 0.35;
+const IDLE_WEIGHT_SHIFT_RAD = 0.03;
+
+/** 0 outside the fidget window, easing to 1 through a short dip late in the period. */
+function fidgetWindow(phase: number): number {
+  const start = 0.72;
+  const end = 0.92;
+  if (phase < start || phase > end) return 0;
+  const t = (phase - start) / (end - start);
+  return Math.sin(t * Math.PI);
+}
+
 /** Lean into the aim, which is the shoulders coming round behind the gun. */
 const AIM_TORSO_PITCH_RAD = 0.1;
 const AIM_TORSO_TWIST_RAD = 0.16;
@@ -284,6 +303,9 @@ export class InspectorBody {
    * hand. `GunView.update` runs first in the frame, so the hand is already
    * where this frame's aim blend and recoil left it.
    */
+  /** Seconds the body has been at rest, driving the idle vocabulary. */
+  private idleSeconds = 0;
+
   update(dtSeconds: number, frame: InspectorBodyFrame): void {
     const sample = this.sample;
     sample.speedFraction =
@@ -324,6 +346,26 @@ export class InspectorBody {
     // Positive tips the face up, which is the way the look pitch reads too.
     this.neck.rotation.y = angles.headTwist;
     this.neck.rotation.x = -angles.headPitch + frame.pitch * HEAD_PITCH_SHARE;
+
+    // Idle vocabulary (2026-08-04): a curator standing still is not a statue.
+    // A slow breath rides the torso; every few seconds the head dips toward
+    // the gun hand - a man checking his pocket watch - and the weight shifts.
+    // All of it fades in only when the body is genuinely at rest, and aiming
+    // suppresses it: a raised gun holds still.
+    const atRest = Math.max(0, 1 - sample.speedFraction * 4) * (1 - aim);
+    if (atRest > 0 && !frame.airborne && !frame.climbing) {
+      this.idleSeconds += dtSeconds;
+      const breath = Math.sin(this.idleSeconds * IDLE_BREATH_RATE) * IDLE_BREATH_RAD;
+      this.torso.rotation.x += breath * atRest;
+      const fidgetPhase = (this.idleSeconds % IDLE_FIDGET_PERIOD_S) / IDLE_FIDGET_PERIOD_S;
+      // A short dip window late in each period: ramp in, hold, ramp out.
+      const dip = fidgetWindow(fidgetPhase);
+      this.neck.rotation.x += -IDLE_WATCH_DIP_RAD * dip * atRest;
+      this.neck.rotation.y += IDLE_WATCH_TWIST_RAD * dip * atRest;
+      this.pelvis.rotation.z += IDLE_WEIGHT_SHIFT_RAD * Math.sin(this.idleSeconds * IDLE_SHIFT_RATE) * atRest;
+    } else {
+      this.idleSeconds = 0;
+    }
 
     // A coat trails the walk and rolls with the hips. Both are read off the
     // gait rather than timed separately, so the hem cannot drift out of phase

@@ -111,6 +111,8 @@ export interface SelfView {
   readonly tauntCooldownMs: number;
   /** How hard an Inspector is looking at this hider: 0 none, 1 cone, 2 close. */
   readonly watchedLevel: WatchedLevel;
+  /** This hider's live bait streak: consecutive watched taunts (2026-08-04). */
+  readonly tauntStreak: number;
 }
 
 export interface RosterPlayerView {
@@ -162,8 +164,9 @@ export interface AccusationFeedEntry {
   readonly warrantsRemaining: number;
 }
 
-/** The two things a hider earns by being looked at and surviving it (§6.2). */
-export type DeceptionEventKind = "direct_look_escape" | "close_pass";
+/** What a hider earns by being looked at and surviving it (§6.2), plus the
+ * third-pass jackpot the 2026-08-04 expansion added. */
+export type DeceptionEventKind = "direct_look_escape" | "close_pass" | "close_pass_jackpot";
 
 export interface DeceptionEventView {
   /** Event sequence number, stable across republishes, usable as a React key. */
@@ -289,11 +292,38 @@ export interface ResultsView {
   readonly voteTallies: VoteTallies;
 }
 
+/**
+ * The viewer's own hunt, tallied for the results screen (2026-08-04): every
+ * accusation the authority resolved for them, and where the wasted warrants
+ * went. Null for everyone who never held the gun this round.
+ */
+export interface HuntLedgerView {
+  readonly shots: number;
+  readonly correct: number;
+  readonly wrong: number;
+  /** Wrong shots by the zone the furniture stood in, most first. */
+  readonly wrongByZone: readonly { readonly label: string; readonly count: number }[];
+}
+
 export interface RematchView {
   readonly yesVotes: number;
   readonly totalVoters: number;
   /** This player's own vote, or null when they have not voted. */
   readonly myVote: boolean | null;
+}
+
+/**
+ * A transient HUD notice that is not a refusal: the midpoint hunt hint, a
+ * warrant restock, a jackpot. Same lifetime mechanics as a rejection so the
+ * stamp stack speaks in one voice.
+ */
+export interface NoticeView {
+  readonly id: number;
+  readonly kind: "hunt_hint" | "warrant_restock" | "close_pass_jackpot";
+  readonly title: string;
+  readonly body: string | null;
+  /** Local monotonic deadline after which the HUD must stop showing it. */
+  readonly expiresAtLocalMs: number;
 }
 
 export interface RejectionView {
@@ -339,9 +369,13 @@ export interface RoundViewState {
   readonly deception: DeceptionView;
   readonly reveal: RevealView;
   readonly results: ResultsView | null;
+  /** This player's own hunt ledger, or null if they never held the gun. */
+  readonly myHuntLedger: HuntLedgerView | null;
   readonly rematch: RematchView;
   /** Most recent first. Refusals of this player's own commands only. */
   readonly rejections: readonly RejectionView[];
+  /** Most recent first. Transient beats: hint, restock, jackpot. */
+  readonly notices: readonly NoticeView[];
   readonly actions: ActionAvailability;
   readonly capabilities: RoundCapabilities;
   /** Authority clock minus this machine's clock, in milliseconds. */

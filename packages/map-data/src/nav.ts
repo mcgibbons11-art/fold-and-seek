@@ -10,11 +10,20 @@ import { WORLD_SCALE } from "./navData";
 import { focusBoundsFor } from "./objects";
 import { SHOP_PLACEMENTS, type PropPlacement } from "./placements";
 import {
+  ANNEX_SCREEN_NORTH,
+  ANNEX_SCREEN_WEST,
   CABINET_BLOCKS,
+  CEILING_BEAM_DEPTH,
+  CEILING_BEAM_HEIGHT,
+  CEILING_BEAM_TOP_Y,
+  CEILING_BEAM_ZS,
   DOOR_HEIGHT,
   DOOR_MAX_X,
   DOOR_MIN_X,
   FLOOR_PLAN,
+  GALLERY_LEGS,
+  GALLERY_THICKNESS,
+  GALLERY_TOP_Y,
   OFFICE_DOOR_MAX_Z,
   OFFICE_DOOR_MIN_Z,
   OFFICE_MIN_X,
@@ -67,8 +76,12 @@ export const MIN_LEDGE_DEPTH = 0.28;
  */
 export const MAX_MANTLE_RISE = 0.75;
 
-/** Tallest rise authored as a ladder. Above this the route needs a landing. */
-export const MAX_LADDER_RISE = 2.4;
+/**
+ * Tallest rise authored as a ladder. Above this the route needs a landing.
+ * Raised from 2.4 with the gallery expansion: the rolling library ladders run
+ * from the shop floor to the 2.42 deck in one ride.
+ */
+export const MAX_LADDER_RISE = 2.5;
 
 function aabb(
   minX: number,
@@ -205,12 +218,14 @@ const ZONE_B_LEDGES: readonly WalkableSurface[] = [
   ...CLOCK_WALL_SHELF_Z.map(([id, lowZ]) =>
     ledge(`clockwall_lowshelf_${id}`, 1.12, -7.27, lowZ - 0.7, -6.93, lowZ + 0.7, 2),
   ),
+  // The wall shelves above the low bookcases, standable since the 2026-08-04
+  // expansion: the shelves hang at 1.7 and are the middle stage of the west
+  // wall's three-stage climb (bookcase top, wall shelf, gallery deck). The
+  // plank is 0.26 deep at the wall, so its box widens east to the ledge floor.
+  ...CLOCK_WALL_SHELF_Z.map(([id, , wallZ]) =>
+    ledge(`clockwall_wallshelf_${id}`, 1.7175, -7.42, wallZ - 0.55, -7.14, wallZ + 0.55, 3),
+  ),
 ];
-
-/**
- * The wall shelves above the low bookcases remain decorative. They are hung
- * high enough to leave a full player body above the climbable case tops.
- */
 
 /** Zone C, the reading nook. Footstool to armchair to side table. */
 const ZONE_C_LEDGES: readonly WalkableSurface[] = [
@@ -298,6 +313,60 @@ const ZONE_G_LEDGES: readonly WalkableSurface[] = [
   ledge("office_desk_top", 0.78, 6.57, 2.97, 7.23, 4.43, 2),
 ];
 
+// ---------------------------------------------------------------------------
+// The gallery, the beams, the cabinet tops and the Curio Annex (2026-08-04)
+// ---------------------------------------------------------------------------
+
+/** The five deck legs of the wall-hung gallery, all at one height. */
+const GALLERY_SURFACES: readonly WalkableSurface[] = GALLERY_LEGS.map((leg) =>
+  ledge(leg.id, GALLERY_TOP_Y, leg.minX, leg.minZ, leg.maxX, leg.maxZ, 5),
+);
+
+/**
+ * The ceiling beams, walkable since the expansion lowered them to standing
+ * headroom under the ceiling slab. The visual beam is 0.22 deep; the box is
+ * widened to `MIN_LEDGE_DEPTH` exactly as the shallow shelves are. The z=3.6
+ * beam stops at the Security Office boundary because the office airspace is
+ * forbidden to Mimics at every height (§10.4), and a route that half the
+ * players are refused mid-crossing would read as an invisible wall.
+ */
+const BEAM_SURFACES: readonly WalkableSurface[] = CEILING_BEAM_ZS.map((beamZ, index) =>
+  ledge(
+    `beam_${String(index + 1).padStart(2, "0")}`,
+    CEILING_BEAM_TOP_Y,
+    SHOP_MIN_X + WALL_THICKNESS,
+    beamZ - MIN_LEDGE_DEPTH / 2,
+    beamZ > OFFICE_MIN_Z ? OFFICE_MIN_X - 0.1 : SHOP_MAX_X - WALL_THICKNESS,
+    beamZ + MIN_LEDGE_DEPTH / 2,
+    6,
+  ),
+);
+
+/**
+ * The open display bookcases now carry a top board (added to the builder with
+ * the expansion), which makes each cabinet a summit above its three shelves.
+ * The `maze_top_*` dressing props stand on the same 1.95 face.
+ */
+const CABINET_TOP_SURFACES: readonly WalkableSurface[] = CABINET_BLOCKS.map((block, index) => {
+  const centerZ = (block.min.z + block.max.z) * 0.5;
+  return ledge(
+    `cabinet_${index + 1}_top`,
+    2.0,
+    block.min.x + 0.08,
+    centerZ - 0.24,
+    block.max.x - 0.08,
+    centerZ + 0.24,
+    4,
+  );
+});
+
+/** The Curio Annex salon: chaise, footstool and side table, mirroring the nook. */
+const ANNEX_SURFACES: readonly WalkableSurface[] = [
+  ledge("annex_footstool", 0.35, -1.39, 3.76, -0.91, 4.14, 1),
+  ledge("annex_chaise_seat", 0.61, -2.11, 4.45, -1.39, 5.15, 1),
+  pad("annex_sidetable_top", 0.67, -0.85, 4.85, 0.22, 1),
+];
+
 export const WALKABLE_SURFACES: readonly WalkableSurface[] = [
   ...FLOOR_SURFACES,
   OFFICE_FLOOR,
@@ -310,6 +379,10 @@ export const WALKABLE_SURFACES: readonly WalkableSurface[] = [
   ...ZONE_E_LEDGES,
   ...ZONE_F_LEDGES,
   ...ZONE_G_LEDGES,
+  ...GALLERY_SURFACES,
+  ...BEAM_SURFACES,
+  ...CABINET_TOP_SURFACES,
+  ...ANNEX_SURFACES,
 ];
 
 // ---------------------------------------------------------------------------
@@ -359,10 +432,14 @@ const FURNITURE_BLOCKERS: readonly AABB[] = [
   aabb(0.69, 0.528, -4.2, 1.11, 0.95, -4.16),
 
   // B — three open bookcases, the wall shelves above them, the longcase clock.
+  // The wall shelves hang at 1.7 since the expansion and their blocker tops out
+  // at the standable plank face, exactly like every other supporting blocker.
   ...CLOCK_WALL_SHELF_Z.flatMap(([, lowZ, wallZ]) => [
     aabb(SHOP_MIN_X, 0, lowZ - 0.7, -7.16, 1.12, lowZ + 0.7),
-    aabb(SHOP_MIN_X, 1.63, wallZ - 0.55, -7.15, 1.668, wallZ + 0.55),
+    aabb(SHOP_MIN_X, 1.68, wallZ - 0.55, -7.15, 1.7175, wallZ + 0.55),
   ]),
+  // B — the second longcase clock, freestanding cover on the open floor.
+  aabb(-5.28, 0, -0.72, -4.72, 2.35, -0.28),
   aabb(-7.4, 0, 1.9, -6.85, 2.35, 2.15),
   aabb(-5.74, 0.48, 1.76, -5.46, 0.527, 2.04),
 
@@ -500,14 +577,96 @@ const CABINET_GRAPPLE_TARGETS: readonly AABB[] = CABINET_BLOCKS.flatMap((block) 
   return [...posts, ...stock];
 });
 
+/** Pendant lamps: every hanging fixture is a latch (2026-08-04 expansion). */
+const PENDANT_GRAPPLE_TARGETS: readonly AABB[] = [
+  [-6.0, 3.0, -0.6],
+  [0, 3.0, -2.4],
+  [0, 3.0, 0.6],
+  [2.1, 3.0, 3.9],
+  [5.5, 3.0, -3.0],
+].map(([x, y, z]) => aabb((x ?? 0) - 0.24, (y ?? 0) - 0.2, (z ?? 0) - 0.24, (x ?? 0) + 0.24, (y ?? 0) + 0.05, (z ?? 0) + 0.24));
+
+/**
+ * Expansion latches: the walkable beams, a rail band along every gallery deck
+ * edge, the hanging signs, and the second longcase clock's hood. All of these
+ * are visible fixtures — the authoring rule is that a latch is something a
+ * player can point at, never bare air.
+ */
+const EXPANSION_GRAPPLE_TARGETS: readonly AABB[] = [
+  ...CEILING_BEAM_ZS.map((beamZ) =>
+    aabb(
+      SHOP_MIN_X + WALL_THICKNESS,
+      CEILING_BEAM_TOP_Y - CEILING_BEAM_HEIGHT,
+      beamZ - CEILING_BEAM_DEPTH / 2,
+      beamZ > OFFICE_MIN_Z ? OFFICE_MIN_X - 0.1 : SHOP_MAX_X - WALL_THICKNESS,
+      CEILING_BEAM_TOP_Y,
+      beamZ + CEILING_BEAM_DEPTH / 2,
+    ),
+  ),
+  ...GALLERY_LEGS.map((leg) => {
+    // The rail runs along the deck's open edge: the inner x face for the wall
+    // legs, the inner z face for the north and south runs.
+    if (leg.id === "gallery_south") {
+      return aabb(leg.minX, GALLERY_TOP_Y, leg.minZ - 0.03, leg.maxX, GALLERY_TOP_Y + 0.3, leg.minZ + 0.03);
+    }
+    if (leg.id === "gallery_north_east") {
+      return aabb(leg.minX, GALLERY_TOP_Y, leg.maxZ - 0.03, leg.maxX, GALLERY_TOP_Y + 0.3, leg.maxZ + 0.03);
+    }
+    if (leg.id === "gallery_east") {
+      return aabb(leg.minX - 0.03, GALLERY_TOP_Y, leg.minZ, leg.minX + 0.03, GALLERY_TOP_Y + 0.3, leg.maxZ);
+    }
+    return aabb(leg.maxX - 0.03, GALLERY_TOP_Y, leg.minZ, leg.maxX + 0.03, GALLERY_TOP_Y + 0.3, leg.maxZ);
+  }),
+  // Hanging signs: the counter's and the two hung from the beams.
+  aabb(1.75, 2.55, 3.14, 2.45, 3.2, 3.26),
+  aabb(-3.35, 2.5, -1.26, -2.65, 3.15, -1.14),
+  aabb(1.65, 2.5, 1.14, 2.35, 3.15, 1.26),
+  // The second longcase clock's hood, rising through the west gallery's gap.
+  aabb(-5.3, 2.3, -0.75, -4.7, 2.56, -0.25),
+];
+
 export const GRAPPLE_TARGETS: readonly AABB[] = [
   ...BOOK_GRAPPLE_TARGETS,
   ...CABINET_GRAPPLE_TARGETS,
+  ...PENDANT_GRAPPLE_TARGETS,
+  ...EXPANSION_GRAPPLE_TARGETS,
+];
+
+/**
+ * Blockers the 2026-08-04 expansion added: the gallery deck slabs (each topping
+ * out at the standable face), the cabinet top boards, the Curio Annex screens
+ * and salon furniture, and the three rolling library ladders. The ceiling
+ * beams are deliberately NOT here — their walkable slab is authority enough
+ * for standing on them, and a beam blocker's footprint would cross the ring
+ * aisles the navigation contract keeps clear.
+ */
+const EXPANSION_BLOCKERS: readonly AABB[] = [
+  // Gallery deck slabs.
+  ...GALLERY_LEGS.map((leg) =>
+    aabb(leg.minX, GALLERY_TOP_Y - GALLERY_THICKNESS, leg.minZ, leg.maxX, GALLERY_TOP_Y, leg.maxZ),
+  ),
+  // Cabinet top boards.
+  ...CABINET_BLOCKS.map((block) => {
+    const centerZ = (block.min.z + block.max.z) * 0.5;
+    return aabb(block.min.x + 0.05, 1.97, centerZ - 0.26, block.max.x - 0.05, 2.0, centerZ + 0.26);
+  }),
+  // The Curio Annex screens and its salon furniture.
+  ANNEX_SCREEN_WEST,
+  ANNEX_SCREEN_NORTH,
+  aabb(-2.25, 0, 4.3, -1.25, 0.61, 5.3),
+  aabb(-2.25, 0.61, 4.94, -1.25, 1.32, 5.3),
+  aabb(-1.42, 0, 3.73, -0.88, 0.35, 4.17),
+  aabb(-1.19, 0, 4.51, -0.51, 0.67, 5.19),
+  // The three rolling library ladders (clock wall, nook, workshop east wall).
+  aabb(-6.78, 0, 0.2, -6.7, 2.4, 0.7),
+  aabb(-3.15, 0, 4.56, -2.65, 2.4, 4.64),
+  aabb(7.02, 0, 0.35, 7.1, 2.4, 0.85),
 ];
 
 export const NAV_BLOCKERS: readonly AABB[] = [
   ...SHELL_BLOCKERS,
   ...FURNITURE_BLOCKERS,
+  ...EXPANSION_BLOCKERS,
   ...CLUTTER_BLOCKERS,
 ];
 
@@ -704,6 +863,56 @@ export const CLIMB_LINKS: readonly ClimbLink[] = [
   // G — the office stool onto the monitor desk.
   mantle("floor_office", "office_stool_seat", [6.1, 0, 3.36], [6.1, 0.587, 3.7]),
   mantle("office_stool_seat", "office_desk_top", [6.22, 0.587, 3.7], [6.7, 0.78, 3.7]),
+
+  // -------------------------------------------------------------------------
+  // The gallery routes (2026-08-04 expansion)
+  // -------------------------------------------------------------------------
+
+  // B — the west wall's three-stage climb: bookcase top, wall shelf, deck.
+  mantle("clockwall_lowshelf_01", "clockwall_wallshelf_01", [-7.1, 1.12, -2.55], [-7.17, 1.7175, -2.6]),
+  mantle("clockwall_lowshelf_02", "clockwall_wallshelf_02", [-7.1, 1.12, -0.45], [-7.17, 1.7175, -0.4]),
+  mantle("clockwall_lowshelf_03", "clockwall_wallshelf_03", [-7.1, 1.12, 1.45], [-7.17, 1.7175, 1.5]),
+  mantle("clockwall_wallshelf_02", "gallery_west_a", [-7.17, 1.7175, -0.4], [-7.05, 2.42, -0.4]),
+  mantle("clockwall_wallshelf_03", "gallery_west_a", [-7.17, 1.7175, 1.5], [-7.05, 2.42, 1.5]),
+  // B — the rolling library ladder, the express route from the floor.
+  ladder("floor_01", "gallery_west_a", [-6.52, 0, 0.45], [-7.05, 2.42, 0.45]),
+  // The clock gap: the longcase's hood rises through the gallery here, and the
+  // walkway leaps it.
+  mantle("gallery_west_a", "gallery_west_b", [-7.08, 2.42, 1.8], [-7.08, 2.42, 2.25]),
+
+  // C — the nook ladder up to the south deck, and the Curio Annex salon climb.
+  ladder("floor_02", "gallery_south", [-2.9, 0, 4.38], [-2.9, 2.42, 5.1]),
+  mantle("floor_02", "annex_footstool", [-0.72, 0, 3.9], [-1.15, 0.35, 3.95]),
+  mantle("annex_footstool", "annex_chaise_seat", [-1.0, 0.35, 3.95], [-1.75, 0.61, 4.7]),
+  mantle("annex_chaise_seat", "annex_sidetable_top", [-1.5, 0.61, 4.6], [-0.85, 0.67, 4.85]),
+
+  // D — the drawer cabinet's top continues the high route east of the deck.
+  mantle("gallery_south", "back_cabinet_top", [0.3, 2.42, 5.1], [0.55, 2.1, 5.15]),
+
+  // E — each display bookcase summit, up from its own third shelf.
+  ...CABINET_BLOCKS.map((block, index) => {
+    const centerZ = (block.min.z + block.max.z) * 0.5;
+    const laneX = block.min.x + 0.16;
+    return mantle(
+      `cabinet_${index + 1}_shelf_3`,
+      `cabinet_${index + 1}_top`,
+      [laneX, CABINET_SHELF_TOPS[2], centerZ - 0.1],
+      [laneX, 2.0, centerZ],
+    );
+  }),
+
+  // F — rack summit onto the north-east and east decks, and the second ladder.
+  mantle("gallery_north_east", "shelving_board_4", [7.05, 2.42, -4.9], [7.05, 2.0, -4.5]),
+  mantle("shelving_board_4", "gallery_east", [7.05, 2.0, -2.75], [7.09, 2.42, -2.5]),
+  ladder("floor_04", "gallery_east", [6.85, 0, 0.6], [7.09, 2.42, 0.6]),
+
+  // The beams: the only bridges between the west and east galleries.
+  mantle("gallery_west_a", "beam_01", [-7.05, 2.42, -3.6], [-7.1, 3.13, -3.6]),
+  mantle("gallery_west_a", "beam_02", [-7.05, 2.42, -1.2], [-7.1, 3.13, -1.2]),
+  mantle("gallery_west_a", "beam_03", [-7.05, 2.42, 1.2], [-7.1, 3.13, 1.2]),
+  mantle("gallery_west_b", "beam_04", [-7.05, 2.42, 3.6], [-7.1, 3.13, 3.6]),
+  mantle("gallery_east", "beam_02", [7.05, 2.42, -1.2], [7.1, 3.13, -1.2]),
+  mantle("gallery_east", "beam_03", [7.05, 2.42, 1.2], [7.1, 3.13, 1.2]),
 ];
 
 // ---------------------------------------------------------------------------
@@ -735,6 +944,11 @@ const MIMIC_SPAWNS: readonly SpawnPose[] = [
   pose(-4.6, 0.34, -4.9, SOUTH),
   pose(1.9, 1.05, 4.0, NORTH),
   pose(6.8, 0.92, -0.7, WEST),
+  // Gallery starts (2026-08-04 expansion): the first thing these players see
+  // is that the room now has a second storey.
+  pose(-7.1, 2.42, -2.6, EAST),
+  pose(0.0, 2.42, 5.1, SOUTH),
+  pose(1.9, 2.0, -1.4, WEST),
 ];
 
 /** Centre of the office door gap in the x=4.8 partition (blockers above). */
@@ -787,6 +1001,14 @@ export const SHOP_GROUND_PLANE: AABB = aabb(
   0,
   SHOP_MAX_Z,
 );
+
+/**
+ * Where a seeker stands to refill one warrant (2026-08-04 expansion): at the
+ * brass-bound case on the south gallery deck. The volume is generous around
+ * the visible prop (`gal_restock_case_01`) so standing beside it counts, and
+ * it sits on the gallery so the claim always costs the seeker a climb.
+ */
+export const WARRANT_RESTOCK_VOLUME: AABB = aabb(-2.2, GALLERY_TOP_Y, 4.9, -1.0, GALLERY_TOP_Y + 0.6, 5.32);
 
 export const NAV_DATA: NavData = {
   floors: WALKABLE_SURFACES,

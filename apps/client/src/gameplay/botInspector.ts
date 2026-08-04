@@ -67,11 +67,19 @@ const SUSPECT_MIN_DIAGONAL_M = PLAYER_HEIGHT_M * 0.6;
 const SUSPECT_MAX_DIAGONAL_M = PLAYER_HEIGHT_M * 2.4;
 
 /**
- * Share of plausible objects the bot decides to walk over and check. It is set
- * so a hunt spends most of its warrants without emptying them mechanically: a
- * round has a handful of honest mistakes in it, not a sweep of every hat box.
+ * How many plausible objects the bot decides to walk over and check in one
+ * hunt, in expectation. It is a count rather than a share because the room's
+ * accusable set grows with every density pass (the 2026-08-04 expansion nearly
+ * doubled it), and a fixed share of a bigger room is a bot that spends the
+ * whole hunt prodding hat boxes instead of patrolling: the tuned behaviour —
+ * most warrants spent, a handful of honest mistakes, the restless hider still
+ * usually noticed — is about how many detours a hunt contains, not about what
+ * fraction of the stock gets one.
  */
-const INSPECTION_RATE = 0.28;
+const TARGET_SHORTLIST_COUNT = 15;
+
+/** Never shortlist more than this share, however small the room. */
+const MAX_INSPECTION_RATE = 0.5;
 
 /** Travel that counts as "that has moved", rather than as measurement noise. */
 const MOVE_NOTICE_M = 0.015;
@@ -423,6 +431,8 @@ export class BotInspector {
   private readonly route: readonly Vec3Like[];
   private readonly grid: FloorGrid;
   private readonly hunters = new Map<string, Hunter>();
+  /** Resolved shortlist rate for this room's census. See `inspectionRate`. */
+  private cachedRate: number | null = null;
 
   constructor(deps: BotInspectorDeps, seed: number) {
     this.deps = deps;
@@ -585,7 +595,28 @@ export class BotInspector {
 
     const memory = hunter.seen.get(objectId);
     if (memory?.movedAtMs != null && turn.nowMs - memory.movedAtMs < MOVE_MEMORY_MS) return true;
-    return shortlistRoll(this.seed, turn.round, objectId) < INSPECTION_RATE;
+    return shortlistRoll(this.seed, turn.round, objectId) < this.inspectionRate();
+  }
+
+  /**
+   * The shortlist rate that lands the hunt on `TARGET_SHORTLIST_COUNT`
+   * expected detours, whatever the room's census. Counted over the same
+   * merged candidate list and the same size filter `suspicious` applies, so
+   * the rate reflects exactly the population it is drawn against, and cached
+   * because the census does not change mid-round.
+   */
+  private inspectionRate(): number {
+    if (this.cachedRate !== null) return this.cachedRate;
+    let plausible = 0;
+    for (const objectId of this.deps.candidateIds()) {
+      const bounds = this.deps.objectBounds(objectId);
+      if (bounds === null) continue;
+      const diagonal = diagonalOf(bounds);
+      if (diagonal < SUSPECT_MIN_DIAGONAL_M || diagonal > SUSPECT_MAX_DIAGONAL_M) continue;
+      plausible += 1;
+    }
+    this.cachedRate = Math.min(MAX_INSPECTION_RATE, TARGET_SHORTLIST_COUNT / Math.max(plausible, 1));
+    return this.cachedRate;
   }
 
   private chooseTarget(hunter: Hunter, turn: BotInspectorTurn, visible: readonly string[]): void {

@@ -21,4 +21,5 @@ export {
   SECURITY_OFFICE,
   SPAWN_POINTS,
   WALKABLE_SURFACES,
+  WARRANT_RESTOCK_VOLUME,
 } from "@foldseek/map-data";

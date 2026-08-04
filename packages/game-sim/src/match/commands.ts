@@ -21,7 +21,8 @@ export type MatchCommand =
       readonly targetPublicObjectId: string;
     }
   | { readonly type: "vote_rematch"; readonly yes: boolean }
-  | { readonly type: "taunt"; readonly tauntId: TauntId };
+  | { readonly type: "taunt"; readonly tauntId: TauntId }
+  | { readonly type: "claim_restock" };
 
 export type MatchCommandType = MatchCommand["type"];
 
@@ -109,7 +110,9 @@ export type CommandRejectionReason =
   | "outside_play_volume"
   /** Forge updates arrived faster than maxForgeCommandHz. */
   | "rate_limited"
-  | "taunt_cooldown";
+  | "taunt_cooldown"
+  /** The warrant restock is not claimable: wrong time, spent, or out of reach. */
+  | "restock_unavailable";
 
 /**
  * Outcome of one command. It carries the same two streams as SimOutput, so the

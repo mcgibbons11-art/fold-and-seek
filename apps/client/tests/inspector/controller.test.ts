@@ -548,7 +548,10 @@ describe("CharacterController falling through the shop", () => {
   });
 
   it("rests on the arm of the armchair instead of dropping into it", () => {
-    expect(walkableTopAt(ARMCHAIR_ARM_X, ARMCHAIR_ARM_Z)).toBe(0);
+    // Nothing walkable is published between the floor and the drop height —
+    // the ceiling beam far above this column is not part of this fall.
+    const below = surfaceAt(NAV_DATA.floors, ARMCHAIR_ARM_X, ARMCHAIR_ARM_Z, 1.4);
+    expect(below?.bounds.max.y).toBe(0);
 
     const controller = drop(ARMCHAIR_ARM_X, 1.4, ARMCHAIR_ARM_Z);
 

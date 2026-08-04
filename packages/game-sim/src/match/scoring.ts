@@ -1,5 +1,8 @@
 import {
   SCORE_INSPECTOR_MAX_FOCUSED_OBJECTS,
+  SCORE_MIMIC_CLOSE_PASS_JACKPOT,
+  SCORE_MIMIC_TAUNT_STREAK_CAP,
+  SCORE_MIMIC_TAUNT_STREAK_STEP,
   SCORE_INSPECTOR_PER_CORRECT,
   SCORE_INSPECTOR_PER_FOCUSED_OBJECT,
   SCORE_INSPECTOR_PER_SECOND_REMAINING_ON_WIN,
@@ -26,6 +29,10 @@ export interface MimicScoreInput {
   readonly lineOfSightSeconds?: number;
   /** Taunts performed while an Inspector was actually watching. */
   readonly observedTaunts?: number;
+  /** Longest run of consecutive watched taunts (2026-08-04 bait streak). */
+  readonly tauntStreakBest?: number;
+  /** Third-close-pass jackpots earned, one per seeker (2026-08-04). */
+  readonly closePassJackpots?: number;
 }
 
 /** Inputs to the Inspector score formula in §6.2. */
@@ -43,6 +50,10 @@ export function scoreMimic(input: MimicScoreInput): number {
     SCORE_MIMIC_MAX_LINE_OF_SIGHT_POINTS,
   );
   const taunts = Math.min(input.observedTaunts ?? 0, SCORE_MIMIC_MAX_OBSERVED_TAUNTS);
+  const streakSteps = Math.min(
+    Math.max((input.tauntStreakBest ?? 0) - 1, 0),
+    SCORE_MIMIC_TAUNT_STREAK_CAP,
+  );
   return (
     input.survivalSeconds * SCORE_MIMIC_PER_SURVIVAL_SECOND +
     input.directLookEscapes * SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE +
@@ -50,7 +61,9 @@ export function scoreMimic(input: MimicScoreInput): number {
     (input.fullRoundSurvival ? SCORE_MIMIC_FULL_ROUND_SURVIVAL : 0) +
     input.peerStyleVotes * SCORE_MIMIC_PER_PEER_STYLE_VOTE +
     lineOfSight +
-    taunts * SCORE_MIMIC_PER_OBSERVED_TAUNT
+    taunts * SCORE_MIMIC_PER_OBSERVED_TAUNT +
+    streakSteps * SCORE_MIMIC_TAUNT_STREAK_STEP +
+    (input.closePassJackpots ?? 0) * SCORE_MIMIC_CLOSE_PASS_JACKPOT
   );
 }
 

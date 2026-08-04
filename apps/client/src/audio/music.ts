@@ -272,6 +272,8 @@ export function musicSceneForPhase(phase: MatchPhase, watchedLevel: WatchedLevel
 export class MusicEngine {
   private readonly sink: MusicSink;
   private current: MusicScene = "silent";
+  /** True while the listener stands on the gallery or the beams (2026-08-04). */
+  private elevated = false;
   private pending: MusicScene | null = null;
   private timer: ReturnType<typeof setInterval> | null = null;
   private stepIndex = 0;
@@ -299,6 +301,16 @@ export class MusicEngine {
         this.tick();
       }, TICK_MS);
     }
+  }
+
+  /**
+   * Marks the listener as up on the room's second storey (2026-08-04). The
+   * scheduler answers with a high shimmer over the ordinary material - the
+   * score's way of saying the air is thinner up here. A frame-rate caller may
+   * set it every frame; only a change matters.
+   */
+  setElevated(elevated: boolean): void {
+    this.elevated = elevated;
   }
 
   /**
@@ -406,6 +418,14 @@ export class MusicEngine {
     }
     if (scene.peaks.clock > 0 && scene.clockSteps.includes(position)) {
       this.emit("clock", CLOCK_BAND_HZ, at, 0.08, scene, scene.peaks.clock);
+    }
+    // The verticality shimmer (2026-08-04): two octaves over the arpeggio's
+    // register, sparse and quiet, only while the listener is up on the gallery
+    // or the beams. It rides the pluck voice so it stays in the collection and
+    // under the same duck as everything else.
+    if (this.elevated && scene.peaks.pluck > 0 && position % 8 === 6) {
+      const tone = TRIAD[Math.floor(index / 4) % TRIAD.length] ?? 0;
+      this.emit("pluck", degreeHz(root + 28 + tone), at, 1.6, scene, scene.peaks.pluck * 0.4);
     }
   }
 

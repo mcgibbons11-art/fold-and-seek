@@ -10,6 +10,7 @@ import {
   type ResultVoteCategory,
   type SimEvent,
   type WatchedLevel,
+  SCORE_MIMIC_CLOSE_PASS_JACKPOT,
 } from "@foldseek/game-sim";
 import { DEFAULT_MATCH_SETTINGS, MatchPhase, type PlayerRole } from "@foldseek/shared";
 
@@ -74,7 +75,17 @@ const PLAYER_VISIBLE_REJECTION_REASONS: ReadonlySet<string> = new Set([
   "out_of_range",
   "obstructed",
 ]);
-import { correctAccusationStamp, phaseLabel, wrongAccusationStamp } from "./copy";
+import { mapObject } from "../world/maps/registry";
+import { zoneById } from "../world/maps/zones";
+import {
+  correctAccusationStamp,
+  phaseLabel,
+  wrongAccusationStamp,
+  huntHintLine,
+  restockLine,
+  RESTOCK_TITLE,
+  DECEPTION_JACKPOT_LABEL,
+} from "./copy";
 import type {
   AccusationFeedEntry,
   DeceptionEventView,
@@ -89,6 +100,8 @@ import type {
   RosterPlayerView,
   SelfView,
   VoteCandidateView,
+  NoticeView,
+  HuntLedgerView,
 } from "./roundView";
 
 /**
@@ -112,7 +125,11 @@ const DEFAULT_TICK_INTERVAL_MS = 200;
 const DECEPTION_POINTS: Readonly<Record<DeceptionEventView["kind"], number>> = {
   direct_look_escape: SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE,
   close_pass: SCORE_MIMIC_PER_CLOSE_PASS,
+  close_pass_jackpot: SCORE_MIMIC_CLOSE_PASS_JACKPOT,
 };
+
+const DEFAULT_NOTICE_LIFETIME_MS = 6_500;
+const NOTICE_FEED_LIMIT = 3;
 
 const EMPTY_DECEPTION: DeceptionView = {
   recent: [],
@@ -263,6 +280,13 @@ export class RoundDirector {
    * sync, so it is held here and the sync only corrects it.
    */
   private watchedLevel: WatchedLevel = 0;
+  private tauntStreak = 0;
+  private jackpots = 0;
+  private notices: NoticeView[] = [];
+  private noticeCounter = 0;
+  private myShotsCorrect = 0;
+  private myShotsWrong = 0;
+  private readonly myWrongByZone = new Map<string, number>();
 
   private clockOffsetMs = 0;
   private hasClockSample = false;
@@ -396,6 +420,16 @@ export class RoundDirector {
           reactionId: event.reactionId ?? null,
         };
         if (event.correct) this.catchCount += 1;
+        if (event.inspectorPublicId === this.selfPublicId()) {
+          if (event.correct) {
+            this.myShotsCorrect += 1;
+          } else {
+            this.myShotsWrong += 1;
+            const zoneId = mapObject(event.targetObjectId)?.zoneId;
+            const label = zoneId === undefined ? "Somewhere in the shop" : zoneById(zoneId).label;
+            this.myWrongByZone.set(label, (this.myWrongByZone.get(label) ?? 0) + 1);
+          }
+        }
         this.accusationRecords = [record, ...this.accusationRecords].slice(
           0,
           this.accusationFeedLimit,
@@ -450,6 +484,16 @@ export class RoundDirector {
         break;
       }
 
+      case "warrant_restock": {
+        const byMe = event.inspectorPublicId === this.selfPublicId();
+        const name =
+          this.sync.publicState?.players.find(
+            (player) => player.publicPlayerId === event.inspectorPublicId,
+          )?.displayName ?? null;
+        this.pushNotice("warrant_restock", RESTOCK_TITLE, restockLine(byMe, name));
+        break;
+      }
+
       case "rematch_vote_cast":
         this.rematchYesVotes = event.yesVotes;
         this.rematchTotalVoters = event.totalVoters;
@@ -484,6 +528,31 @@ export class RoundDirector {
       case "watched":
         this.watchedLevel = event.level;
         break;
+
+      case "taunt_streak":
+        this.tauntStreak = event.streak;
+        break;
+
+      case "hunt_hint":
+        this.pushNotice("hunt_hint", "Curator's instinct", huntHintLine(event.closePasses));
+        break;
+
+      case "close_pass_jackpot": {
+        this.jackpots += 1;
+        const entry: DeceptionEventView = {
+          id: event.seq,
+          atServerMs: event.at,
+          kind: "close_pass_jackpot",
+          points: DECEPTION_POINTS.close_pass_jackpot,
+        };
+        this.deceptionEvents = [entry, ...this.deceptionEvents].slice(0, this.deceptionFeedLimit);
+        this.pushNotice(
+          "close_pass_jackpot",
+          DECEPTION_JACKPOT_LABEL,
+          `+${String(DECEPTION_POINTS.close_pass_jackpot)} for the bravest blend`,
+        );
+        break;
+      }
     }
     this.publish();
   }
@@ -545,6 +614,34 @@ export class RoundDirector {
     this.publish();
   }
 
+  /** The viewer's own hunt, or null if they never fired this round. */
+  private buildHuntLedger(): HuntLedgerView | null {
+    const shots = this.myShotsCorrect + this.myShotsWrong;
+    if (shots === 0) return null;
+    const wrongByZone = [...this.myWrongByZone.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => b.count - a.count);
+    return {
+      shots,
+      correct: this.myShotsCorrect,
+      wrong: this.myShotsWrong,
+      wrongByZone,
+    };
+  }
+
+  /** One transient beat for the stamp stack. Same expiry mechanics as a refusal. */
+  private pushNotice(kind: NoticeView["kind"], title: string, body: string | null): void {
+    this.noticeCounter += 1;
+    const view: NoticeView = {
+      id: this.noticeCounter,
+      kind,
+      title,
+      body,
+      expiresAtLocalMs: this.localNow() + DEFAULT_NOTICE_LIFETIME_MS,
+    };
+    this.notices = [view, ...this.notices].slice(0, NOTICE_FEED_LIMIT);
+  }
+
   private absorbSync(sync: MatchSync): void {
     if (sync.publicState) {
       this.sampleClock(sync.publicState.now);
@@ -597,16 +694,33 @@ export class RoundDirector {
     this.assignedRole = null;
     this.watchedLevel = 0;
     this.rejections = [];
+    this.tauntStreak = 0;
+    this.jackpots = 0;
+    this.notices = [];
+    this.myShotsCorrect = 0;
+    this.myShotsWrong = 0;
+    this.myWrongByZone.clear();
   }
 
   /** Refusal feedback is transient; it may never become permanent HUD chrome. */
   private expireRejections(): boolean {
-    if (this.rejections.length === 0) return false;
     const now = this.localNow();
-    const visible = this.rejections.filter((entry) => entry.expiresAtLocalMs > now);
-    if (visible.length === this.rejections.length) return false;
-    this.rejections = visible;
-    return true;
+    let changed = false;
+    if (this.rejections.length > 0) {
+      const visible = this.rejections.filter((entry) => entry.expiresAtLocalMs > now);
+      if (visible.length !== this.rejections.length) {
+        this.rejections = visible;
+        changed = true;
+      }
+    }
+    if (this.notices.length > 0) {
+      const visible = this.notices.filter((entry) => entry.expiresAtLocalMs > now);
+      if (visible.length !== this.notices.length) {
+        this.notices = visible;
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   // ------------------------------------------------------------- projection
@@ -688,7 +802,8 @@ export class RoundDirector {
       deception:
         this.deceptionEvents.length === 0 &&
         this.directLookEscapes === 0 &&
-        this.closePasses === 0
+        this.closePasses === 0 &&
+        this.jackpots === 0
           ? EMPTY_DECEPTION
           : {
               recent: this.deceptionEvents,
@@ -696,7 +811,8 @@ export class RoundDirector {
               closePasses: this.closePasses,
               points:
                 this.directLookEscapes * SCORE_MIMIC_PER_DIRECT_LOOK_ESCAPE +
-                this.closePasses * SCORE_MIMIC_PER_CLOSE_PASS,
+                this.closePasses * SCORE_MIMIC_PER_CLOSE_PASS +
+                this.jackpots * SCORE_MIMIC_CLOSE_PASS_JACKPOT,
             },
       reveal,
       results: this.buildResults(selfPublicId, roster, voteCandidates),
@@ -726,6 +842,8 @@ export class RoundDirector {
         tauntSupported: this.tauntSupported,
       }),
       capabilities: { taunt: this.tauntSupported },
+      notices: this.notices,
+      myHuntLedger: this.buildHuntLedger(),
       clockOffsetMs: this.clockOffsetMs,
     };
   }
@@ -810,6 +928,7 @@ export class RoundDirector {
       tauntCooldownMs:
         tauntReadyAtMs === null ? 0 : Math.max(0, tauntReadyAtMs - serverNowMs),
       watchedLevel: this.watchedLevel,
+      tauntStreak: this.tauntStreak,
     };
   }
 

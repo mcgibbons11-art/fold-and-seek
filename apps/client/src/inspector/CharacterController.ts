@@ -148,6 +148,15 @@ export const JUMP_FALL_GRAVITY_SCALE = 1.15;
  */
 export const COYOTE_SECONDS = 0.08;
 export const JUMP_BUFFER_SECONDS = 0.1;
+/**
+ * How fast the body may already be falling and still catch a lip it almost
+ * reached (2026-08-04, the upward coyote). A jump that crests just short of a
+ * shelf used to become a slide down its face; within this window the held
+ * forward + Space still turns into the climb the player was asking for. A
+ * third of the launch speed keeps the grab at the top of the arc - a body in
+ * free fall gets no such favour.
+ */
+export const LEDGE_GRAB_FALL_WINDOW_FRACTION = 1 / 3;
 
 /**
  * Takeoff speed that reaches `JUMP_HEIGHT_M` and no higher, from v² = 2gh with
@@ -462,8 +471,11 @@ export class CharacterController {
     // first claim; the solid-face fallback handles everything else. Resolving
     // this before an ordinary jump is essential, otherwise an authored ledge
     // turns the body airborne before its link ever gets a chance to attach.
+    // The window reaches slightly into the fall (the upward coyote), so a jump
+    // that crests just short of the lip still catches it.
     const startedClimb =
-      (this.grounded || this.verticalVelocity > 0) &&
+      (this.grounded ||
+        this.verticalVelocity > -JUMP_SPEED * LEDGE_GRAB_FALL_WINDOW_FRACTION) &&
       input.forward > 0 &&
       input.jump &&
       this.jumpActionArmed &&

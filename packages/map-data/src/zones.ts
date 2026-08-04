@@ -40,6 +40,83 @@ export const OFFICE_DOOR_MAX_Z = 4.1;
 /** Narrowest aisle the navigation contract allows: two Inspectors abreast. */
 export const MIN_AISLE_WIDTH = 1.2;
 
+// ---------------------------------------------------------------------------
+// The gallery (2026-08-04 room expansion)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wall-hung mezzanine walkways around the shop at gallery height, the room's
+ * second storey. Constants live here because the visual deck (client
+ * architecture builder), the walkable surfaces and blockers (`nav.ts`) and the
+ * prop placements standing on the deck must all agree on the same numbers.
+ *
+ * The deck top clears the tallest wall furniture beneath it (the counter's
+ * drawer cabinet at 2.1, the workshop rack's 2.3 uprights) while leaving a
+ * standing body of headroom below the 3.6 ceiling.
+ */
+export const GALLERY_TOP_Y = 2.42;
+export const GALLERY_THICKNESS = 0.08;
+
+/** Inner faces of the shell the deck legs hang from. */
+const WALL_INNER_WEST = SHOP_MIN_X + WALL_THICKNESS;
+const WALL_INNER_EAST = SHOP_MAX_X - WALL_THICKNESS;
+const WALL_INNER_NORTH = SHOP_MIN_Z + WALL_THICKNESS;
+const WALL_INNER_SOUTH = SHOP_MAX_Z - WALL_THICKNESS;
+
+export interface GalleryLeg {
+  readonly id: string;
+  readonly minX: number;
+  readonly minZ: number;
+  readonly maxX: number;
+  readonly maxZ: number;
+}
+
+/**
+ * The five deck legs. The west run is split around the longcase clock, whose
+ * hood rises through the gallery like a tower through a floor; the south run
+ * stops where the counter's drawer cabinet takes over as the high route, and
+ * everything keeps clear of the Security Office airspace, which is forbidden
+ * to Mimics at every height (§10.4).
+ */
+export const GALLERY_LEGS: readonly GalleryLeg[] = [
+  { id: "gallery_west_a", minX: WALL_INNER_WEST, minZ: -5.3, maxX: WALL_INNER_WEST + 0.42, maxZ: 1.85 },
+  { id: "gallery_west_b", minX: WALL_INNER_WEST, minZ: 2.2, maxX: WALL_INNER_WEST + 0.42, maxZ: 4.94 },
+  { id: "gallery_south", minX: WALL_INNER_WEST, minZ: WALL_INNER_SOUTH - 0.42, maxX: 0.35, maxZ: WALL_INNER_SOUTH },
+  { id: "gallery_north_east", minX: 1.75, minZ: WALL_INNER_NORTH, maxX: WALL_INNER_EAST, maxZ: WALL_INNER_NORTH + 0.44 },
+  { id: "gallery_east", minX: WALL_INNER_EAST - 0.42, minZ: -2.55, maxX: WALL_INNER_EAST, maxZ: 2.1 },
+];
+
+/**
+ * Ceiling beams, lowered from the ceiling slab so a player can stand on them:
+ * the top face leaves standing headroom under the 3.6 ceiling, and the beams
+ * are the only bridge between the west and east galleries.
+ */
+export const CEILING_BEAM_ZS = [-3.6, -1.2, 1.2, 3.6] as const;
+export const CEILING_BEAM_TOP_Y = 3.13;
+export const CEILING_BEAM_HEIGHT = 0.26;
+export const CEILING_BEAM_DEPTH = 0.22;
+
+// ---------------------------------------------------------------------------
+// The Curio Annex (2026-08-04 room expansion)
+// ---------------------------------------------------------------------------
+
+/**
+ * A curtained salon alcove in the reading nook's south-east reach: two tall
+ * folding screens close its west and north sides against the south wall, the
+ * east side stays open behind a drape. The screens are shell architecture
+ * (they block movement and sight), so their boxes live here where `nav.ts`
+ * and the client builder both read them.
+ */
+export const ANNEX_SCREEN_HEIGHT = 1.7;
+export const ANNEX_SCREEN_WEST: AABB = {
+  min: { x: -2.38, y: 0, z: 3.45 },
+  max: { x: -2.28, y: ANNEX_SCREEN_HEIGHT, z: WALL_INNER_SOUTH },
+};
+export const ANNEX_SCREEN_NORTH: AABB = {
+  min: { x: -2.28, y: 0, z: 3.4 },
+  max: { x: -0.85, y: ANNEX_SCREEN_HEIGHT, z: 3.5 },
+};
+
 export type ZoneId =
   | "front_window"
   | "clock_wall"

@@ -50,6 +50,8 @@ import {
   finalCountdownMs,
   phaseDurationMs,
   type ResultVoteCategory,
+  CLOSE_PASS_JACKPOT_COUNT,
+  WARRANT_RESTOCK_COUNT,
 } from "./constants";
 import type {
   DisguiseOwnership,
@@ -202,6 +204,8 @@ interface RoundStats {
    */
   lineOfSightMs: number;
   observedTaunts: number;
+  /** Third-close-pass jackpots earned, one per seeker (2026-08-04). */
+  closePassJackpots: number;
 }
 
 /**
@@ -256,6 +260,11 @@ interface InternalPlayer {
   caughtAtMs: number | null;
   stats: RoundStats;
   lastTauntAtMs: number | null;
+  /** Consecutive watched taunts, and the best run this round (2026-08-04). */
+  tauntStreak: number;
+  tauntStreakBest: number;
+  /** Whether this seeker has taken the round's one warrant restock. */
+  restockClaimed: boolean;
   lastForgeUpdateAtMs: number | null;
   /** Short-lived movement grant issued for a validated grapple latch. */
   grapple: {
@@ -296,6 +305,7 @@ function createStats(): RoundStats {
     focusedObjectIds: new Set<string>(),
     lineOfSightMs: 0,
     observedTaunts: 0,
+    closePassJackpots: 0,
   };
 }
 
@@ -462,8 +472,12 @@ function restorePlayer(
       focusedObjectIds: new Set(entry.st.f),
       lineOfSightMs: entry.st.los,
       observedTaunts: entry.st.ot,
+      closePassJackpots: entry.st.cj,
     },
     lastTauntAtMs: entry.tt,
+    tauntStreak: entry.ts,
+    tauntStreakBest: entry.tb,
+    restockClaimed: entry.rk,
     lastForgeUpdateAtMs: entry.fu,
     grapple: null,
     watchedLevel: entry.wl,
@@ -546,6 +560,12 @@ export class MatchSimulation {
   // delay a payment and never duplicate one, and it keeps a size-constrained
   // snapshot free of an entry per inspector per disguise.
   private readonly closePassDwellSince = new Map<string, Map<string, number>>();
+  /** Close passes credited per seeker/object pair, for the jackpot rule. */
+  private readonly closePassCountBy = new Map<string, Map<string, number>>();
+  /** Pairs whose jackpot has been paid, so it pays exactly once. */
+  private readonly closePassJackpotPaid = new Set<string>();
+  /** Round the midpoint hunt hint was delivered for, or -1. */
+  private huntHintDeliveredRound = -1;
 
   private readonly resultVotes = new Map<string, Map<ResultVoteCategory, string>>();
   private readonly rematchVotes = new Map<string, boolean>();
@@ -604,6 +624,9 @@ export class MatchSimulation {
       caughtAtMs: null,
       stats: createStats(),
       lastTauntAtMs: null,
+      tauntStreak: 0,
+      tauntStreakBest: 0,
+      restockClaimed: false,
       lastForgeUpdateAtMs: null,
       grapple: null,
       watchedLevel: 0,
@@ -707,6 +730,7 @@ export class MatchSimulation {
     // ended on this same tick, and before the board, so what it publishes
     // includes what was just earned.
     this.detectClosePasses();
+    this.deliverHuntHint();
     if (this.isInspectionPhase() && this.nowMs >= this.nextMissedFindsAtMs) {
       this.emitMissedFinds(false);
     }
@@ -741,6 +765,8 @@ export class MatchSimulation {
         return this.commandVoteRematch(player, command.yes);
       case "taunt":
         return this.commandTaunt(player, command.tauntId);
+      case "claim_restock":
+        return this.commandClaimRestock(player);
     }
   }
 
@@ -959,10 +985,18 @@ export class MatchSimulation {
     player.lastTauntAtMs = this.nowMs;
 
     // Points only when someone is actually watching, which is what makes a
-    // taunt a gamble rather than free score.
+    // taunt a gamble rather than free score. Consecutive watched taunts build
+    // the bait streak (2026-08-04); one taunt into empty air resets it.
     if (this.isWatched(record.publicObjectId)) {
       player.stats.observedTaunts += 1;
+      player.tauntStreak += 1;
+      if (player.tauntStreak > player.tauntStreakBest) {
+        player.tauntStreakBest = player.tauntStreak;
+      }
+    } else {
+      player.tauntStreak = 0;
     }
+    this.emitPrivate(player.playerId, { type: "taunt_streak", streak: player.tauntStreak });
 
     this.emit({
       type: "taunt_performed",
@@ -1158,7 +1192,83 @@ export class MatchSimulation {
       publicObjectId,
       inspectorPublicId: inspector.publicPlayerId,
     });
+
+    // The jackpot (2026-08-04): a third pass with the SAME seeker pays the
+    // hider a one-time bonus. Counted per pair so a second seeker is a second
+    // wager, and paid at most once per pair however long the hunt runs.
+    const counts = this.closePassCountBy.get(inspectorPlayerId) ?? new Map<string, number>();
+    const count = (counts.get(publicObjectId) ?? 0) + 1;
+    counts.set(publicObjectId, count);
+    this.closePassCountBy.set(inspectorPlayerId, counts);
+    const pairKey = `${inspectorPlayerId}|${publicObjectId}`;
+    if (owner && count >= CLOSE_PASS_JACKPOT_COUNT && !this.closePassJackpotPaid.has(pairKey)) {
+      this.closePassJackpotPaid.add(pairKey);
+      owner.stats.closePassJackpots += 1;
+      this.emitPrivate(owner.playerId, {
+        type: "close_pass_jackpot",
+        inspectorPublicId: inspector.publicPlayerId,
+      });
+    }
     return true;
+  }
+
+  /** Whether the hunt clock has crossed its halfway mark. */
+  private huntPastMidpoint(): boolean {
+    if (this.phase !== MatchPhase.Inspection) return false;
+    return this.nowMs >= this.inspectionEndsAtMs - this.settings.inspectionMs / 2;
+  }
+
+  /**
+   * The midpoint nudge (2026-08-04): once per round, each seeker privately
+   * learns how many live hiders they have already brushed right past. It
+   * names no object and no place, so it sharpens the hunt without becoming a
+   * radar; the count is drawn from the close-pass clocks the rule already
+   * keeps.
+   */
+  private deliverHuntHint(): void {
+    if (this.huntHintDeliveredRound === this.round) return;
+    if (!this.huntPastMidpoint()) return;
+    this.huntHintDeliveredRound = this.round;
+    for (const player of this.players.values()) {
+      if (player.role !== "inspector" || !player.connected) continue;
+      const passed = this.lastClosePassAt.get(player.playerId);
+      let closePasses = 0;
+      if (passed) {
+        for (const objectId of passed.keys()) {
+          if (this.unresolvedDisguise(objectId)) closePasses += 1;
+        }
+      }
+      this.emitPrivate(player.playerId, { type: "hunt_hint", closePasses });
+    }
+  }
+
+  /**
+   * A seeker refills one warrant at the gallery restock case (2026-08-04).
+   * Gated four ways: only during the hunt's second half, only by a seeker,
+   * once per seeker per round, and only while standing at the case - which is
+   * map knowledge, so the geometry seam answers it. A validator that predates
+   * the seam refuses by absence.
+   */
+  private commandClaimRestock(player: InternalPlayer): CommandResult {
+    if (this.phase !== MatchPhase.Inspection) return reject("wrong_phase");
+    if (player.role !== "inspector") return reject("wrong_role");
+    if (player.restockClaimed) return reject("restock_unavailable", "already_claimed");
+    if (!this.huntPastMidpoint()) return reject("restock_unavailable", "too_early");
+    const decision = this.spatial.canClaimRestock?.(player.playerId);
+    if (decision === undefined || !decision.ok) {
+      return reject("restock_unavailable", decision?.reason ?? "no_geometry");
+    }
+
+    player.restockClaimed = true;
+    const held = this.warrantsRemainingBy.get(player.playerId) ?? 0;
+    this.warrantsRemainingBy.set(player.playerId, held + WARRANT_RESTOCK_COUNT);
+    this.warrantsTotal += WARRANT_RESTOCK_COUNT;
+    this.emit({
+      type: "warrant_restock",
+      inspectorPublicId: player.publicPlayerId,
+      warrantsRemaining: this.warrantsRemainingTotal(),
+    });
+    return this.accept();
   }
 
   /**
@@ -1423,8 +1533,12 @@ export class MatchSimulation {
           f: [...player.stats.focusedObjectIds],
           los: player.stats.lineOfSightMs,
           ot: player.stats.observedTaunts,
+          cj: player.stats.closePassJackpots,
         },
         tt: player.lastTauntAtMs,
+        ts: player.tauntStreak,
+        tb: player.tauntStreakBest,
+        rk: player.restockClaimed,
         fu: player.lastForgeUpdateAtMs,
         wl: player.watchedLevel,
         wa: player.watchedDeliveredAtMs,
@@ -1456,6 +1570,9 @@ export class MatchSimulation {
       ),
       le: flattenNested(this.lastEscapeAt),
       lc: flattenNested(this.lastClosePassAt),
+      cpn: flattenNested(this.closePassCountBy),
+      cpj: [...this.closePassJackpotPaid],
+      hh: this.huntHintDeliveredRound,
       rv: flattenNested(this.resultVotes),
       rm: [...this.rematchVotes.entries()].map(([id, yes]) => [id, yes] as const),
       rs: this.copyResults(this.results),
@@ -1544,6 +1661,9 @@ export class MatchSimulation {
     }));
     fillNested(sim.lastEscapeAt, snapshot.le);
     fillNested(sim.lastClosePassAt, snapshot.lc);
+    fillNested(sim.closePassCountBy, snapshot.cpn);
+    for (const pair of snapshot.cpj) sim.closePassJackpotPaid.add(pair);
+    sim.huntHintDeliveredRound = snapshot.hh;
     fillNested(sim.resultVotes, snapshot.rv);
     for (const [playerId, yes] of snapshot.rm) sim.rematchVotes.set(playerId, yes);
 
@@ -2276,6 +2396,8 @@ export class MatchSimulation {
               peerStyleVotes: player.stats.peerStyleVotes,
               lineOfSightSeconds: lineOfSightSecondsOf(player),
               observedTaunts: player.stats.observedTaunts,
+              tauntStreakBest: player.tauntStreakBest,
+              closePassJackpots: player.stats.closePassJackpots,
             });
 
       players.push({
@@ -2347,6 +2469,8 @@ export class MatchSimulation {
     this.lastEscapeAt.clear();
     this.lastClosePassAt.clear();
     this.closePassDwellSince.clear();
+    this.closePassCountBy.clear();
+    this.closePassJackpotPaid.clear();
     this.pendingEscapes = [];
     this.objectIdPool = [];
     this.accusationCounter = 0;
@@ -2369,6 +2493,9 @@ export class MatchSimulation {
       player.stats = createStats();
       player.grapple = null;
       player.lifeState = "active";
+      player.tauntStreak = 0;
+      player.tauntStreakBest = 0;
+      player.restockClaimed = false;
     }
   }
 

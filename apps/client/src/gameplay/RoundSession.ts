@@ -20,10 +20,11 @@ import {
 } from "../inspector";
 import { DEFAULT_LOOK_SENSITIVITY } from "../inspector/InspectorInput";
 import { INSPECTOR_RADIUS_M, INSPECTOR_STEP_HEIGHT_M, surfaceAt, type AABB } from "../inspector/navData";
-import { MIMIC_NAV_DATA, NAV_DATA } from "../world/maps/nav";
+import { MIMIC_NAV_DATA, NAV_DATA, WARRANT_RESTOCK_VOLUME } from "../world/maps/nav";
 import { OFFICE_DOOR_NAME } from "../world/maps/props";
+import { MOON_BASE_POSITION, MOON_DRIFT_RAD, MOON_LIGHT_NAME } from "../world/maps/lighting";
 import { CURIOSITY_SHOP_OBJECTS, mapObject } from "../world/maps/registry";
-import { SECURITY_OFFICE_BOUNDS } from "../world/maps/zones";
+import { SECURITY_OFFICE_BOUNDS, SHOP_MAX_X, SHOP_MAX_Z, SHOP_MIN_X, SHOP_MIN_Z } from "../world/maps/zones";
 import { encodeDisguiseState } from "../mimic/poseWire";
 import { PaintSnapshotBookkeeper, type PaintUploadStatsSink } from "../paint";
 import { clientPerformanceTelemetry } from "../engine/performanceTelemetry";
@@ -124,6 +125,76 @@ const SURVEY_FOV_DEG = 55;
  * sweep resumes on its own once the pointer has been still a moment.
  */
 const SURVEY_RESUME_MS = 2500;
+/**
+ * The caught hider's free-cam (2026-08-04): WASD glides the survey's orbit
+ * point around the shop and the wheel pulls the orbit in and out, so being
+ * found ends the hiding, not the watching. Bounded to the shell, and only for
+ * spectators during the hunt - the between-phase sweep stays a sweep.
+ */
+const SPECTATE_PAN_M_PER_S = 3.2;
+/** The moonbeam's dust volume, in front of the window bay (2026-08-04). */
+const MOTE_MIN_X = -6.4;
+const MOTE_MAX_X = -1.1;
+const MOTE_MIN_Z = -5.2;
+const MOTE_MAX_Z = -2.6;
+const MOTE_VOLUME_HEIGHT_M = 2.7;
+const MOTE_COUNT = 160;
+
+/** A soft-dot sprite for the motes, drawn once. */
+function createMoteTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32;
+  canvas.height = 32;
+  const context = canvas.getContext("2d");
+  if (context !== null) {
+    const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+    gradient.addColorStop(0, "rgba(255, 240, 214, 1)");
+    gradient.addColorStop(0.4, "rgba(255, 240, 214, 0.4)");
+    gradient.addColorStop(1, "rgba(255, 240, 214, 0)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 32, 32);
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/** Dust hanging in the moonbeam: one additive point cloud, drifting slowly. */
+function createMoonMotes(): THREE.Points {
+  const positions = new Float32Array(MOTE_COUNT * 3);
+  const drift = new Float32Array(MOTE_COUNT * 3);
+  for (let i = 0; i < MOTE_COUNT; i += 1) {
+    const base = i * 3;
+    positions[base] = MOTE_MIN_X + Math.random() * (MOTE_MAX_X - MOTE_MIN_X);
+    positions[base + 1] = 0.05 + Math.random() * MOTE_VOLUME_HEIGHT_M;
+    positions[base + 2] = MOTE_MIN_Z + Math.random() * (MOTE_MAX_Z - MOTE_MIN_Z);
+    drift[base + 1] = 0.004 + Math.random() * 0.01;
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+  const material = new THREE.PointsMaterial({
+    size: 0.014,
+    map: createMoteTexture(),
+    transparent: true,
+    opacity: 0.5,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    sizeAttenuation: true,
+  });
+  const points = new THREE.Points(geometry, material);
+  points.name = "shop.moonMotes";
+  points.frustumCulled = false;
+  points.userData["drift"] = drift;
+  return points;
+}
+
+/** Nearness bed ramp: silent beyond FAR, full at NEAR (2026-08-04). */
+const PROXIMITY_NEAR_M = 0.9;
+const PROXIMITY_FAR_M = 3.2;
+/** Listener height at which the score adds its verticality shimmer. */
+const ELEVATED_LISTENER_Y_M = 1.8;
+const SPECTATE_MIN_RADIUS_M = 1.6;
+const SPECTATE_MAX_RADIUS_M = 7.5;
 
 /**
  * Where the Inspector waits out the fold: inside the Security Office, on the
@@ -256,6 +327,10 @@ export class RoundSession {
   private surveyLastX = 0;
   /** Milliseconds since the player last steered; gates the auto-sweep. */
   private surveyIdleMs = Infinity;
+  /** Free-cam state for a caught hider watching the rest of the hunt. */
+  private readonly spectateTarget = new THREE.Vector3(-0.5, 0.8, 0);
+  private spectateRadius = SURVEY_RADIUS_M;
+  private readonly spectateKeys = new Set<string>();
   /** The office door leaf, resolved from the map once and cached. */
   private officeDoor: THREE.Object3D | null = null;
   private officeDoorSearched = false;
@@ -278,6 +353,18 @@ export class RoundSession {
   private lastPhase: MatchPhase | null = null;
   /** Countdown second last ticked, so one tick is heard per second and no more. */
   private lastTickSecond = -1;
+  /** Which hunt quarter last struck, or -1 outside the hunt. */
+  private lastChimeQuarter = -1;
+  /** Whether a grapple pull was riding last frame, for the foley chain. */
+  private grappleWasActive = false;
+  /** The moon key, found once, and the dust in its beam. */
+  private moon: THREE.DirectionalLight | null | undefined;
+  private motes: THREE.Points | null = null;
+  private moteSeconds = 0;
+
+  /** Flame practicals found in the scene, with their authored intensities. */
+  private flames: { light: THREE.PointLight; base: number; phase: number }[] | null = null;
+  private flameSeconds = 0;
   /** Gun state last heard, for the raise and the shot. */
   private lastGunState: InspectorGunView["state"] = "idle";
   private gunCycleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -348,6 +435,9 @@ export class RoundSession {
     if (unsubscribeCamera !== undefined) this.subscriptions.push(unsubscribeCamera);
     this.options.canvas.addEventListener("click", this.onCanvasClick);
     this.options.canvas.addEventListener("pointerdown", this.onSurveyPointerDown);
+    window.addEventListener("keydown", this.onSpectateKeyDown);
+    window.addEventListener("keyup", this.onSpectateKeyUp);
+    this.options.canvas.addEventListener("wheel", this.onSpectateWheel, { passive: true });
     this.options.canvas.addEventListener("pointermove", this.onSurveyPointerMove);
     this.options.canvas.addEventListener("pointerup", this.onSurveyPointerUp);
     this.options.canvas.addEventListener("pointercancel", this.onSurveyPointerUp);
@@ -427,6 +517,9 @@ export class RoundSession {
     });
 
     this.stepOfficeDoor(dtMs, state);
+    this.stepGrappleFoley();
+    this.stepPropLife(dtMs);
+    this.stepMoonAndMotes(dtMs, state);
 
     this.captions.update(dtMs);
     this.publishPose(dtMs, state);
@@ -454,8 +547,155 @@ export class RoundSession {
       watchedLevel: state.self.watchedLevel,
       listenerX: listener.x,
       listenerZ: listener.z,
+      inspectorProximity: this.inspectorProximityFor(state),
     });
     this.music.setScene(musicSceneForPhase(state.phase, state.self.watchedLevel));
+    // The score's verticality shimmer (2026-08-04): thin air over the gallery.
+    this.music.setElevated(listener.y >= ELEVATED_LISTENER_Y_M);
+    this.stepHuntChimes(state);
+  }
+
+  /**
+   * How close the nearest seeker stands to this hider, 0 far to 1 at arm's
+   * length, for the nearness bed (2026-08-04). Distance only - line of sight
+   * stays the watched meter's business, so a seeker prowling the far side of a
+   * bookcase still raises the hider's pulse.
+   */
+  private inspectorProximityFor(state: RoundViewState): number {
+    if (state.self.role !== "mimic" || state.self.lifeState !== "active") return 0;
+    if (!INSPECTION_PHASES.has(state.phase)) return 0;
+    let nearest = Number.POSITIVE_INFINITY;
+    for (const remote of this.remoteInspectors.values()) {
+      const eye = remote.eye;
+      if (eye === null) continue;
+      const distance = eye.distanceTo(this.camera.position);
+      if (distance < nearest) nearest = distance;
+    }
+    if (!Number.isFinite(nearest)) return 0;
+    return Math.min(
+      1,
+      Math.max(0, (PROXIMITY_FAR_M - nearest) / (PROXIMITY_FAR_M - PROXIMITY_NEAR_M)),
+    );
+  }
+
+  /**
+   * The night moving (2026-08-04): the moon slides a few degrees of azimuth
+   * across each phase, so the window's shadows creep with the clock, and a
+   * handful of dust motes drift in its beam. Both are the room saying time is
+   * passing without a single number on screen.
+   */
+  private stepMoonAndMotes(dtMs: number, state: RoundViewState): void {
+    if (this.moon === undefined) {
+      const found = this.options.scene.getObjectByName(MOON_LIGHT_NAME);
+      this.moon = found instanceof THREE.DirectionalLight ? found : null;
+      // The dust needs a 2D canvas for its sprite; a headless round (tests,
+      // the dedicated-server-driven fixtures) simply goes without dust.
+      if (this.motes === null && typeof document !== "undefined") {
+        this.motes = createMoonMotes();
+        this.options.scene.add(this.motes);
+      }
+    }
+    if (this.moon !== null && this.moon !== undefined && state.timer.totalMs > 0) {
+      const progress = 1 - state.timer.remainingMs / state.timer.totalMs;
+      const angle = (progress - 0.5) * MOON_DRIFT_RAD;
+      const [bx, by, bz] = MOON_BASE_POSITION;
+      const targetX = this.moon.target.position.x;
+      const targetZ = this.moon.target.position.z;
+      const dx = bx - targetX;
+      const dz = bz - targetZ;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      this.moon.position.set(targetX + dx * cos - dz * sin, by, targetZ + dx * sin + dz * cos);
+    }
+    const motes = this.motes;
+    if (motes !== null) {
+      this.moteSeconds += dtMs / 1000;
+      const attribute = motes.geometry.getAttribute("position");
+      const drift = motes.userData["drift"] as Float32Array;
+      for (let i = 0; i < attribute.count; i += 1) {
+        const base = i * 3;
+        let y = attribute.getY(i) - (drift[base + 1] ?? 0.008) * (dtMs / 1000);
+        let x = attribute.getX(i) + Math.sin(this.moteSeconds * 0.4 + i) * 0.0004;
+        const z = attribute.getZ(i) + Math.cos(this.moteSeconds * 0.31 + i * 1.7) * 0.0004;
+        if (y < 0.05) y = MOTE_VOLUME_HEIGHT_M;
+        if (x < MOTE_MIN_X) x = MOTE_MAX_X;
+        if (x > MOTE_MAX_X) x = MOTE_MIN_X;
+        attribute.setXYZ(i, x, y, z);
+      }
+      attribute.needsUpdate = true;
+    }
+  }
+
+  /**
+   * Prop life (2026-08-04): the room's flames breathe. Candles and task lights
+   * are the practicals whose fire is fiction, so their intensity wanders a few
+   * percent on two incommensurate sines - enough that the annex corner reads
+   * as lit by fire rather than by a bulb pretending. Batched geometry cannot
+   * move by design, which is why the room's life lives in its lights.
+   */
+  private stepPropLife(dtMs: number): void {
+    if (this.flames === null) {
+      const found: { light: THREE.PointLight; base: number; phase: number }[] = [];
+      this.options.scene.traverse((object) => {
+        if (!(object instanceof THREE.PointLight)) return;
+        if (!object.name.startsWith("practical:")) return;
+        if (!object.name.includes("candle") && !object.name.includes("tasklight")) return;
+        found.push({ light: object, base: object.intensity, phase: found.length * 1.7 });
+      });
+      this.flames = found;
+    }
+    if (this.flames.length === 0) return;
+    this.flameSeconds += dtMs / 1000;
+    for (const flame of this.flames) {
+      const wander =
+        Math.sin(this.flameSeconds * 7.3 + flame.phase) * 0.05 +
+        Math.sin(this.flameSeconds * 2.1 + flame.phase * 2.3) * 0.04;
+      flame.light.intensity = flame.base * (1 + wander);
+    }
+  }
+
+  /**
+   * The grapple's mechanical voice (2026-08-04): the launcher spools and the
+   * claw bites at the latch, and the hand goes over the lip at release. The
+   * clips are the shop's own mechanical vocabulary; the beat structure is the
+   * point, and richer takes can replace the files without touching this.
+   */
+  private stepGrappleFoley(): void {
+    const active =
+      (this.inspector?.controller.grappleState ?? null) !== null ||
+      (this.forge?.grappleActive ?? false);
+    if (active && !this.grappleWasActive) {
+      this.audio.play("servo_move");
+      this.audio.play("anchor_snap");
+      this.captions.push({ label: "grapple bites", importance: "gameplay", bearingRad: null });
+    } else if (!active && this.grappleWasActive) {
+      this.audio.play("climb_grab");
+    }
+    this.grappleWasActive = active;
+  }
+
+  /**
+   * The quarter-hour strike (2026-08-04): every clock in the shop sounds
+   * together at each quarter of the hunt. It is measured on the authority's
+   * clock, so the whole room hears the same strike at the same moment - and a
+   * hider who counts on it has a few masked seconds to creep under the chime.
+   */
+  private stepHuntChimes(state: RoundViewState): void {
+    if (
+      state.phase !== MatchPhase.Inspection ||
+      !state.timer.running ||
+      state.timer.totalMs <= 0
+    ) {
+      this.lastChimeQuarter = -1;
+      return;
+    }
+    const elapsed = state.timer.totalMs - state.timer.remainingMs;
+    const quarter = Math.floor((elapsed / state.timer.totalMs) * 4);
+    if (quarter > 0 && quarter < 4 && quarter !== this.lastChimeQuarter) {
+      this.audio.play("clock_chime");
+      this.captions.push({ label: "the clocks strike together", importance: "gameplay", bearingRad: null });
+    }
+    this.lastChimeQuarter = quarter;
   }
 
   /**
@@ -537,6 +777,9 @@ export class RoundSession {
     this.cancelGameplayFocus = null;
     this.options.canvas.removeEventListener("click", this.onCanvasClick);
     this.options.canvas.removeEventListener("pointerdown", this.onSurveyPointerDown);
+    window.removeEventListener("keydown", this.onSpectateKeyDown);
+    window.removeEventListener("keyup", this.onSpectateKeyUp);
+    this.options.canvas.removeEventListener("wheel", this.onSpectateWheel);
     this.options.canvas.removeEventListener("pointermove", this.onSurveyPointerMove);
     this.options.canvas.removeEventListener("pointerup", this.onSurveyPointerUp);
     this.options.canvas.removeEventListener("pointercancel", this.onSurveyPointerUp);
@@ -1033,6 +1276,37 @@ export class RoundSession {
     if (selfId !== null) this.options.spatial.setInspectorEye(selfId, inspector.cameraRig.eye);
   }
 
+  /** Local send throttle for the warrant restock claim. */
+  private lastRestockAttemptAtMs = 0;
+
+  /**
+   * Standing at the gallery warrant case claims the refill (2026-08-04). The
+   * authority owns every gate - second half of the hunt, one claim per seeker,
+   * really standing there - so this only keeps the wire polite: one attempt
+   * every few seconds while the conditions look right from here, and a refusal
+   * lands in diagnostics rather than the HUD.
+   */
+  private tryClaimRestock(
+    nowMs: number,
+    state: RoundViewState,
+    inspector: InspectorSystem,
+  ): void {
+    if (state.phase !== MatchPhase.Inspection) return;
+    if (state.timer.totalMs <= 0 || state.timer.remainingMs > state.timer.totalMs / 2) return;
+    if (nowMs - this.lastRestockAttemptAtMs < 3_000) return;
+    const eye = inspector.cameraRig.eye;
+    const volume = WARRANT_RESTOCK_VOLUME;
+    if (
+      eye.x < volume.min.x || eye.x > volume.max.x ||
+      eye.z < volume.min.z || eye.z > volume.max.z ||
+      eye.y < volume.min.y || eye.y > volume.max.y + 1
+    ) {
+      return;
+    }
+    this.lastRestockAttemptAtMs = nowMs;
+    this.options.adapter.sendCommand({ type: "claim_restock" });
+  }
+
   private closeInspector(): void {
     this.options.adapter.sendCameraSample?.(null);
     const selfId = this.options.adapter.getSelfId();
@@ -1100,6 +1374,7 @@ export class RoundSession {
     inspector.enabled = state.phase !== MatchPhase.InspectionIntro;
     this.loadWarrants(inspector, state);
     inspector.update(dtMs, nowMs);
+    this.tryClaimRestock(nowMs, state, inspector);
     if (OFFICE_VIGIL_PHASES.has(state.phase)) {
       // The pre-game Inspector can walk and look normally, but the shut door is
       // also a gameplay boundary: never let collision interpolation squeeze the
@@ -1239,6 +1514,23 @@ export class RoundSession {
     this.surveyIdleMs = 0;
   };
 
+  private readonly onSpectateKeyDown = (event: KeyboardEvent): void => {
+    if (this.mode !== "survey") return;
+    this.spectateKeys.add(event.code);
+  };
+
+  private readonly onSpectateKeyUp = (event: KeyboardEvent): void => {
+    this.spectateKeys.delete(event.code);
+  };
+
+  private readonly onSpectateWheel = (event: WheelEvent): void => {
+    if (this.mode !== "survey") return;
+    this.spectateRadius = Math.min(
+      SPECTATE_MAX_RADIUS_M,
+      Math.max(SPECTATE_MIN_RADIUS_M, this.spectateRadius * (1 + event.deltaY * 0.0012)),
+    );
+  };
+
   /** The gesture the beds have been waiting for. Unbinds itself once it lands. */
   private readonly onFirstGesture = (): void => {
     this.ambience.start();
@@ -1259,12 +1551,25 @@ export class RoundSession {
    */
   private driveSurvey(dtMs: number, state: RoundViewState): void {
     const vigil = this.waitingInTheOffice(state);
+    // A hider who has been found spectates the rest of the hunt on a drivable
+    // orbit: WASD glides the point it turns about, the wheel zooms, the drag
+    // still steers the angle. Everyone else keeps the authored sweep.
+    const spectating =
+      !vigil &&
+      state.self.lifeState !== "active" &&
+      INSPECTION_PHASES.has(state.phase);
+    if (spectating) {
+      this.stepSpectatePan(dtMs);
+    } else {
+      this.spectateTarget.copy(SURVEY_TARGET);
+      this.spectateRadius = SURVEY_RADIUS_M;
+    }
     // The survey turns about whatever it is looking at; the vigil turns about
     // the middle of the office and keeps looking at the door, because the door
     // is the thing the Inspector is waiting on.
-    const centre = vigil ? OFFICE_VIGIL_CENTRE : SURVEY_TARGET;
-    const target = vigil ? OFFICE_VIGIL_TARGET : SURVEY_TARGET;
-    const radius = vigil ? OFFICE_VIGIL_RADIUS_M : SURVEY_RADIUS_M;
+    const centre = vigil ? OFFICE_VIGIL_CENTRE : spectating ? this.spectateTarget : SURVEY_TARGET;
+    const target = vigil ? OFFICE_VIGIL_TARGET : spectating ? this.spectateTarget : SURVEY_TARGET;
+    const radius = vigil ? OFFICE_VIGIL_RADIUS_M : spectating ? this.spectateRadius : SURVEY_RADIUS_M;
     const height = vigil ? OFFICE_VIGIL_HEIGHT_M : SURVEY_HEIGHT_M;
 
     // The sweep yields to the player's hand and takes over again once the
@@ -1285,6 +1590,26 @@ export class RoundSession {
       this.viewCamera.fov = preferredFov;
       this.viewCamera.updateProjectionMatrix();
     }
+  }
+
+  /** WASD pan for the caught hider's orbit point, bounded to the shell. */
+  private stepSpectatePan(dtMs: number): void {
+    const keys = this.spectateKeys;
+    const forward =
+      (keys.has("KeyW") || keys.has("ArrowUp") ? 1 : 0) -
+      (keys.has("KeyS") || keys.has("ArrowDown") ? 1 : 0);
+    const strafe =
+      (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) -
+      (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
+    if (forward === 0 && strafe === 0) return;
+    // Pan in the camera's own frame: forward is toward the orbit point.
+    const sin = Math.sin(this.surveyAngle);
+    const cos = Math.cos(this.surveyAngle);
+    const step = (dtMs / 1000) * SPECTATE_PAN_M_PER_S;
+    this.spectateTarget.x += (-sin * forward + cos * strafe) * step;
+    this.spectateTarget.z += (-cos * forward - sin * strafe) * step;
+    this.spectateTarget.x = Math.min(SHOP_MAX_X - 0.4, Math.max(SHOP_MIN_X + 0.4, this.spectateTarget.x));
+    this.spectateTarget.z = Math.min(SHOP_MAX_Z - 0.4, Math.max(SHOP_MIN_Z + 0.4, this.spectateTarget.z));
   }
 
   /** True while this client is the Inspector and the Mimics are folding. */

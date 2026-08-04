@@ -3,6 +3,7 @@ import {
   SpatialValidatorImpl,
   NAV_DATA,
   PROP_FOCUS_BOUNDS,
+  WARRANT_RESTOCK_VOLUME,
   WORLD_SCALE,
   type AABB,
   type Vec3Like,
@@ -84,6 +85,10 @@ export class RoomSpatialBridge implements SpatialValidator {
     return this.impl.isNearby(inspectorId, targetObjectId);
   }
 
+  canClaimRestock(inspectorId: string): SpatialDecision {
+    return this.impl.canClaimRestock(inspectorId);
+  }
+
   /**
    * Adopts the room's current reach, which the host may change in the lobby.
    * Nothing else in the settings is geometry, so nothing else is read.
@@ -139,6 +144,7 @@ export class RoomSpatialBridge implements SpatialValidator {
       forbiddenOccupancy: [NAV_DATA.securityOffice],
       accusationDistance: this.accusationDistance,
       focusDistance: this.focusDistance,
+      restockVolume: WARRANT_RESTOCK_VOLUME,
       inspectorEye: (sessionId) => this.eyes.get(sessionId) ?? null,
       objectBounds: (objectId) => this.boundsOf(objectId),
     });

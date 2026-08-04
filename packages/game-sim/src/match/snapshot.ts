@@ -36,7 +36,7 @@ import type {
  * estimateSnapshotBytes for what actually dominates the size.
  */
 
-export const MATCH_SNAPSHOT_VERSION = 3;
+export const MATCH_SNAPSHOT_VERSION = 4;
 
 export interface SnapshotStats {
   /** directLookEscapes, closePasses, peerStyleVotes. */
@@ -52,6 +52,8 @@ export interface SnapshotStats {
   readonly los: number;
   /** Taunts performed while an Inspector was watching. */
   readonly ot: number;
+  /** Third-close-pass jackpots earned (2026-08-04). */
+  readonly cj: number;
 }
 
 export interface SnapshotPlayer {
@@ -78,6 +80,11 @@ export interface SnapshotPlayer {
   readonly st: SnapshotStats;
   /** When this player last taunted, for the cooldown. */
   readonly tt: number | null;
+  /** Current and best consecutive watched-taunt runs (2026-08-04). */
+  readonly ts: number;
+  readonly tb: number;
+  /** Whether this seeker took the round's warrant restock. */
+  readonly rk: boolean;
   /** When this player last sent a forge update, for the rate cap. */
   readonly fu: number | null;
   /** Last watched level delivered, and when, so a migration cannot re-fire it. */
@@ -152,6 +159,11 @@ export interface MatchSnapshot {
   readonly pes: ReadonlyArray<readonly [string, string, number]>;
   readonly le: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, number]>]>;
   readonly lc: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, number]>]>;
+  /** Close passes per seeker/object pair, and pairs whose jackpot was paid. */
+  readonly cpn: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, number]>]>;
+  readonly cpj: readonly string[];
+  /** Round the midpoint hunt hint went out for, or -1 (2026-08-04). */
+  readonly hh: number;
   readonly rv: ReadonlyArray<readonly [string, ReadonlyArray<readonly [ResultVoteCategory, string]>]>;
   readonly rm: ReadonlyArray<readonly [string, boolean]>;
   readonly rs: MatchResults | null;

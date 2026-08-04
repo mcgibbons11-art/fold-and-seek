@@ -637,6 +637,11 @@ export class ForgeController {
   private readonly navData: NavData | null;
   /** Null when the map published no walkable geometry to run the body over. */
   private readonly locomotion: HiderLocomotion | null;
+
+  /** True while the hider's body is riding a grapple pull (2026-08-04 foley). */
+  get grappleActive(): boolean {
+    return this.locomotion !== null && this.locomotion.motion.grappleState !== null;
+  }
   private readonly onGrapple: ((target: Vec3Like) => void) | null;
   private readonly grappleVisual: GrappleVisual;
   private readonly raycaster = new THREE.Raycaster();
@@ -1315,7 +1320,15 @@ export class ForgeController {
       this.gaitRig.update(dtSeconds, locomotion.sample, locomotion.motion.speed, suppressed);
       this.applyPoseToVisual();
     }
+    // Grapple anticipation (2026-08-04): the body coils as the cable bites,
+    // through the same settle spring the lock flourish rides.
+    const grappling = locomotion.motion.grappleState !== null;
+    if (grappling && !this.wasGrappling) this.gaitRig.settle();
+    this.wasGrappling = grappling;
   }
+
+  /** Whether the body rode a grapple last frame, for the anticipation coil. */
+  private wasGrappling = false;
 
   /**
    * Draws the body wearing this frame's gait. The rig hands back the authored
@@ -2261,6 +2274,10 @@ export class ForgeController {
     this.layoutAnchorMarkers();
     this.mimic.setSocketMarkersVisible(false);
     this.mimic.setLocked(true);
+    // The fold-flourish (2026-08-04): the body tucks with a servo settle, so
+    // the round's central verb lands as a mechanical gesture, not a checkbox.
+    this.gaitRig.settle();
+    this.audio.play("servo_move");
     this.audio.play("lock_seal");
     this.status = "Disguise locked. Esc to keep editing.";
     this.emit();

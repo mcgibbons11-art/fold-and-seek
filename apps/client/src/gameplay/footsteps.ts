@@ -118,6 +118,9 @@ const SURFACE_MATERIAL: Readonly<Record<string, FootstepMaterial>> = {
   floor_02: "rug",
   nook_armchair_seat: "rug",
   nook_footstool: "rug",
+  // The Curio Annex salon (2026-08-04) is upholstered like the nook it lives in.
+  annex_chaise_seat: "rug",
+  annex_footstool: "rug",
   // The counter is a marble slab and the back cabinet is glazed. Neither is
   // wood, and the glass tick is the nearer of the four to a hard stone tap.
   counter_top: "glass",

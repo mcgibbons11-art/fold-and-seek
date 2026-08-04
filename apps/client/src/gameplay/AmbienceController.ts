@@ -132,6 +132,9 @@ const ZONE_BEDS: ReadonlyMap<string, BedId> = new Map(
   }),
 );
 
+/** How long the nearness layer takes to swell or recede, in milliseconds. */
+const PROXIMITY_EASE_MS = 900;
+
 /** What the controller needs to know about the world each frame. */
 export interface AmbienceInput {
   readonly phase: MatchPhase;
@@ -139,6 +142,14 @@ export interface AmbienceInput {
   /** Where the listener is standing, for the zone bed. Null while there is no camera. */
   readonly listenerX: number | null;
   readonly listenerZ: number | null;
+  /**
+   * How close the nearest seeker is to this hider, 0 far to 1 breathing down
+   * their neck (2026-08-04). It scales the hunt's nearness bed, so the layer
+   * whispers only when somebody really is close - the audio side of the
+   * watched meter, for the ears instead of the eyes. Callers with no such
+   * knowledge (menus, the seeker's own client) pass 0 and the bed stays out.
+   */
+  readonly inspectorProximity?: number;
 }
 
 /** One channel's fade between the bed it was playing and the bed it wants. */
@@ -227,10 +238,18 @@ export class AmbienceController {
     return this.channels[channel].appliedGain;
   }
 
+  /** Eased nearness scale on the hunt bed. See AmbienceInput.inspectorProximity. */
+  private phaseScale = 0;
+
   update(dtMs: number, input: AmbienceInput): void {
     if (!this.started || this.disposed) return;
 
     this.advanceDuck(dtMs);
+    // The nearness scale eases rather than jumps, so a seeker crossing a
+    // doorway swells the layer instead of switching it.
+    const wantedProximity = Math.min(1, Math.max(0, input.inspectorProximity ?? 0));
+    const rate = dtMs / PROXIMITY_EASE_MS;
+    this.phaseScale += (wantedProximity - this.phaseScale) * Math.min(1, rate);
     this.route(input);
 
     for (const id of CHANNEL_IDS) this.advanceChannel(id, dtMs);
@@ -318,7 +337,13 @@ export class AmbienceController {
       channel.progress = Math.min(1, channel.progress + dtMs / channel.crossfadeMs);
     }
 
-    const ceiling = CHANNEL_GAIN[id] * this.duck * getAudioBusGain("ambience");
+    // Only the hunt's nearness bed breathes with proximity; the Forge's
+    // tinker bed on the same channel plays at its authored level.
+    const scale =
+      id === "phase" && this.channels.phase.playing === "amb_inspector_near"
+        ? this.phaseScale
+        : 1;
+    const ceiling = CHANNEL_GAIN[id] * this.duck * getAudioBusGain("ambience") * scale;
     channel.appliedGain = channel.voice === null ? 0 : ceiling * channel.progress;
     channel.voice?.setGain(channel.appliedGain);
     channel.voice?.update(dtMs);

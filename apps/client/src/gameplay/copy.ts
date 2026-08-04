@@ -225,8 +225,25 @@ export const DECEPTION_TITLE = "Deception";
 export const DECEPTION_ESCAPE_LABEL = "SEEN AND MISSED";
 export const DECEPTION_CLOSE_PASS_LABEL = "CLOSE PASS";
 
+export const DECEPTION_JACKPOT_LABEL = "THIRD PASS JACKPOT";
+
 export function deceptionLabel(kind: DeceptionEventKind): string {
-  return kind === "direct_look_escape" ? DECEPTION_ESCAPE_LABEL : DECEPTION_CLOSE_PASS_LABEL;
+  if (kind === "direct_look_escape") return DECEPTION_ESCAPE_LABEL;
+  if (kind === "close_pass_jackpot") return DECEPTION_JACKPOT_LABEL;
+  return DECEPTION_CLOSE_PASS_LABEL;
+}
+
+/** The midpoint nudge, spoken to the seeker alone (2026-08-04). */
+export function huntHintLine(closePasses: number): string {
+  if (closePasses <= 0) return "Halfway. You have not come close to a single one yet.";
+  if (closePasses === 1) return "Halfway. You have brushed right past one of them.";
+  return `Halfway. You have brushed right past ${String(closePasses)} of them.`;
+}
+
+export const RESTOCK_TITLE = "Warrant case";
+export function restockLine(byMe: boolean, name: string | null): string {
+  if (byMe) return "The case snaps open. One warrant refilled.";
+  return `${name ?? "A seeker"} refilled a warrant at the case.`;
 }
 
 /**
