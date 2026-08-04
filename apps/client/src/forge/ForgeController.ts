@@ -52,7 +52,7 @@ import {
 import { DEFAULT_LOOK_SENSITIVITY } from "../inspector/InspectorInput";
 import { WORLD_SCALE, type AABB, type NavData, type Vec3Like } from "../inspector/navData";
 import { BodyLanguage, type BodyPosture } from "./BodyLanguage";
-import { LocomotionRig } from "./LocomotionRig";
+import { LocomotionRig, MIMIC_GAIT_PROFILE } from "./LocomotionRig";
 import { HiderLocomotion } from "./HiderLocomotion";
 import {
   boneIndex,
@@ -770,7 +770,7 @@ export class ForgeController {
   private walkAnchors: readonly AnchorState[] = [];
   private readonly walkPosition = { x: 0, y: 0, z: 0 };
   private readonly bodyLanguage = new BodyLanguage();
-  private readonly gaitRig = new LocomotionRig();
+  private readonly gaitRig = new LocomotionRig(MIMIC_GAIT_PROFILE);
   private readonly postureRotation = new THREE.Quaternion();
   private readonly postureAxis = new THREE.Vector3();
   private readonly postureRoot = new THREE.Vector3();

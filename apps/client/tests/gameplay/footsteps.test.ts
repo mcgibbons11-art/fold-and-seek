@@ -5,6 +5,7 @@ import { WORLD_SCALE } from "../../src/inspector/navData";
 import {
   FootstepDriver,
   RemoteInspectorFootsteps,
+  STRIDE_FACTOR,
   footstepMaterial,
   type MotionSample,
 } from "../../src/gameplay/footsteps";
@@ -78,7 +79,7 @@ describe("FootstepDriver", () => {
   it("plays one footfall per stride travelled", () => {
     const { sink, played } = recorder();
     const driver = new FootstepDriver(sink);
-    const strideM = 0.62 * WORLD_SCALE.playerHeight;
+    const strideM = STRIDE_FACTOR * WORLD_SCALE.playerHeight;
     // Exactly four strides' worth of walking, in 100 ms frames.
     const seconds = (strideM * 4) / WALK_SPEED;
     const frames = Math.round((seconds * 1_000) / 100);

@@ -4,7 +4,7 @@ import * as THREE from "three/webgpu";
 
 import { distanceGain } from "../audio/distance";
 import type { LocomotionSample } from "../forge/BodyLanguage";
-import { LocomotionRig } from "../forge/LocomotionRig";
+import { LocomotionRig, MIMIC_GAIT_PROFILE } from "../forge/LocomotionRig";
 import type { AABB } from "../inspector/navData";
 import type { InspectableProxy } from "../inspector/FocusSystem";
 import {
@@ -701,7 +701,9 @@ export class DisguiseTheatre {
       visual,
       merged: new MergedMimicBody(visual),
       pose: createPoseState(),
-      motion: new LocomotionRig(),
+      // The same profile the owner's own body walks with, so a mimic strides
+      // identically on its owner's screen and on everyone else's.
+      motion: new LocomotionRig(MIMIC_GAIT_PROFILE),
       bounds,
       proxy: {
         objectId: publicObjectId,

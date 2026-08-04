@@ -195,7 +195,18 @@ describe("the walking gait", () => {
       creeping.update(FRAME_SECONDS, { ...CREEPING, speedFraction: 0 }, 0);
     }
     expect(creeping.angles.kneeL).toBeGreaterThan(15 * DEG_TO_RAD);
-    expect(running().angles.kneeL).toBeLessThan(creeping.angles.kneeL);
+    // A running knee passes near straight every cycle as the leg takes weight;
+    // a single frame of it can be mid-lift, so read the cycle's minimum.
+    const runner = running();
+    let straightest = Infinity;
+    const cycleFrames = Math.round(
+      (WORLD_SCALE.playerHeight * STRIDE_FACTOR * 2) / RUN_SPEED / FRAME_SECONDS,
+    );
+    for (let frame = 0; frame < cycleFrames; frame += 1) {
+      runner.update(FRAME_SECONDS, RUNNING, RUN_SPEED);
+      straightest = Math.min(straightest, runner.angles.kneeL);
+    }
+    expect(straightest).toBeLessThan(creeping.angles.kneeL);
   });
 
   it("takes more steps per metre creeping than running", () => {

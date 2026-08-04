@@ -1,6 +1,6 @@
 import * as THREE from "three/webgpu";
 
-import { LocomotionRig } from "../forge/LocomotionRig";
+import { LocomotionRig, INSPECTOR_GAIT_PROFILE } from "../forge/LocomotionRig";
 import type { LocomotionSample } from "../forge/BodyLanguage";
 import { InspectorAvatar } from "./InspectorAvatar";
 import { WORLD_SCALE } from "./navData";
@@ -150,7 +150,10 @@ const AIM_TORSO_TWIST_RAD = 0.16;
  * frame of animation nobody at this scale can resolve.
  */
 const COAT_TRAIL_RAD = 0.16;
-const COAT_ROLL_SHARE = 1.6;
+// 1.6 was the sauce (2026-08-04, user verdict): the coat amplified every
+// degree of pelvis roll into a strut. With the roll itself now halved by the
+// Inspector's gait profile, the hem follows the hips one-to-one.
+const COAT_ROLL_SHARE = 1.0;
 
 /**
  * The shop's palette (§17.3), which the gun already borrows from: midnight blue
@@ -222,7 +225,7 @@ export class InspectorBody {
   private readonly upperArmR: THREE.Mesh;
   private readonly forearmR: THREE.Mesh;
 
-  private readonly gait = new LocomotionRig();
+  private readonly gait = new LocomotionRig(INSPECTOR_GAIT_PROFILE);
   private readonly meshList: THREE.Mesh[] = [];
   private readonly materials: THREE.Material[] = [];
   private readonly geometries: THREE.BufferGeometry[] = [];

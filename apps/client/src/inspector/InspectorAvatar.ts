@@ -48,6 +48,63 @@ export function sanitizeInspectorClip(clip: THREE.AnimationClip): THREE.Animatio
   return clip;
 }
 
+/**
+ * How much of each sway bone's oscillation the run keeps (2026-08-04, user
+ * verdict: the Inspector "looks super saucy running around"). The Mixamo run
+ * carries a pronounced hip roll and counter-rotating shoulders; the flat clip
+ * weight cannot remove them without also gutting the leg stride. Instead each
+ * listed bone's rotation keys are pulled toward their loop-average, which
+ * keeps the running posture (the constant part) and shrinks only the sway
+ * (the oscillating part). Bones are matched by lowercased substring.
+ */
+export const INSPECTOR_RUN_SWAY_KEEP: ReadonlyArray<readonly [bone: string, keep: number]> = [
+  ["hips", 0.45],
+  ["spine", 0.5],
+  ["shoulder", 0.65],
+];
+
+/** Damps the run clip's torso swagger in place; other clips pass through. */
+export function calmInspectorRunClip(clip: THREE.AnimationClip): THREE.AnimationClip {
+  if (clip.name !== "run") return clip;
+  const key = new THREE.Quaternion();
+  const average = new THREE.Quaternion();
+  const calmed = new THREE.Quaternion();
+  for (const track of clip.tracks) {
+    if (!(track instanceof THREE.QuaternionKeyframeTrack)) continue;
+    const name = track.name.toLowerCase().replaceAll("_", "");
+    const entry = INSPECTOR_RUN_SWAY_KEEP.find(([bone]) => name.includes(bone));
+    if (entry === undefined) continue;
+    const keep = entry[1];
+    const values = track.values;
+    if (values.length < 4) continue;
+
+    // Average the keys with their signs aligned to the first, so antipodal
+    // quaternion pairs cannot cancel each other into a meaningless mean.
+    average.fromArray(values, 0);
+    let x = 0;
+    let y = 0;
+    let z = 0;
+    let w = 0;
+    for (let i = 0; i < values.length; i += 4) {
+      key.fromArray(values, i);
+      if (key.dot(average) < 0) key.set(-key.x, -key.y, -key.z, -key.w);
+      x += key.x;
+      y += key.y;
+      z += key.z;
+      w += key.w;
+    }
+    average.set(x, y, z, w).normalize();
+
+    for (let i = 0; i < values.length; i += 4) {
+      key.fromArray(values, i);
+      if (key.dot(average) < 0) key.set(-key.x, -key.y, -key.z, -key.w);
+      calmed.slerpQuaternions(average, key, keep);
+      calmed.toArray(values, i);
+    }
+  }
+  return clip;
+}
+
 /** Locomotion choice is kept pure so the gameplay thresholds stay testable. */
 export function inspectorActionForFrame(
   frame: InspectorBodyFrame,
@@ -153,7 +210,10 @@ export class InspectorAvatar {
       });
 
       for (const clip of gltf.animations) {
-        this.actions.set(clip.name, this.mixer.clipAction(sanitizeInspectorClip(clip)));
+        this.actions.set(
+          clip.name,
+          this.mixer.clipAction(calmInspectorRunClip(sanitizeInspectorClip(clip))),
+        );
       }
       for (const required of [
         "rifle-idle",

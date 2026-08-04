@@ -73,6 +73,63 @@ const HEAD_COUNTER_SHARE = 0.55;
 const PELVIS_ROLL_RAD = 5 * DEG_TO_RAD;
 
 /**
+ * Per-role amplitude scaling over the shared gait (2026-08-04, user verdict:
+ * "the Inspector looks super saucy, the Mimic is tip-toeing"). One rig serves
+ * both bodies, so the difference between a curator's composed walk and a
+ * little machine striding with intent lives here rather than in two forks of
+ * the same arithmetic. Ones mean the authored base gait.
+ */
+export interface GaitProfile {
+  readonly hip: number;
+  readonly knee: number;
+  readonly ankle: number;
+  readonly arm: number;
+  readonly torsoTwist: number;
+  readonly pelvisRoll: number;
+  readonly sink: number;
+}
+
+const BASE_GAIT_PROFILE: GaitProfile = {
+  hip: 1,
+  knee: 1,
+  ankle: 1,
+  arm: 1,
+  torsoTwist: 1,
+  pelvisRoll: 1,
+  sink: 1,
+};
+
+/**
+ * The Mimic strides: bigger reach, feet picked up, real weight dropping into
+ * each step. The hip lands near 36 degrees, still shy of the splits the
+ * comment above warns about.
+ */
+export const MIMIC_GAIT_PROFILE: GaitProfile = {
+  hip: 1.16,
+  knee: 1.12,
+  ankle: 1.2,
+  arm: 1.1,
+  torsoTwist: 1,
+  pelvisRoll: 1.3,
+  sink: 1.7,
+};
+
+/**
+ * The Inspector walks composed: hips nearly level, the trunk quiet, the arm
+ * swing reduced to what a man holding a gun spares. Most of what read as
+ * swagger was pelvis roll amplified through the coat.
+ */
+export const INSPECTOR_GAIT_PROFILE: GaitProfile = {
+  hip: 0.95,
+  knee: 1,
+  ankle: 1,
+  arm: 0.65,
+  torsoTwist: 0.45,
+  pelvisRoll: 0.45,
+  sink: 0.8,
+};
+
+/**
  * How far the hips sink at the splayed point of the stride, as a share of body
  * height. Downward only: a bob that also lifted would take the feet off the
  * boards, and there is no foot planting here to put them back.
@@ -251,6 +308,12 @@ export class LocomotionRig {
    * authored pose would move them out from under a pointer that had just
    * reached one, and the body would flicker between the two as it was swept.
    */
+  private readonly profile: GaitProfile;
+
+  constructor(profile: GaitProfile = BASE_GAIT_PROFILE) {
+    this.profile = profile;
+  }
+
   private readonly active = new Blend(BLEND_EPSILON);
   /** How much of the walking gait is showing, against a body standing still. */
   private readonly gait = new Blend(BLEND_EPSILON);
@@ -405,22 +468,27 @@ export class LocomotionRig {
     const grounded = 1 - airborne;
     const a = this.live;
 
-    a.hipL = -HIP_SWING_RAD * swing * gaitScale;
-    a.hipR = HIP_SWING_RAD * swing * gaitScale;
-    a.kneeL = (KNEE_BASE_RAD + KNEE_LIFT_RAD * liftL) * gaitScale;
-    a.kneeR = (KNEE_BASE_RAD + KNEE_LIFT_RAD * liftR) * gaitScale;
-    a.ankleL = ANKLE_SWING_RAD * (liftL - 0.5) * 2 * gaitScale;
-    a.ankleR = ANKLE_SWING_RAD * (liftR - 0.5) * 2 * gaitScale;
-    a.armL = ARM_SWING_RAD * swing * gaitScale;
-    a.armR = -ARM_SWING_RAD * swing * gaitScale;
-    a.elbowL = -(ELBOW_BASE_RAD + ELBOW_SWING_RAD * Math.max(0, swing)) * gaitScale;
-    a.elbowR = -(ELBOW_BASE_RAD + ELBOW_SWING_RAD * Math.max(0, -swing)) * gaitScale;
-    a.pelvisRoll = PELVIS_ROLL_RAD * swing * gaitScale;
-    a.torsoTwist = TORSO_TWIST_RAD * swing * gaitScale;
+    const shape = this.profile;
+    a.hipL = -HIP_SWING_RAD * shape.hip * swing * gaitScale;
+    a.hipR = HIP_SWING_RAD * shape.hip * swing * gaitScale;
+    a.kneeL = (KNEE_BASE_RAD + KNEE_LIFT_RAD * shape.knee * liftL) * gaitScale;
+    a.kneeR = (KNEE_BASE_RAD + KNEE_LIFT_RAD * shape.knee * liftR) * gaitScale;
+    a.ankleL = ANKLE_SWING_RAD * shape.ankle * (liftL - 0.5) * 2 * gaitScale;
+    a.ankleR = ANKLE_SWING_RAD * shape.ankle * (liftR - 0.5) * 2 * gaitScale;
+    a.armL = ARM_SWING_RAD * shape.arm * swing * gaitScale;
+    a.armR = -ARM_SWING_RAD * shape.arm * swing * gaitScale;
+    a.elbowL = -(ELBOW_BASE_RAD + ELBOW_SWING_RAD * Math.max(0, swing)) * shape.arm * gaitScale;
+    a.elbowR = -(ELBOW_BASE_RAD + ELBOW_SWING_RAD * Math.max(0, -swing)) * shape.arm * gaitScale;
+    a.pelvisRoll = PELVIS_ROLL_RAD * shape.pelvisRoll * swing * gaitScale;
+    a.torsoTwist = TORSO_TWIST_RAD * shape.torsoTwist * swing * gaitScale;
     // Legs together at the top of the sine, splayed at its quarters: the hips
     // are lowest when the stride is widest.
     a.sinkM =
-      WORLD_SCALE.playerHeight * GAIT_SINK_BODY_SHARE * (0.5 - 0.5 * Math.cos(2 * phase)) * gaitScale;
+      WORLD_SCALE.playerHeight *
+      GAIT_SINK_BODY_SHARE *
+      shape.sink *
+      (0.5 - 0.5 * Math.cos(2 * phase)) *
+      gaitScale;
 
     // The crouch a creep holds on top of its shortened stride, and the fold the
     // body takes as it lands. Both are carried whether or not it is stepping.

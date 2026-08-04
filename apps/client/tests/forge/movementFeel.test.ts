@@ -685,8 +685,8 @@ describe("the footstep seam reads real locomotion state", () => {
   });
 
   it("is fed by a body whose speed ramps rather than stepping", () => {
-    // The driver counts distance, so the ramp shows up as fewer footfalls over
-    // the first second than over a second at speed.
+    // The driver counts distance, so a body still gathering speed takes longer
+    // to earn its first footfall than a body at speed takes between two.
     const controller = new CharacterController(openNavData(), () => HIDER_FORGE_RUN_SPEED);
     controller.teleportTo({ position: { x: 0, y: 0, z: 0 }, yaw: FACING_NORTH });
     const input = createMoveInput();
@@ -694,15 +694,14 @@ describe("the footstep seam reads real locomotion state", () => {
 
     const ear = new Ear();
     const driver = new FootstepDriver(ear);
-    for (let frame = 0; frame < 60; frame += 1) {
+    const arrivals: number[] = [];
+    for (let frame = 0; frame < 120; frame += 1) {
       controller.update(FRAME_SECONDS, input);
       driver.update(FRAME_MS, controller);
+      if (ear.heard.length > arrivals.length) arrivals.push(frame);
     }
-    const first = ear.heard.length;
-    for (let frame = 0; frame < 60; frame += 1) {
-      controller.update(FRAME_SECONDS, input);
-      driver.update(FRAME_MS, controller);
-    }
-    expect(ear.heard.length - first).toBeGreaterThan(first);
+    expect(arrivals.length).toBeGreaterThan(2);
+    const steadyGap = arrivals[arrivals.length - 1]! - arrivals[arrivals.length - 2]!;
+    expect(arrivals[0]!).toBeGreaterThan(steadyGap);
   });
 });

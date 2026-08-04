@@ -149,7 +149,12 @@ export function footstepMaterial(surfaceId: string | null): FootstepMaterial {
  * and the audible one have to land together, and they cannot if each carries
  * its own number.
  */
-export const STRIDE_FACTOR = 0.62;
+// Raised 0.62 -> 0.78 (2026-08-04, user verdict): at 0.62 both bodies took
+// quick pattery steps - the Mimic read as tip-toeing and the Inspector's hips
+// oscillated at a strut. Longer footfalls slow the sway and give each step
+// weight, and the audio cadence follows automatically because it is this
+// same number.
+export const STRIDE_FACTOR = 0.78;
 /** Below this share of body height per second, nobody is walking. */
 const MIN_SPEED_FACTOR = 0.3;
 const FOOTSTEP_PITCH_JITTER = 0.12;
