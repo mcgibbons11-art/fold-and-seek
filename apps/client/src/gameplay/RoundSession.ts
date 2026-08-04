@@ -6,6 +6,7 @@ import { getMusicEngine, musicSceneForPhase } from "../audio/music";
 import { SoundCaptionLedger, type SoundCaption } from "../audio/soundCaptions";
 import { SpatialAudioPlayer, getSpatialAudioRuntime } from "../audio/SpatialAudioPlayer";
 import { WorldAmbienceEmitters } from "../audio/WorldAmbienceEmitters";
+import { trySetPointerCapture } from "../engine/pointerCapture";
 import { AudioPlayer, type SoundId } from "../forge/AudioPlayer";
 import { ForgeController } from "../forge/ForgeController";
 import { SHOP_FORGE_WORKSPACE } from "../world/ShopWorld";
@@ -1183,7 +1184,7 @@ export class RoundSession {
     this.surveyPointerId = event.pointerId;
     this.surveyLastX = event.clientX;
     this.surveyIdleMs = 0;
-    this.options.canvas.setPointerCapture?.(event.pointerId);
+    trySetPointerCapture(this.options.canvas, event.pointerId);
   };
 
   private readonly onSurveyPointerMove = (event: PointerEvent): void => {

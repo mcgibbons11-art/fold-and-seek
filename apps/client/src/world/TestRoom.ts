@@ -1,5 +1,6 @@
 import * as THREE from "three/webgpu";
 import { DisposalBag } from "../engine/DisposalBag";
+import { tryReleasePointerCapture, trySetPointerCapture } from "../engine/pointerCapture";
 import type { QualitySettings } from "../rendering/quality";
 
 const ROOM_HALF = 4;
@@ -507,7 +508,7 @@ export class TestRoom {
       this.dragPointerId = event.pointerId;
       this.lastPointerX = event.clientX;
       this.lastPointerY = event.clientY;
-      element.setPointerCapture(event.pointerId);
+      trySetPointerCapture(element, event.pointerId);
     };
 
     const onPointerMove = (event: PointerEvent): void => {
@@ -530,9 +531,7 @@ export class TestRoom {
       }
       this.dragging = false;
       this.dragPointerId = -1;
-      if (element.hasPointerCapture(event.pointerId)) {
-        element.releasePointerCapture(event.pointerId);
-      }
+      tryReleasePointerCapture(element, event.pointerId);
     };
 
     const onWheel = (event: WheelEvent): void => {

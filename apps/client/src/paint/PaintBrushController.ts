@@ -1,5 +1,6 @@
 import * as THREE from "three/webgpu";
 
+import { tryReleasePointerCapture, trySetPointerCapture } from "../engine/pointerCapture";
 import type { PaintLayer, PaintStroke } from "./PaintLayer";
 import { normalizeTargetUv, paintTargetOfObject } from "./paintTargets";
 
@@ -179,7 +180,7 @@ export class PaintBrushController {
       this.lastPointerX = event.clientX;
       this.lastPointerY = event.clientY;
       this.lastPointerAtMs = performance.now();
-      this.options.canvas.setPointerCapture(event.pointerId);
+      trySetPointerCapture(this.options.canvas, event.pointerId);
       this.hasPendingSample = false;
       this.options.onStrokeStart?.();
       this.options.onStrokeUpdate?.(0);
@@ -207,9 +208,7 @@ export class PaintBrushController {
     const onPointerUp = (event: PointerEvent): void => {
       if (event.pointerId !== this.pointerId) return;
       this.flushPendingSample();
-      if (this.options.canvas.hasPointerCapture(event.pointerId)) {
-        this.options.canvas.releasePointerCapture(event.pointerId);
-      }
+      tryReleasePointerCapture(this.options.canvas, event.pointerId);
       this.pointerId = -1;
       this.options.onStrokeUpdate?.(0);
       this.options.onStrokeEnd?.();
@@ -244,9 +243,7 @@ export class PaintBrushController {
     this.active = false;
     const wasPainting = this.pointerId >= 0;
     if (wasPainting) this.flushPendingSample();
-    if (wasPainting && this.options.canvas.hasPointerCapture(this.pointerId)) {
-      this.options.canvas.releasePointerCapture(this.pointerId);
-    }
+    if (wasPainting) tryReleasePointerCapture(this.options.canvas, this.pointerId);
     this.pointerId = -1;
     if (wasPainting) this.options.onStrokeUpdate?.(0);
     this.hideCursor();

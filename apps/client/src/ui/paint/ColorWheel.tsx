@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, type CSSProperties, type ReactElement } from "react";
 
+import { tryReleasePointerCapture, trySetPointerCapture } from "../../engine/pointerCapture";
 import { hsvToRgb, type Hsv } from "../../paint/color";
 
 /**
@@ -107,7 +108,7 @@ export function ColorWheel(props: ColorWheelProps): ReactElement {
         style={wheelStyle}
         onPointerDown={(event) => {
           draggingRef.current = true;
-          event.currentTarget.setPointerCapture(event.pointerId);
+          trySetPointerCapture(event.currentTarget, event.pointerId);
           pick(event.clientX, event.clientY);
         }}
         onPointerMove={(event) => {
@@ -115,9 +116,7 @@ export function ColorWheel(props: ColorWheelProps): ReactElement {
         }}
         onPointerUp={(event) => {
           draggingRef.current = false;
-          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-          }
+          tryReleasePointerCapture(event.currentTarget, event.pointerId);
         }}
       />
       <span

@@ -85,9 +85,9 @@ export class RemoteInspectorFootsteps {
     const clip = variations[index];
     if (clip === undefined) return;
     this.audio.playAt(clip, sample.position, {
-      gain: 0.72,
+      gain: 0.42,
       pitch: 1 + (((index % 3) - 1) * FOOTSTEP_PITCH_JITTER) / 2,
-      minimumGain: 0.035,
+      minimumGain: 0.015,
     });
     this.onEvent?.({
       kind: "footstep",
@@ -285,7 +285,7 @@ export class FootstepDriver {
     const index = this.nextVariation[material];
     this.nextVariation[material] = (index + 1) % variations.length;
     const clip = variations[index];
-    if (clip !== undefined) this.audio.play(clip, FOOTSTEP_PITCH_JITTER);
+    if (clip !== undefined) this.audio.play(clip, FOOTSTEP_PITCH_JITTER, 0.48);
   }
 
   /** A capped hider shifting position, which is a scrape and not a footfall. */

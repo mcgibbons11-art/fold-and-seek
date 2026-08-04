@@ -331,6 +331,28 @@ describe("creeping during the hunt", () => {
     expect(surfaceAt(NAV_DATA.floors, root.x, root.z, root.y + WORLD_SCALE.stepHeight)).not.toBeNull();
   });
 
+  it("walks out the side of an open display shelf without an invisible post wall", () => {
+    const shelf = NAV_DATA.floors.find((surface) => surface.id === "cabinet_1_shelf_1");
+    if (shelf === undefined) throw new Error("the first display shelf is missing");
+    const root = at(
+      (shelf.bounds.min.x + shelf.bounds.max.x) * 0.5,
+      shelf.bounds.max.y,
+      (shelf.bounds.min.z + shelf.bounds.max.z) * 0.5,
+    );
+    const locomotion = creeper(NAV_DATA);
+
+    // Yaw -pi/2 faces +X, through the bookcase's short side.
+    hold(locomotion, ["w"], 4, root, -Math.PI / 2);
+
+    expect(root.x, JSON.stringify({ root, motion: {
+      grounded: locomotion.motion.grounded,
+      surfaceId: locomotion.motion.surfaceId,
+      resolution: locomotion.motion.lastResolution,
+    } })).toBeGreaterThan(shelf.bounds.max.x + WORLD_SCALE.playerRadius);
+    expect(root.y).toBeLessThan(shelf.bounds.max.y);
+    expect(locomotion.motion.climbState).toBeNull();
+  });
+
   it("does not creep a disguise that is standing on nothing", () => {
     // A wall mount hangs at chest height over the shop floor. There is nothing
     // underfoot to creep along, so the keys do nothing rather than dropping it.

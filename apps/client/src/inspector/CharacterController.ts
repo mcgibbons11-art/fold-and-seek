@@ -370,7 +370,7 @@ export class CharacterController {
     // this before an ordinary jump is essential, otherwise an authored ledge
     // turns the body airborne before its link ever gets a chance to attach.
     const startedClimb =
-      this.grounded &&
+      (this.grounded || this.verticalVelocity > 0) &&
       input.forward > 0 &&
       input.jump &&
       this.jumpActionArmed &&
@@ -667,8 +667,14 @@ export class CharacterController {
     }
     if (nextY <= floorTop) {
       this.position.y = floorTop;
+      this.separateLandingFromBlockers(floorTop);
       this.land();
-      this.surfaceId = below.id;
+      this.surfaceId = surfaceAt(
+        this.navData.floors,
+        this.position.x,
+        this.position.z,
+        floorTop + INSPECTOR_STEP_HEIGHT_M,
+      )?.id ?? below.id;
       return;
     }
     this.position.y = nextY;
@@ -713,6 +719,69 @@ export class CharacterController {
       if (top === null || blockerTop > top) top = blockerTop;
     }
     return top;
+  }
+
+  /**
+   * Resolves the capsule outward when a ledge fall lands beside the support it
+   * just left. The centre clears a shelf before the whole capsule does; without
+   * this separation the lower base becomes a wall around an already-overlapping
+   * body and every subsequent WASD step is refused forever.
+   */
+  private separateLandingFromBlockers(feetY: number): void {
+    const epsilon = 1e-4;
+    for (let pass = 0; pass < 4; pass += 1) {
+      if (
+        !blocksCapsule(
+          this.navData.blockers,
+          this.position.x,
+          this.position.z,
+          feetY,
+          INSPECTOR_RADIUS_M,
+          INSPECTOR_HEIGHT_M,
+          INSPECTOR_STEP_HEIGHT_M,
+        )
+      ) return;
+
+      let best: { x: number; z: number; distanceSq: number } | null = null;
+      for (const blocker of this.navData.blockers) {
+        if (blocker.max.y <= feetY + INSPECTOR_STEP_HEIGHT_M) continue;
+        if (blocker.min.y >= feetY + INSPECTOR_HEIGHT_M) continue;
+        if (!containsXZ(blocker, this.position.x, this.position.z, INSPECTOR_RADIUS_M)) continue;
+        const candidates = [
+          { x: blocker.min.x - INSPECTOR_RADIUS_M - epsilon, z: this.position.z },
+          { x: blocker.max.x + INSPECTOR_RADIUS_M + epsilon, z: this.position.z },
+          { x: this.position.x, z: blocker.min.z - INSPECTOR_RADIUS_M - epsilon },
+          { x: this.position.x, z: blocker.max.z + INSPECTOR_RADIUS_M + epsilon },
+        ];
+        for (const candidate of candidates) {
+          const ground = surfaceAt(
+            this.navData.floors,
+            candidate.x,
+            candidate.z,
+            feetY + INSPECTOR_STEP_HEIGHT_M,
+          );
+          if (ground === null || Math.abs(ground.bounds.max.y - feetY) > WORLD_SCALE.groundSnap) continue;
+          if (
+            blocksCapsule(
+              this.navData.blockers,
+              candidate.x,
+              candidate.z,
+              feetY,
+              INSPECTOR_RADIUS_M,
+              INSPECTOR_HEIGHT_M,
+              INSPECTOR_STEP_HEIGHT_M,
+            )
+          ) continue;
+          const dx = candidate.x - this.position.x;
+          const dz = candidate.z - this.position.z;
+          const distanceSq = dx * dx + dz * dz;
+          if (best === null || distanceSq < best.distanceSq) best = { ...candidate, distanceSq };
+        }
+      }
+      if (best === null) return;
+      this.position.x = best.x;
+      this.position.z = best.z;
+    }
   }
 
   /**
@@ -869,7 +938,10 @@ export class CharacterController {
       // on it), not approaching one of its faces.
       if (distanceSq < MIN_AXIS_FRACTION || distanceSq > activationSq) continue;
       const distance = Math.sqrt(distanceSq);
-      if ((headingX * dx + headingZ * dz) / distance < 0.45) continue;
+      // A broad forward hemisphere is intentional: third-person camera aim is
+      // imprecise at this scale, and forcing a near-normal approach made valid
+      // shelf faces feel randomly unresponsive.
+      if ((headingX * dx + headingZ * dz) / distance < 0.15) continue;
 
       candidates.push({ index, distanceSq, faceX, faceZ });
     }

@@ -193,13 +193,15 @@ describe("the hop", () => {
     expect(inBand.length).toBeGreaterThan(0);
   });
 
-  it("reaches nothing in the shop that can be stood on", () => {
-    // The invariant, taken from the map: no walkable surface a body could climb
-    // onto is within a hop's reach of the floor it would hop from. Retuning
-    // either the hop or the map's lowest ledge fails here rather than quietly
-    // handing the player a shortcut past the climb links.
+  it("reaches only the open bookcase thresholds rather than a hiding ledge", () => {
+    // The cabinet bases are deliberate low thresholds into the newly open
+    // shelves. Everything that is actually a hiding ledge remains beyond a
+    // hop, so jumping cannot bypass the authored shelf routes.
+    const thresholds = WALKABLE_SURFACES.filter((entry) => /cabinet_\d+_base/.test(entry.id));
+    expect(thresholds).toHaveLength(4);
+    expect(Math.max(...thresholds.map((entry) => entry.bounds.max.y))).toBeLessThan(HOP_REACH_M);
     const elevated = WALKABLE_SURFACES.filter(
-      (entry) => entry.bounds.max.y > WORLD_SCALE.stepHeight,
+      (entry) => entry.bounds.max.y > WORLD_SCALE.stepHeight && !thresholds.includes(entry),
     );
     expect(elevated.length).toBeGreaterThan(20);
 

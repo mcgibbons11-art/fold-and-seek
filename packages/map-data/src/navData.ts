@@ -69,7 +69,7 @@ export const WORLD_SCALE = {
   mantleSpeed: PLAYER_HEIGHT_M * 2.4,
   ladderSpeed: PLAYER_HEIGHT_M * 1.55,
   /** How near a link's endpoint the player must be to start climbing. */
-  climbActivationRadius: PLAYER_HEIGHT_M * 0.43,
+  climbActivationRadius: PLAYER_HEIGHT_M * 0.7,
 } as const;
 
 export const INSPECTOR_RADIUS_M = WORLD_SCALE.playerRadius;

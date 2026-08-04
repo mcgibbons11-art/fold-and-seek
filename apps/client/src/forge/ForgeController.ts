@@ -2,6 +2,7 @@ import { Vector3 as CoreVector3 } from "three";
 import * as THREE from "three/webgpu";
 
 import { DisposalBag } from "../engine/DisposalBag";
+import { tryReleasePointerCapture, trySetPointerCapture } from "../engine/pointerCapture";
 import { LoopingSoundVoice } from "../audio/LoopingSoundVoice";
 import type { AnchorState } from "../mimic/disguiseState";
 import {
@@ -3228,7 +3229,7 @@ export class ForgeController {
       }
       if (this.cameraDrag !== null || this.draggedHandle !== null) {
         this.dragPointerId = event.pointerId;
-        this.canvas.setPointerCapture(event.pointerId);
+        trySetPointerCapture(this.canvas, event.pointerId);
       }
     };
 
@@ -3288,9 +3289,7 @@ export class ForgeController {
       }
       this.cameraDrag = null;
       this.pointerGestureDirty = false;
-      if (this.dragPointerId >= 0 && this.canvas.hasPointerCapture(this.dragPointerId)) {
-        this.canvas.releasePointerCapture(this.dragPointerId);
-      }
+      if (this.dragPointerId >= 0) tryReleasePointerCapture(this.canvas, this.dragPointerId);
       this.dragPointerId = -1;
     };
 
@@ -3405,9 +3404,7 @@ export class ForgeController {
     }
     this.cameraDrag = null;
     this.pointerGestureDirty = false;
-    if (this.dragPointerId >= 0 && this.canvas.hasPointerCapture(this.dragPointerId)) {
-      this.canvas.releasePointerCapture(this.dragPointerId);
-    }
+    if (this.dragPointerId >= 0) tryReleasePointerCapture(this.canvas, this.dragPointerId);
     this.dragPointerId = -1;
     this.canvas.style.cursor = "default";
   }

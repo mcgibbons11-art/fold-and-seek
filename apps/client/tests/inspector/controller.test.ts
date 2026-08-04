@@ -267,6 +267,23 @@ describe("InspectorController climbing", () => {
     expect(controller.surfaceId).toBe("solid_top_0");
   });
 
+  it("buffers an early Space press and latches during the rising hop", () => {
+    const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.5, 0);
+
+    // Start outside the solid-face range. Space first produces a hop; holding
+    // W+Space must still attach on approach instead of demanding a second,
+    // perfectly timed key press.
+    walkUntil(
+      controller,
+      { forward: 1, jump: true },
+      (current) => current.climbState !== null,
+      60,
+    );
+
+    expect(controller.climbState?.link.to).toBe("solid_top_0");
+    expect(controller.position.y).toBeGreaterThan(0);
+  });
+
   it("stays out of climb mode after a procedural top-out until Jump is released", () => {
     const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.78, 0);
     walkUntil(
