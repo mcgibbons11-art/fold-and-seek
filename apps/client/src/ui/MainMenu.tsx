@@ -162,6 +162,12 @@ function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
             <ScoreRow label={`… each consecutive watched taunt`} value={`+${SCORE_MIMIC_TAUNT_STREAK_STEP} extra`} />
             <ScoreRow label="Never caught at the final bell" value={`+${SCORE_MIMIC_FULL_ROUND_SURVIVAL}`} />
             <ScoreRow label="Each style award vote" value={`+${SCORE_MIMIC_PER_PEER_STYLE_VOTE}`} />
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.6, lineHeight: 1.6 }}>
+              You stay live through the hunt: keep reshaping and painting,
+              creep (your speed is capped and movement is what gives you away),
+              and bait. The Being Watched meter shows how hard someone is
+              looking at you.
+            </div>
           </div>
         </div>
         <div style={{ ...plate(), borderRadius: 10, padding: "12px 16px" }}>
@@ -175,7 +181,11 @@ function HowToPlay({ onBack }: { readonly onBack: () => void }): ReactElement {
             <ScoreRow label="Each distinct object examined" value={`+${SCORE_INSPECTOR_PER_FOCUSED_OBJECT}`} />
             <div style={{ marginTop: 10, fontSize: 12, opacity: 0.6, lineHeight: 1.6 }}>
               A wrong shot also loses the warrant, and the hunt ends on the
-              clock — hiders win whatever ammunition remains.
+              clock — hiders win whatever ammunition remains. The curator's
+              instinct whispers twice: a census as the hunt opens and, at the
+              midpoint, how many hiders you have already brushed past. One
+              spent warrant can be refilled at the case on the wall gallery,
+              once, in the hunt's second half.
             </div>
           </div>
         </div>

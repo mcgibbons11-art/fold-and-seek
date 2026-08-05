@@ -23,18 +23,21 @@ const GENERAL_HOTKEYS: readonly ControlHint[] = [
 
 const FORGE_HOTKEYS: readonly ControlHint[] = [
   { id: "tools", keys: ["1", "2", "3", "4", "5"], label: "Pose · Shape · Panels · Material · Paint" },
+  { id: "pose-grab", keys: ["LMB"], label: "Pose: drag any part of your body — the nearest joint follows" },
+  { id: "resize", keys: ["LMB"], label: "Shape: drag the red/green/blue arrows to resize along that axis" },
+  { id: "multi", keys: ["Shift", "LMB"], label: "Shape: add parts to the selection; the arrows resize them together" },
   { id: "cycle-tools", keys: ["Tab"], label: "Cycle tools (Shift reverses)" },
   { id: "cycle-preset", keys: ["R"], label: "Cycle the active pose, shape, or panel option (Shift reverses)" },
   { id: "quick-preset", keys: ["Shift", "1–5"], label: "Apply a quick pose or selected-part preset" },
   { id: "mirror", keys: ["M"], label: "Mirror every supported edit live" },
-  { id: "eyedropper", keys: ["F"], label: "Copy a material or paint colour" },
+  { id: "eyedropper", keys: ["F"], label: "Sample a material or colour — hold F and click to sample what you click, your own parts included" },
   { id: "eraser", keys: ["X"], label: "Toggle the paint eraser" },
   { id: "brush", keys: ["−", "+"], label: "Shrink or grow the circular spray" },
   { id: "preview", keys: ["E"], label: "Hold Inspector-eye preview" },
   { id: "silhouette", keys: ["V"], label: "Toggle silhouette view" },
   { id: "arrangement", keys: ["[", "]"], label: "Previous or next whole-body arrangement" },
   { id: "undo", keys: ["Ctrl", "Z / Y"], label: "Undo or redo" },
-  { id: "lock", keys: ["Enter"], label: "Lock the disguise" },
+  { id: "lock", keys: ["Enter"], label: "Lock the disguise · Esc reopens it, even mid-hunt" },
 ];
 
 const INSPECTOR_HOTKEYS: readonly ControlHint[] = [
@@ -43,6 +46,11 @@ const INSPECTOR_HOTKEYS: readonly ControlHint[] = [
   { id: "fire", keys: ["LMB"], label: "Fire a warrant" },
   { id: "aim", keys: ["RMB"], label: "Aim" },
   { id: "pointer", keys: ["Esc"], label: "Release the mouse" },
+];
+
+const SPECTATOR_HOTKEYS: readonly ControlHint[] = [
+  { id: "follow", keys: ["F"], label: "Caught: camera rides the Inspector" },
+  { id: "roam", keys: ["W", "A", "S", "D"], label: "Caught: roam the free camera; F picks the hunter back up" },
 ];
 
 export interface HotkeyGuideProps {
@@ -68,11 +76,21 @@ export function HotkeyGuide({ role = null }: HotkeyGuideProps): ReactElement {
       </details>
       <details style={detailStyle} open={role === "inspector"}>
         <summary style={sectionStyle}>Inspector</summary>
-        <ControlsLegend hints={[...GENERAL_HOTKEYS.filter((hint) => hint.id === "grapple"), ...INSPECTOR_HOTKEYS]} title={null} />
+        <ControlsLegend
+          hints={[
+            ...GENERAL_HOTKEYS.filter((hint) => ["move", "climb", "grapple"].includes(hint.id)),
+            ...INSPECTOR_HOTKEYS,
+          ]}
+          title={null}
+        />
       </details>
       <details style={detailStyle}>
         <summary style={sectionStyle}>Forge & hotkeys</summary>
         <ControlsLegend hints={FORGE_HOTKEYS} title={null} />
+      </details>
+      <details style={detailStyle} open={role === "spectator"}>
+        <summary style={sectionStyle}>Spectating</summary>
+        <ControlsLegend hints={SPECTATOR_HOTKEYS} title={null} />
       </details>
     </div>
   );

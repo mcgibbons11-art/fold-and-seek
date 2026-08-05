@@ -243,6 +243,8 @@ export interface ForgeHudState {
   readonly canRedo: boolean;
   readonly undoLabel: string | null;
   readonly segment: ForgeSegmentSelection | null;
+  /** How many parts the resize gizmo is driving (shift-click multi-select). */
+  readonly selectedCount: number;
   readonly panel: ForgePanelSelection | null;
   readonly sampledSwatchId: string | null;
   readonly bodySwatchId: string;
@@ -444,6 +446,28 @@ const HANDLE_GRIP_SCALE = 0.5;
 const HANDLE_OPACITY_IDLE = 0.34;
 /** The partner a mirrored edit will move: visible, but secondary to the pointer target. */
 const HANDLE_OPACITY_MIRROR = 0.62;
+
+/**
+ * The Blender-style resize gizmo (2026-08-05): three axis arrows on the
+ * selected segment replace the length/width/depth sliders. The axes live in
+ * the segment's own frame - Y along the bone is length, X is width, Z is
+ * depth - and one full body-height of pull sweeps a parameter end to end.
+ */
+const GIZMO_AXES: ReadonlyArray<{
+  readonly key: "width" | "length" | "depth";
+  readonly color: number;
+  readonly dir: readonly [number, number, number];
+}> = [
+  { key: "width", color: 0xc75b45, dir: [1, 0, 0] },
+  { key: "length", color: 0x6fa05a, dir: [0, 1, 0] },
+  { key: "depth", color: 0x4a8fa8, dir: [0, 0, 1] },
+];
+const GIZMO_SHAFT_LENGTH_M = WORLD_SCALE.playerHeight * 0.44;
+const GIZMO_SHAFT_RADIUS_M = WORLD_SCALE.playerHeight * 0.016;
+const GIZMO_TIP_LENGTH_M = WORLD_SCALE.playerHeight * 0.12;
+const GIZMO_TIP_RADIUS_M = WORLD_SCALE.playerHeight * 0.045;
+const GIZMO_PICK_RADIUS_M = WORLD_SCALE.playerHeight * 0.09;
+const GIZMO_PARAM_PER_METRE = 1 / WORLD_SCALE.playerHeight;
 const HANDLE_OPACITY_HOVER = 0.85;
 const HANDLE_OPACITY_DRAG = 1;
 
@@ -722,6 +746,28 @@ export class ForgeController {
   private status = "Drag a handle to pose. Drag open space to look around.";
   private sampledSwatchId: string | null = null;
   private selectedSlot = -1;
+  /**
+   * Every segment the resize gizmo drives (2026-08-05). Plain click selects
+   * one; shift-click grows the set. `selectedSlot` stays the primary - the
+   * one whose values the panel reads and whose centre carries the gizmo.
+   */
+  private readonly selectedSlots = new Set<number>();
+  /** True while F is held, which turns a material click into a sample. */
+  private sampleKeyHeld = false;
+  private resizeGizmo: THREE.Group | null = null;
+  private gizmoArrows: Array<{
+    key: "width" | "length" | "depth";
+    dir: THREE.Vector3;
+    pick: THREE.Object3D;
+  }> = [];
+  private gizmoDrag: {
+    key: "width" | "length" | "depth";
+    dir: THREE.Vector3;
+    origin: THREE.Vector3;
+    startT: number;
+    startValues: Map<number, number>;
+    before: Map<number, SegmentFormState>;
+  } | null = null;
   private selectedSocket: PanelSocketName | null = null;
   private formEpoch = 0;
   private arrangementIndex = 0;
@@ -1574,6 +1620,7 @@ export class ForgeController {
       canRedo: this.commands.canRedo,
       undoLabel: this.commands.nextUndoLabel,
       segment,
+      selectedCount: segment === null ? 0 : Math.max(1, this.selectedSlots.size),
       panel:
         this.selectedSocket === null
           ? null
@@ -2051,6 +2098,21 @@ export class ForgeController {
 
   /** Samples whatever the pointer is over, the `F` key of §7.5. */
   sampleUnderPointer(): void {
+    // Own body first (2026-08-05): pointing at your own part copies the
+    // swatch it wears, the way paint's dropper reads its own strokes.
+    const slot = this.pickSegmentSlot();
+    const bone = slot >= 0 ? SEGMENT_BONES[slot] : undefined;
+    if (bone !== undefined) {
+      const worn = resolvedSwatchFor(this.state.materials, bone, DEFAULT_BODY_SWATCH_ID);
+      const swatch = swatchById(worn);
+      if (swatch !== null) {
+        this.sampledSwatchId = worn;
+        this.audio.play("material_sample");
+        this.status = `Sampled ${swatch.label} from your ${bone.replaceAll("_", " ")}.`;
+        this.emit();
+        return;
+      }
+    }
     const hit = this.raycastRoom();
     if (hit === null) {
       this.status = "Nothing under the cursor to sample.";
@@ -2354,7 +2416,11 @@ export class ForgeController {
   // --- Internals -----------------------------------------------------------
 
   /** Selection changes reset the HUD controls, so they carry an epoch bump. */
-  private selectSegment(slot: number): void {
+  private selectSegment(slot: number, additive = false): void {
+    if (!additive) {
+      this.selectedSlots.clear();
+      this.selectedSlots.add(slot);
+    }
     if (this.selectedSlot !== slot) {
       this.selectedSlot = slot;
       this.formEpoch += 1;
@@ -3240,6 +3306,179 @@ export class ForgeController {
       );
       handle.pick.scale.setScalar(pickRadius / (radius * emphasis));
     }
+    this.layoutResizeGizmo();
+  }
+
+  /** Builds the three-arrow resize gizmo once, hidden until shape mode. */
+  private ensureResizeGizmo(): THREE.Group {
+    if (this.resizeGizmo !== null) return this.resizeGizmo;
+    const gizmo = new THREE.Group();
+    gizmo.name = "forge.resizeGizmo";
+    gizmo.visible = false;
+    for (const axis of GIZMO_AXES) {
+      const material = new THREE.MeshBasicMaterial({
+        color: axis.color,
+        transparent: true,
+        opacity: 0.92,
+        depthTest: false,
+      });
+      const arrow = new THREE.Group();
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry(GIZMO_SHAFT_RADIUS_M, GIZMO_SHAFT_RADIUS_M, GIZMO_SHAFT_LENGTH_M, 6),
+        material,
+      );
+      shaft.position.y = GIZMO_SHAFT_LENGTH_M / 2;
+      const tip = new THREE.Mesh(
+        new THREE.ConeGeometry(GIZMO_TIP_RADIUS_M, GIZMO_TIP_LENGTH_M, 8),
+        material,
+      );
+      tip.position.y = GIZMO_SHAFT_LENGTH_M + GIZMO_TIP_LENGTH_M / 2;
+      const pick = new THREE.Mesh(
+        new THREE.CylinderGeometry(
+          GIZMO_PICK_RADIUS_M,
+          GIZMO_PICK_RADIUS_M,
+          GIZMO_SHAFT_LENGTH_M + GIZMO_TIP_LENGTH_M,
+          6,
+        ),
+        new THREE.MeshBasicMaterial({ visible: false }),
+      );
+      pick.position.y = (GIZMO_SHAFT_LENGTH_M + GIZMO_TIP_LENGTH_M) / 2;
+      shaft.renderOrder = 30;
+      tip.renderOrder = 30;
+      arrow.add(shaft);
+      arrow.add(tip);
+      arrow.add(pick);
+      const dir = new THREE.Vector3(...axis.dir);
+      // The arrow is authored along +Y; rotate it onto its axis.
+      arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      gizmo.add(arrow);
+      this.gizmoArrows.push({ key: axis.key, dir, pick });
+    }
+    this.handleGroup.add(gizmo);
+    this.resizeGizmo = gizmo;
+    return gizmo;
+  }
+
+  /** Parks the gizmo on the primary segment, in that segment's own frame. */
+  private layoutResizeGizmo(): void {
+    const wanted =
+      this.toolsActive &&
+      this.mode === "shape" &&
+      !this.locked &&
+      this.selectedSlots.size > 0 &&
+      this.mimic.segmentMeshes[this.selectedSlot] !== undefined;
+    const gizmo = wanted ? this.ensureResizeGizmo() : this.resizeGizmo;
+    if (gizmo === null) return;
+    gizmo.visible = wanted;
+    if (!wanted) return;
+    const mesh = this.mimic.segmentMeshes[this.selectedSlot];
+    if (mesh === undefined) return;
+    mesh.getWorldPosition(this.scratchVector);
+    // handleGroup shares the scene's frame, so world coordinates park it.
+    gizmo.position.copy(this.scratchVector);
+    mesh.getWorldQuaternion(gizmo.quaternion);
+  }
+
+  private pickGizmoArrow(): { key: "width" | "length" | "depth"; dir: THREE.Vector3 } | null {
+    if (this.resizeGizmo === null || !this.resizeGizmo.visible) return null;
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const hits = this.raycaster.intersectObjects(
+      this.gizmoArrows.map((arrow) => arrow.pick),
+      false,
+    );
+    const first = hits[0];
+    if (first === undefined) return null;
+    const arrow = this.gizmoArrows.find((entry) => entry.pick === first.object);
+    if (arrow === undefined) return null;
+    const worldDir = arrow.dir.clone().applyQuaternion(this.resizeGizmo.quaternion).normalize();
+    return { key: arrow.key, dir: worldDir };
+  }
+
+  /** Closest-point parameter of the pointer ray along the drag axis line. */
+  private gizmoAxisParam(origin: THREE.Vector3, dir: THREE.Vector3): number {
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const ray = this.raycaster.ray;
+    const w0 = this.scratchVector.copy(origin).sub(ray.origin);
+    const b = dir.dot(ray.direction);
+    const d = dir.dot(w0);
+    const e = ray.direction.dot(w0);
+    const denominator = 1 - b * b;
+    if (Math.abs(denominator) < 1e-6) return d;
+    return (b * e - d) / denominator;
+  }
+
+  /** Every slot a resize drives: the selection, plus mirrors when mirroring. */
+  private resizeTargetSlots(): number[] {
+    const slots = new Set<number>(this.selectedSlots);
+    if (this.mirror) {
+      for (const slot of [...slots]) {
+        const mirrored = mirroredSegmentSlot(slot);
+        if (mirrored >= 0) slots.add(mirrored);
+      }
+    }
+    return [...slots];
+  }
+
+  private beginGizmoDrag(arrow: { key: "width" | "length" | "depth"; dir: THREE.Vector3 }): void {
+    if (this.resizeGizmo === null) return;
+    this.commitEdits();
+    const origin = this.resizeGizmo.position.clone();
+    const startValues = new Map<number, number>();
+    const before = new Map<number, SegmentFormState>();
+    for (const slot of this.resizeTargetSlots()) {
+      const form = this.pose.segments[slot];
+      if (form === undefined) continue;
+      startValues.set(slot, form[arrow.key]);
+      before.set(slot, cloneSegmentForm(form));
+    }
+    if (startValues.size === 0) return;
+    this.gizmoDrag = {
+      key: arrow.key,
+      dir: arrow.dir.clone(),
+      origin,
+      startT: this.gizmoAxisParam(origin, arrow.dir),
+      startValues,
+      before,
+    };
+    this.startManipulationAudio();
+    this.canvas.style.cursor = "grabbing";
+  }
+
+  private updateGizmoDrag(): void {
+    const drag = this.gizmoDrag;
+    if (drag === null) return;
+    const t = this.gizmoAxisParam(drag.origin, drag.dir);
+    const delta = (t - drag.startT) * GIZMO_PARAM_PER_METRE;
+    for (const [slot, start] of drag.startValues) {
+      const form = this.pose.segments[slot];
+      if (form === undefined) continue;
+      form[drag.key] = clamp(start + delta, 0, 1);
+    }
+    this.pendingValueRefresh = "solve";
+  }
+
+  private endGizmoDrag(): void {
+    const drag = this.gizmoDrag;
+    if (drag === null) return;
+    this.gizmoDrag = null;
+    this.stopManipulationAudio();
+    this.canvas.style.cursor = "crosshair";
+    this.flushPendingValueRefresh();
+    const issuedAt = performance.now();
+    const parts: ForgeCommand[] = [];
+    for (const [slot, beforeForm] of drag.before) {
+      const form = this.pose.segments[slot];
+      if (form === undefined || form[drag.key] === beforeForm[drag.key]) continue;
+      parts.push(createSegmentFormCommand(slot, beforeForm, cloneSegmentForm(form), issuedAt));
+    }
+    if (parts.length === 0) return;
+    const command =
+      parts.length === 1 && parts[0] !== undefined
+        ? parts[0]
+        : createCompositeCommand("resize", parts, issuedAt);
+    this.commands.pushApplied(command, this.state);
+    this.formEpoch += 1;
+    this.emit();
   }
 
   private setHandleOpacity(handle: Handle, opacity: number): void {
@@ -3345,6 +3584,8 @@ export class ForgeController {
           CAMERA_MAX_PITCH,
         );
         this.updateCamera();
+      } else if (this.gizmoDrag !== null) {
+        this.updateGizmoDrag();
       } else if (this.draggedHandle !== null) {
         this.pointerGestureDirty = true;
       } else if (this.draggedPanelSocket !== null) {
@@ -3362,6 +3603,13 @@ export class ForgeController {
       if (!this.ownsPointerEvent(event) && event.pointerId !== this.dragPointerId) return;
       if (this.paintOwnsPointer()) return;
       event.stopPropagation();
+      if (this.gizmoDrag !== null) {
+        if (event.clientX !== this.lastPointerX || event.clientY !== this.lastPointerY) {
+          this.updatePointerNdc(event);
+          this.updateGizmoDrag();
+        }
+        this.endGizmoDrag();
+      }
       if (this.draggedHandle !== null) {
         if (event.clientX !== this.lastPointerX || event.clientY !== this.lastPointerY) {
           this.updatePointerNdc(event);
@@ -3425,11 +3673,13 @@ export class ForgeController {
       if (key === "e" && this.preview === "inspector") {
         this.setPreview("none");
       }
+      if (key === "f") this.sampleKeyHeld = false;
     };
 
     /** A window that loses focus never delivers the keyup. */
     const onBlur = (): void => {
       this.locomotion?.releaseAll();
+      this.sampleKeyHeld = false;
     };
 
     window.addEventListener("blur", onBlur);
@@ -3486,6 +3736,7 @@ export class ForgeController {
    * guaranteed to reach the canvas that began the edit.
    */
   private finishActivePointerGesture(): void {
+    this.endGizmoDrag();
     this.flushPointerGesture();
     if (this.draggedHandle !== null) {
       const released = this.draggedHandle;
@@ -3605,6 +3856,7 @@ export class ForgeController {
       case "f":
         // In paint mode F belongs to the brush's eyedropper, which the paint
         // panel binds. Sampling a swatch here as well would fight it.
+        this.sampleKeyHeld = this.mode !== "paint";
         if (this.toolsActive && this.mode !== "paint") {
           this.sampleUnderPointer();
         }
@@ -3755,13 +4007,39 @@ export class ForgeController {
     }
 
     if (this.mode === "shape") {
+      // The arrows outrank the body, EXCEPT under shift: shift is the
+      // selection modifier, and a shift-press that grazed an arrow must
+      // still add the part behind it rather than start a dead drag.
+      const arrow = event.shiftKey ? null : this.pickGizmoArrow();
+      if (arrow !== null) {
+        this.beginGizmoDrag(arrow);
+        this.audio.play("ui_click");
+        return true;
+      }
       const slot = this.pickSegmentSlot();
       if (slot < 0) {
         return false;
       }
       this.commitEdits();
-      this.selectSegment(slot);
-      this.status = `Editing ${SEGMENT_BONES[slot] ?? "segment"}. Sliders on the right.`;
+      if (event.shiftKey && this.selectedSlots.size > 0) {
+        // Shift grows or shrinks the set; the last part touched leads it.
+        if (this.selectedSlots.has(slot) && this.selectedSlots.size > 1) {
+          this.selectedSlots.delete(slot);
+          const next = [...this.selectedSlots][0];
+          if (this.selectedSlot === slot && next !== undefined) this.selectSegment(next, true);
+        } else {
+          this.selectedSlots.add(slot);
+          this.selectSegment(slot, true);
+        }
+      } else {
+        this.selectSegment(slot);
+      }
+      const count = this.selectedSlots.size;
+      const bone = SEGMENT_BONES[this.selectedSlot] ?? "segment";
+      this.status =
+        count > 1
+          ? `${String(count)} parts selected. Drag the arrows to resize them together.`
+          : `Editing ${bone}. Drag the arrows to resize; shift-click adds parts.`;
       this.audio.play("ui_click");
       this.emit();
       return true;
@@ -3808,6 +4086,13 @@ export class ForgeController {
       return true;
     }
 
+    // F held turns the click into the dropper, exactly as paint's does
+    // (2026-08-05): sample whatever was clicked - own part, panel, or the
+    // room - instead of painting over it.
+    if (this.sampleKeyHeld) {
+      this.sampleUnderPointer();
+      return true;
+    }
     const slot = this.pickSegmentSlot();
     if (slot >= 0) {
       const bone = SEGMENT_BONES[slot];

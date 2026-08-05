@@ -1,5 +1,31 @@
 # STATUS
 
+## The Forge grows a gizmo, and the manual tells the whole truth (2026-08-05, night)
+
+Three user orders on top of the design-review wave. THE RESIZE GIZMO: the
+Shape tool's length/width/depth sliders are gone; three Blender-style axis
+arrows stand on the selected part (red width, green length, blue depth, in
+the segment's own frame), one body-height of pull sweeps a parameter end to
+end, and shift-click grows the selection so the arrows resize every chosen
+part together (mirror still doubles everything). Shift outranks the arrows
+so a selection click that grazes one never starts a dead drag - found by
+the headless probe (visual/gizmoCheck.mjs), which now proves selection,
+multi-select ("2 parts selected"), an arrow drag, and the drag landing as
+one undoable command, with zero page errors. Flatten/taper/roundness/twist
+stay as Surface Shaping sliders; they are character, not size. THE MATERIAL
+DROPPER: F now samples your own parts as well as the room, and holding F
+turns a material click into the sample itself, exactly as paint's dropper
+works. THE FAITHFUL MANUAL: how-to-play and every control strip audited
+against the mechanics - new lines for body-grab posing, the arrows,
+shift-select, the F dropper, spectator follow/roam, Esc-reopens-mid-hunt;
+the Inspector hotkey section gained the move/climb keys it was missing; the
+hiding plate now states the live-hunt rules (keep editing, capped creep,
+the watched meter) and the hunting plate names both curator's instincts and
+the gallery restock. Also in this wave (design review): Inspector's
+run-to-idle settle, hunt-opening census hint (opening_hint event, snapshot
+field oh), 45-second bait nudge, hold-S climbs down / tap-S lets go, and
+limb-grab posing. 1,410 tests green across the workspace.
+
 ## Two approved features: follow-cam and open rooms (2026-08-05, later)
 
 Spectate-follow: a caught hider's orbit now rides the nearest Inspector's

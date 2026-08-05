@@ -916,9 +916,16 @@ function ShapePanel({ controller, state, onCommit }: ContextPanelProps): ReactEl
     );
   }
   return (
-    <Section title={segment.bone.replace(/_/g, " ")}>
+    <Section
+      title={
+        state.selectedCount > 1
+          ? `${String(state.selectedCount)} parts`
+          : segment.bone.replace(/_/g, " ")
+      }
+    >
       <div style={{ opacity: 0.65, marginBottom: 8 }}>
-        Pick a silhouette, then tune it. Mirror repeats the change immediately.
+        Drag the red, green, and blue arrows on the part to resize it — width, length, and depth.
+        Shift-click other parts to resize them together. Mirror repeats every change.
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 5, marginBottom: 12 }}>
         {FORGE_QUICK_SHAPES.map((preset) => (
@@ -939,21 +946,6 @@ function ShapePanel({ controller, state, onCommit }: ContextPanelProps): ReactEl
           Reset
         </button>
       </div>
-      {FORM_SLIDERS.filter((slider) => ["length", "width", "depth"].includes(slider.key)).map((slider) => (
-        <Slider
-          key={slider.key}
-          label={slider.label}
-          min={slider.min}
-          max={1}
-          step={0.01}
-          value={segment.form[slider.key]}
-          remountKey={`${segment.slot}:${slider.key}:${state.formEpoch}`}
-          onInput={(value) => {
-            controller.setSegmentFormValue(slider.key, value);
-          }}
-          onCommit={onCommit}
-        />
-      ))}
       <details style={{ borderTop: EDGE, paddingTop: 8 }}>
         <summary style={{ cursor: "pointer", color: BRASS_LIT, marginBottom: 8 }}>Surface shaping</summary>
         {FORM_SLIDERS.filter((slider) => !["length", "width", "depth"].includes(slider.key)).map((slider) => (
