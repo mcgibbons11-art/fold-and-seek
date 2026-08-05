@@ -5,7 +5,7 @@ import type { InspectorBodyFrame } from "./InspectorBody";
 import { WORLD_SCALE } from "./navData";
 
 export const INSPECTOR_ASSET_SHA256 =
-  "f7f2d030cbfb105d1b19912d1784b993419d0d5b7a2f4b3344bf9e893552c9f5";
+  "a19a7ecd5b1cb83e1cc261d138d3f2c7d60e948025ea3ebeccef8576c25a09bf";
 export const INSPECTOR_ASSET_URL =
   `assets/characters/inspector-curator.glb?v=${INSPECTOR_ASSET_SHA256.slice(0, 16)}`;
 /** Blender master is just over two metres from boot sole to head loop. */

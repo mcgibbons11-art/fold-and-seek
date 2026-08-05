@@ -1,5 +1,24 @@
 # STATUS
 
+## The two art passes: a hunter with a hat brim, a shop with scuffed boards (2026-08-05, late night)
+
+Both user-approved art items landed. THE MENACE PASS, done properly in the
+Blender build script (build_inspector.py regenerated the .blend, the mixamo
+re-bake, and the GLB): the palette dropped to midnight navy and dried-blood
+oxblood; the helmet band lies flat like a hat band (the old default torus
+rotation arced it OVER the crown, which with bright brass ear cups was the
+whole "headphones" read); a wide brass-edged brim now shadows the lenses;
+the ear cups shrank and went graphite; and a flared greatcoat hem falls
+from waist to knee so the silhouette is one long dark wedge. Preview render
+verified; INSPECTOR_ASSET_SHA256 updated and the asset contract holds on
+both GLB copies. THE MICRO-DETAIL WEAR PASS, procedural in surfaces.ts:
+heel scuffs dragged along the floorboards where finish rubbed through,
+fine handling scratches and a soft hand-polished rub on the joinery wood,
+and faint cup rings with a low smudge cloud on the counter marble. The
+tileability suite caught a wrap-breaking fractional noise scale in the rub
+patch on the first try; fixed, 1,410 tests green, screenshots confirm the
+wear reads at play distance without shouting.
+
 ## The Forge grows a gizmo, and the manual tells the whole truth (2026-08-05, night)
 
 Three user orders on top of the design-review wave. THE RESIZE GIZMO: the

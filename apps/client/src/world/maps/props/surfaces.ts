@@ -161,6 +161,9 @@ const PLANK_KNOTS: readonly (readonly [number, number, number])[] = [
   [0.21, 0.33, 0.052],
   [0.68, 0.64, 0.041],
 ];
+/** Heel scuffs per two-metre wrap, and how far each spreads across the board. */
+const PLANK_SCUFF_COUNT = 5;
+const PLANK_SCUFF_HALF_WIDTH = 0.016;
 
 /**
  * One value per texel describing a floorboard at that point.
@@ -211,6 +214,23 @@ function plankField(): (u: number, v: number) => number {
 
     // Traffic. Stretched across the board, because feet travel along it.
     value *= 0.74 + 0.26 * traffic(u, v * 0.3);
+
+    // Wear (2026-08-05): heel scuffs where the finish has rubbed through -
+    // short bright drags along the board, brighter at their middle, the
+    // micro-detail pass the reference dioramas carry on every walked floor.
+    for (let scuff = 0; scuff < PLANK_SCUFF_COUNT; scuff += 1) {
+      const su = hashBand(scuff, 9.1);
+      const sv = 0.14 + 0.72 * hashBand(scuff, 9.7);
+      const length = 0.05 + 0.09 * hashBand(scuff, 10.3);
+      const rawU = Math.abs(u - su);
+      const du = Math.min(rawU, 1 - rawU);
+      const dv = Math.abs(v - sv);
+      if (du < length && dv < PLANK_SCUFF_HALF_WIDTH) {
+        const along = 1 - du / length;
+        const across = 1 - dv / PLANK_SCUFF_HALF_WIDTH;
+        value += (1 - value) * 0.4 * along * across * across;
+      }
+    }
 
     return clamp01(value);
   };
@@ -328,9 +348,30 @@ function woodGrainField(): (u: number, v: number) => number {
     // Slow tonal drift, so one board is not the same brown end to end.
     value *= 0.86 + 0.14 * tone(u, v);
 
+    // Wear (2026-08-05): the marks of handling. Two fine scratches lying at
+    // shallow angles across the grain, and a soft rubbed patch where hands
+    // have polished the finish a shade lighter.
+    for (const [phase, slope, sv, depth] of WOOD_SCRATCHES) {
+      const line = v - sv - slope * Math.sin(2 * Math.PI * (u + phase));
+      const dv = Math.abs(((line % 1) + 1) % 1 - 0.5);
+      if (dv > 0.494) value -= depth;
+    }
+    // Offset, never rescaled: a fractional scale would break the tile wrap
+    // the suite pins.
+    const rub = fleck(u + 0.31, v + 0.67);
+    if (rub > 0.82) {
+      value += 0.07 * ((rub - 0.82) / 0.18);
+    }
+
     return clamp01(value);
   };
 }
+
+/** Handling scratches: sine phase, slope, band centre, and darkness. */
+const WOOD_SCRATCHES: readonly (readonly [number, number, number, number])[] = [
+  [0.13, 0.02, 0.27, 0.09],
+  [0.61, 0.035, 0.71, 0.07],
+];
 
 // ----------------------------------------------------------------- the marble
 
@@ -356,9 +397,32 @@ function marbleField(): (u: number, v: number) => number {
     value -= 0.36 * (1 - primary) ** 7;
     value -= 0.17 * (1 - secondary) ** 12;
     value -= 0.07 * (1 - cloud(u, v));
+
+    // Wear (2026-08-05): the counter is worked at. Two faint cup rings and a
+    // low smudge cloud where things are set down and slid, none of it strong
+    // enough to compete with the veining.
+    for (const [cu, cv, radius] of MARBLE_RINGS) {
+      const distance = Math.hypot(u - cu, v - cv);
+      const band = Math.abs(distance - radius);
+      if (band < MARBLE_RING_WIDTH) {
+        value -= 0.06 * (1 - band / MARBLE_RING_WIDTH);
+      }
+    }
+    const smudge = cloud(u * 2 + 0.41, v * 2 + 0.13);
+    if (smudge > 0.74) {
+      value -= 0.05 * ((smudge - 0.74) / 0.26);
+    }
+
     return clamp01(value);
   };
 }
+
+/** Cup rings on the counter map: centre u, centre v, ring radius. */
+const MARBLE_RINGS: readonly (readonly [number, number, number])[] = [
+  [0.31, 0.62, 0.052],
+  [0.72, 0.24, 0.041],
+];
+const MARBLE_RING_WIDTH = 0.006;
 
 // ------------------------------------------------------------------ the paper
 

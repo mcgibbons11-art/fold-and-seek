@@ -167,8 +167,11 @@ scene.render.resolution_percentage = 100
 scene.render.image_settings.file_format = "PNG"
 scene.view_settings.look = "AgX - Medium High Contrast"
 
-NAVY = material("Curator Navy", (0.035, 0.075, 0.145, 1), metallic=0.08, roughness=0.3)
-OXBLOOD = material("Oxblood Leather", (0.30, 0.055, 0.055, 1), roughness=0.36)
+# Menace pass (2026-08-05): the palette dropped toward midnight and dried
+# blood. At the old values the coat read cheerful blue and the pads toy red
+# from across the shop; the hunter should read as a shadow with brass eyes.
+NAVY = material("Curator Navy", (0.020, 0.040, 0.082, 1), metallic=0.08, roughness=0.34)
+OXBLOOD = material("Oxblood Leather", (0.165, 0.034, 0.038, 1), roughness=0.4)
 IVORY = material("Aged Ivory Ceramic", (0.82, 0.73, 0.56, 1), metallic=0.02, roughness=0.28)
 BRASS = material("Worn Brass", (0.55, 0.27, 0.055, 1), metallic=0.78, roughness=0.24)
 DARK = material("Joint Graphite", (0.018, 0.024, 0.032, 1), metallic=0.72, roughness=0.2)
@@ -203,6 +206,11 @@ cube("TealCravat", (0, -0.195, 1.385), (0.075, 0.018, 0.05), TEAL, "Neck", bevel
 for side in (-1, 1):
     cube(f"CoatSkirt_{side}", (side * 0.18, -0.01, 0.79), (0.075, 0.09, 0.22),
          OXBLOOD, "Hips", bevel=0.035)
+# The greatcoat hem (menace pass): a flared skirt falling from the coat's
+# waist to the knee, so the silhouette is a long dark wedge instead of a
+# toy soldier's jacket-and-trousers split.
+tapered_box("CoatHem", 0.58, 0.95, (0.255, 0.165), (0.215, 0.135), 0,
+            NAVY, "Hips", bevel=0.02)
 
 # Pocket watch stack.
 uv("ChestClockCase", (0.13, -0.19, 1.29), (0.064, 0.018, 0.064), BRASS, "Spine1", segments=32)
@@ -219,10 +227,15 @@ cylinder("NeckPost", (0, 0, 1.40), (0, 0, 1.53), 0.075, DARK, "Neck")
 torus("NeckBrassRing", (0, 0, 1.49), 0.078, 0.014, BRASS, "Neck", rotation=(0, 0, 0))
 uv("HeadCeramic", (0, 0, 1.72), (0.205, 0.165, 0.225), IVORY, "Head")
 uv("HelmetCrown", (0, 0.025, 1.88), (0.215, 0.17, 0.105), NAVY, "Head")
-torus("HelmetBand", (0, -0.005, 1.84), 0.195, 0.019, BRASS, "Head", rotation=(math.pi/2, 0, 0))
+# Menace pass (2026-08-05): the band lies flat like a hat band - the old
+# default rotation arced it over the crown, which with the bright ear cups
+# read as headphones - and a wide flat brim shadows the lenses.
+torus("HelmetBand", (0, 0.01, 1.84), 0.198, 0.017, BRASS, "Head", rotation=(0, 0, 0))
+cylinder("HelmetBrim", (0, 0.01, 1.816), (0, 0.01, 1.83), 0.315, NAVY, vertices=40, bone="Head")
+torus("HelmetBrimEdge", (0, 0.01, 1.823), 0.312, 0.007, BRASS, "Head", rotation=(0, 0, 0))
 cube("HelmetFin", (0, -0.002, 1.98), (0.025, 0.06, 0.065), BRASS, "Head", bevel=0.012)
 for side in (-1, 1):
-    uv(f"EarCup_{side}", (side*0.205, 0, 1.73), (0.045, 0.055, 0.07), BRASS, "Head")
+    uv(f"EarCup_{side}", (side*0.198, 0, 1.72), (0.030, 0.044, 0.055), DARK, "Head")
     uv(f"EyeLens_{side}", (side*0.078, -0.158, 1.75), (0.050, 0.018, 0.064), TEAL, "Head")
     torus(f"EyeBezel_{side}", (side*0.078, -0.168, 1.75), 0.059, 0.010, BRASS, "Head")
     uv(f"BrowPin_{side}", (side*0.078, -0.164, 1.835), (0.012, 0.008, 0.012), BRASS, "Head", segments=16)
