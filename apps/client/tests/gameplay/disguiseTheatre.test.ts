@@ -494,9 +494,10 @@ describe("DisguiseTheatre build cost", () => {
       let culled = 0;
       scene.traverse((object) => {
         if (!(object instanceof THREE.Mesh)) return;
-        // The socket studs are the one part a disguise never shows: they mark
-        // empty sockets for the Forge's panel tool and belong to nobody else.
-        if (!object.visible && !object.name.startsWith("mimic_socket_marker")) hiddenParts += 1;
+        // The socket studs and their invisible pick discs are the one part a
+        // disguise never shows: they mark empty sockets for the Forge's panel
+        // tool and belong to nobody else.
+        if (!object.visible && !object.name.startsWith("mimic_socket_")) hiddenParts += 1;
         if (object.frustumCulled) culled += 1;
       });
       compiled = { bodies: bodies(scene).filter((body) => body.visible).length, hiddenParts, culled };

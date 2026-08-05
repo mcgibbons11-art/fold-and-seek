@@ -1143,8 +1143,23 @@ function MaterialPanel({
   return (
     <Section title="Material">
       <div style={{ opacity: 0.65, marginBottom: 10 }}>
-        Point at the room and press F to sample it, or pick a swatch below. Then click a body part.
+        Pick a swatch below, or press F and click anything — the room or your own
+        parts — to copy its swatch. Then click a body part to paint it.
       </div>
+      <button
+        type="button"
+        className={PRESS_CLASS}
+        aria-pressed={state.materialDropperArmed}
+        style={{
+          ...buttonStyle,
+          width: "100%",
+          marginBottom: 10,
+          borderColor: state.materialDropperArmed ? BRASS_LIT : undefined,
+        }}
+        onClick={() => controller.setMaterialDropperArmed(!state.materialDropperArmed)}
+      >
+        Dropper F{state.materialDropperArmed ? " · click to copy" : ""}
+      </button>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
         {controller.swatches.map((swatch) => {
           const selected = state.sampledSwatchId === swatch.id;

@@ -280,10 +280,20 @@ describe("paint as a forge tool mode", () => {
     expect(harness.pointer("pointermove", { clientX: 400 }).stopped).toBe(false);
   });
 
-  it("gives F to the eyedropper in paint mode and to swatch sampling elsewhere", () => {
+  it("gives F to the eyedropper in paint mode and arms the material dropper elsewhere", () => {
+    // In material mode F arms the dropper the way paint's does: press, then
+    // click to copy (2026-08-05). A second press stands it down.
     harness.controller.setToolMode("material");
     harness.key("f");
-    expect(harness.controller.snapshot().status).toBe("Nothing under the cursor to sample.");
+    expect(harness.controller.snapshot().materialDropperArmed).toBe(true);
+    expect(harness.controller.snapshot().status).toContain("Dropper armed");
+    harness.key("f");
+    expect(harness.controller.snapshot().materialDropperArmed).toBe(false);
+
+    // Leaving the tool stands the dropper down too.
+    harness.key("f");
+    harness.controller.setToolMode("shape");
+    expect(harness.controller.snapshot().materialDropperArmed).toBe(false);
 
     harness.controller.setToolMode("paint");
     const status = harness.controller.snapshot().status;

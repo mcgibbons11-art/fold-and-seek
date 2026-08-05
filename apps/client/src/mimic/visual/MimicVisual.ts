@@ -205,6 +205,8 @@ interface PanelVisual {
   readonly pivot: THREE.Object3D;
   readonly plate: THREE.Mesh;
   readonly marker: THREE.Mesh;
+  /** The invisible click target that stands in for the small stud. */
+  readonly pick: THREE.Mesh;
   /** Total hinge rotation from the stowed position, in radians. */
   angle: number;
   /** Distance from the rig socket out to the parent shell's surface. */
@@ -242,6 +244,13 @@ export class MimicVisual {
   readonly panelMeshes: readonly THREE.Mesh[];
   /** Socket studs, shown while the panel tool is active. */
   readonly socketMarkers: readonly THREE.Mesh[];
+  /**
+   * Fat invisible pick discs behind the studs (2026-08-05): the stud is a
+   * body-scaled feature a few pixels wide on screen, and clicking it exactly
+   * was the whole reason the panel tool read as dead. These are what the
+   * pointer actually hits.
+   */
+  readonly socketPicks: readonly THREE.Mesh[];
 
   private readonly bag = new DisposalBag();
   private readonly pool: MimicMaterialPool;
@@ -333,14 +342,21 @@ export class MimicVisual {
     }
     this.panelGeometries = panelGeometries;
 
-    // A socket stud is a feature of the body, so it converts with the body. Left
-    // at 0.026 m it was a 52 mm brass disc on a 350 mm creature.
+    // A socket stud is a feature of the body, so it converts with the body.
+    // Tripled from its first size (2026-08-05): at 0.024 the stud drew a few
+    // pixels wide at play distance and the panel tool read as dead - a click
+    // target has to be seen to be aimed at.
     const markerGeometry = this.bag.add(
-      createPuckGeometry(0.024 * RIG_TO_WORLD, 0.013 * RIG_TO_WORLD),
+      createPuckGeometry(0.06 * RIG_TO_WORLD, 0.02 * RIG_TO_WORLD),
     );
+    const markerPickGeometry = this.bag.add(
+      createPuckGeometry(0.13 * RIG_TO_WORLD, 0.05 * RIG_TO_WORLD),
+    );
+    const markerPickMaterial = this.pool.pickProxy;
     const panels: PanelVisual[] = [];
     const panelMeshes: THREE.Mesh[] = [];
     const socketMarkers: THREE.Mesh[] = [];
+    const socketPicks: THREE.Mesh[] = [];
     for (let i = 0; i < PANEL_SOCKET_NAMES.length; i++) {
       const socketId = PANEL_SOCKET_NAMES[i];
       if (socketId === undefined) {
@@ -362,6 +378,13 @@ export class MimicVisual {
       marker.rotation.x = Math.PI / 2;
       marker.userData["panelSocket"] = socketId;
       pivot.add(marker);
+
+      const pick = new THREE.Mesh(markerPickGeometry, markerPickMaterial);
+      pick.name = `mimic_socket_pick_${socketId}`;
+      pick.visible = false;
+      pick.rotation.x = Math.PI / 2;
+      pick.userData["panelSocket"] = socketId;
+      pivot.add(pick);
 
       const socketBone = boneIndex(socketId);
       const parentBone = BONES[socketBone]?.parentIndex ?? -1;
@@ -387,16 +410,19 @@ export class MimicVisual {
         pivot,
         plate,
         marker,
+        pick,
         angle: 0,
         surfacePush: 0,
         present: false,
       });
       panelMeshes.push(plate);
       socketMarkers.push(marker);
+      socketPicks.push(pick);
     }
     this.panels = panels;
     this.panelMeshes = panelMeshes;
     this.socketMarkers = socketMarkers;
+    this.socketPicks = socketPicks;
 
     this.eyeGroup = new THREE.Object3D();
     this.eyeGroup.name = "mimic_head_pod";
@@ -740,6 +766,7 @@ export class MimicVisual {
   setSocketMarkersVisible(visible: boolean): void {
     for (const panel of this.panels) {
       panel.marker.visible = visible && !panel.present;
+      panel.pick.visible = panel.marker.visible;
     }
   }
 

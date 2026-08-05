@@ -247,6 +247,8 @@ export interface ForgeHudState {
   readonly selectedCount: number;
   readonly panel: ForgePanelSelection | null;
   readonly sampledSwatchId: string | null;
+  /** True while F has armed the material dropper and a click will sample. */
+  readonly materialDropperArmed: boolean;
   readonly bodySwatchId: string;
   readonly arrangementId: StarterArrangementId;
   readonly previewArrangementId: StarterArrangementId | null;
@@ -752,9 +754,18 @@ export class ForgeController {
    * one whose values the panel reads and whose centre carries the gizmo.
    */
   private readonly selectedSlots = new Set<number>();
-  /** True while F is held, which turns a material click into a sample. */
-  private sampleKeyHeld = false;
+  /**
+   * True while the material dropper is armed (2026-08-05): F arms it, the
+   * next click copies the swatch under the pointer, exactly the contract the
+   * paint eyedropper keeps. Cleared by sampling, by pressing F again, and by
+   * leaving the tool.
+   */
+  private materialDropperArmed = false;
   private resizeGizmo: THREE.Group | null = null;
+  /** Brass outline per selected part, so multi-select is visible on the body. */
+  private readonly selectionOutlines = new Map<number, THREE.LineSegments>();
+  private selectionOutlineMaterial: THREE.LineBasicMaterial | null = null;
+  private readonly selectionBox = new THREE.Box3();
   private gizmoArrows: Array<{
     key: "width" | "length" | "depth";
     dir: THREE.Vector3;
@@ -1629,6 +1640,7 @@ export class ForgeController {
               panel: panelState === null ? null : clonePanelState(panelState),
             },
       sampledSwatchId: this.sampledSwatchId,
+      materialDropperArmed: this.materialDropperArmed,
       bodySwatchId: resolvedSwatchFor(this.state.materials, BODY_SLOT_ID, DEFAULT_BODY_SWATCH_ID),
       arrangementId: STARTER_ARRANGEMENT_IDS[this.arrangementIndex] ?? "upright",
       previewArrangementId: this.previewArrangementId,
@@ -1694,6 +1706,7 @@ export class ForgeController {
       this.paintTool.deactivate();
     }
     this.mimic.setSocketMarkersVisible(mode === "panels");
+    this.materialDropperArmed = false;
     this.layoutPanelTipHandles();
     this.status = TOOL_HINTS[mode];
     this.audio.play("ui_click");
@@ -1708,6 +1721,7 @@ export class ForgeController {
     this.paintTool.deactivate();
     this.handleGroup.visible = false;
     this.setHovered(null);
+    this.materialDropperArmed = false;
     this.mimic.setSocketMarkersVisible(false);
     this.layoutPanelTipHandles();
     this.status = "Forge tools stowed. Choose a tool to resume editing.";
@@ -2084,6 +2098,16 @@ export class ForgeController {
 
   get swatches(): readonly MaterialSwatch[] {
     return MIMIC_LEGAL_SWATCHES;
+  }
+
+  /** Arms or stands down the material dropper, with the status saying which. */
+  setMaterialDropperArmed(armed: boolean): void {
+    this.materialDropperArmed = armed;
+    this.status = armed
+      ? "Dropper armed. Click anything — your own parts included — to copy its swatch."
+      : "Dropper off.";
+    this.audio.play("ui_click");
+    this.emit();
   }
 
   selectSwatch(swatchId: string): void {
@@ -3368,6 +3392,7 @@ export class ForgeController {
       this.selectedSlots.size > 0 &&
       this.mimic.segmentMeshes[this.selectedSlot] !== undefined;
     const gizmo = wanted ? this.ensureResizeGizmo() : this.resizeGizmo;
+    this.layoutSelectionOutlines(wanted);
     if (gizmo === null) return;
     gizmo.visible = wanted;
     if (!wanted) return;
@@ -3377,6 +3402,50 @@ export class ForgeController {
     // handleGroup shares the scene's frame, so world coordinates park it.
     gizmo.position.copy(this.scratchVector);
     mesh.getWorldQuaternion(gizmo.quaternion);
+  }
+
+  /**
+   * A brass box around every selected part (2026-08-05): with shift-click
+   * multi-select in play, the body itself has to say which pieces the arrows
+   * are about to resize.
+   */
+  private layoutSelectionOutlines(wanted: boolean): void {
+    for (const [slot, outline] of this.selectionOutlines) {
+      outline.visible = wanted && this.selectedSlots.has(slot);
+    }
+    if (!wanted) return;
+    if (this.selectionOutlineMaterial === null) {
+      this.selectionOutlineMaterial = new THREE.LineBasicMaterial({
+        color: 0xe2b86a,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: false,
+      });
+    }
+    for (const slot of this.selectedSlots) {
+      const mesh = this.mimic.segmentMeshes[slot];
+      if (mesh === undefined) continue;
+      let outline = this.selectionOutlines.get(slot);
+      if (outline === undefined) {
+        outline = new THREE.LineSegments(
+          new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+          this.selectionOutlineMaterial,
+        );
+        outline.renderOrder = 29;
+        this.handleGroup.add(outline);
+        this.selectionOutlines.set(slot, outline);
+      }
+      outline.visible = true;
+      this.selectionBox.setFromObject(mesh);
+      this.selectionBox.getCenter(outline.position);
+      this.selectionBox.getSize(this.scratchVector);
+      outline.scale.set(
+        Math.max(this.scratchVector.x, 1e-4) * 1.05,
+        Math.max(this.scratchVector.y, 1e-4) * 1.05,
+        Math.max(this.scratchVector.z, 1e-4) * 1.05,
+      );
+      outline.quaternion.identity();
+    }
   }
 
   private pickGizmoArrow(): { key: "width" | "length" | "depth"; dir: THREE.Vector3 } | null {
@@ -3673,13 +3742,11 @@ export class ForgeController {
       if (key === "e" && this.preview === "inspector") {
         this.setPreview("none");
       }
-      if (key === "f") this.sampleKeyHeld = false;
     };
 
     /** A window that loses focus never delivers the keyup. */
     const onBlur = (): void => {
       this.locomotion?.releaseAll();
-      this.sampleKeyHeld = false;
     };
 
     window.addEventListener("blur", onBlur);
@@ -3855,9 +3922,13 @@ export class ForgeController {
         break;
       case "f":
         // In paint mode F belongs to the brush's eyedropper, which the paint
-        // panel binds. Sampling a swatch here as well would fight it.
-        this.sampleKeyHeld = this.mode !== "paint";
-        if (this.toolsActive && this.mode !== "paint") {
+        // panel binds. In material mode F arms the same contract the paint
+        // dropper keeps: press, then click to copy. Everywhere else it stays
+        // the §7.5 instant sample at the pointer.
+        if (!this.toolsActive) break;
+        if (this.mode === "material") {
+          this.setMaterialDropperArmed(!this.materialDropperArmed);
+        } else if (this.mode !== "paint") {
           this.sampleUnderPointer();
         }
         break;
@@ -4086,10 +4157,11 @@ export class ForgeController {
       return true;
     }
 
-    // F held turns the click into the dropper, exactly as paint's does
-    // (2026-08-05): sample whatever was clicked - own part, panel, or the
-    // room - instead of painting over it.
-    if (this.sampleKeyHeld) {
+    // An armed dropper turns the click into the sample, exactly as paint's
+    // does (2026-08-05): whatever was clicked - own part, panel, or the room
+    // - is copied instead of painted over.
+    if (this.materialDropperArmed) {
+      this.materialDropperArmed = false;
       this.sampleUnderPointer();
       return true;
     }
@@ -4343,9 +4415,14 @@ export class ForgeController {
 
   private pickSocket(): PanelSocketName | null {
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
-    const candidates = [...this.mimic.panelMeshes, ...this.mimic.socketMarkers].filter(
-      (mesh) => mesh.visible,
-    );
+    // The invisible pick discs stand in for the studs (2026-08-05): the stud
+    // itself is a body-scaled feature a few pixels wide, and asking players
+    // to hit it exactly is why the panel tool read as dead.
+    const candidates = [
+      ...this.mimic.panelMeshes,
+      ...this.mimic.socketMarkers,
+      ...this.mimic.socketPicks,
+    ].filter((mesh) => mesh.visible);
     const hits = this.raycaster.intersectObjects(candidates, false);
     const socket = hits[0]?.object.userData["panelSocket"];
     return typeof socket === "string" && isPanelSocketName(socket) ? socket : null;

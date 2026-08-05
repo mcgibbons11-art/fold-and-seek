@@ -269,6 +269,12 @@ export class MimicMaterialPool {
   readonly brass: THREE.MeshPhysicalMaterial;
   readonly eyeLit: THREE.MeshStandardMaterial;
   readonly eyeShut: THREE.MeshStandardMaterial;
+  /**
+   * Shared invisible material for pick proxies (2026-08-05). It never draws
+   * and never compiles, but it lives in the pool so a cast of bodies shares
+   * one instead of minting one each.
+   */
+  readonly pickProxy: THREE.MeshBasicMaterial;
 
   constructor() {
     this.graphite = new THREE.MeshPhysicalMaterial({
@@ -289,6 +295,8 @@ export class MimicMaterialPool {
     this.eyeShut = this.eyeLit.clone();
     this.eyeShut.name = "mimic_eye_shut";
     this.eyeShut.emissiveIntensity = 0;
+    this.pickProxy = new THREE.MeshBasicMaterial({ visible: false });
+    this.pickProxy.name = "mimic_pick_proxy";
   }
 
   /** Distinct materials built so far, which is what a compile pass has to cover. */
@@ -302,5 +310,6 @@ export class MimicMaterialPool {
     this.brass.dispose();
     this.eyeLit.dispose();
     this.eyeShut.dispose();
+    this.pickProxy.dispose();
   }
 }
