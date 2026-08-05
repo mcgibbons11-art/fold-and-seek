@@ -3376,6 +3376,36 @@ const SECURITY_OFFICE: readonly PropPlacement[] = [
     swatchIds: ["slate_grey_02", "wool_midnight_03"],
     focus: [0.9, 0.03, 0.65],
   }),
+  // Notices on the partition's solid band beside the door - the wall every
+  // Inspector spawn faces through the whole vigil, and the one stretch of the
+  // office that was still bare from that angle (QA 2026-08-05). The partition
+  // is glazed above a metre, so both hang low.
+  p({
+    objectId: "office_notice_01",
+    variant: "picture_frame",
+    categoryId: "picture_frame",
+    family: "frame",
+    zoneId: "security_office",
+    position: [4.85, 0.72, 2.7],
+    rotationY: WEST,
+    size: 0.3,
+    inspectable: false,
+    swatchIds: ["walnut_dark_01", "paper_aged_01", "brass_tarnished_01"],
+    focus: [0.38, 0.3, 0.1],
+  }),
+  p({
+    objectId: "office_notice_02",
+    variant: "picture_frame",
+    categoryId: "picture_frame",
+    family: "frame",
+    zoneId: "security_office",
+    position: [4.85, 0.7, 4.45],
+    rotationY: WEST,
+    size: 0.26,
+    inspectable: false,
+    swatchIds: ["iron_dark_03", "paper_kraft_02", "brass_aged_02"],
+    focus: [0.34, 0.26, 0.1],
+  }),
 ];
 
 // -------------------------------------------------- Hoppable floor clutter

@@ -263,7 +263,10 @@
 @media (max-width: 920px) {
   .fs-command-grid {
     grid-template-columns: minmax(170px, 220px) minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) auto;
+    /* Both rows size to their content and the grid scrolls. A 1fr hero row
+       clamped the hero to the leftover space, and on a short pane its chips
+       ran on under the briefing card (QA 2026-08-05). */
+    grid-template-rows: auto auto;
     overflow-y: auto;
   }
   /* The briefing drops under the hero instead of vanishing: hiding it left
@@ -548,6 +551,15 @@
     right: -110px;
     opacity: 0.4;
   }
+  /* A half-width Portals pane used to crop the mark to a floating quarter-ring
+     poking in from the corner (live-play QA, 2026-08-05). Inside 1000px it sits
+     whole and quiet behind the hero instead of large and cut. */
+  .fs-command-hero > .fs-folded-mark {
+    width: 190px;
+    right: 10px;
+    top: 6px;
+    opacity: 0.3;
+  }
 }
 
 @media (max-width: 620px) {
@@ -562,10 +574,60 @@
   }
 }
 
+/* The act curtain: a letterpress band naming the phase as it opens. The
+   component unmounts itself on a timer, so the animation only shapes how the
+   band arrives and leaves while it exists. */
+.fs-phase-curtain {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-content: center;
+  pointer-events: none;
+  animation: fs-curtain 1.6s ease-in-out forwards;
+}
+
+.fs-phase-curtain__band {
+  padding: 16px 72px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(8, 6, 4, 0.9) 16% 84%,
+    transparent 100%
+  );
+  border-top: 1px solid rgba(216, 173, 99, 0.55);
+  border-bottom: 1px solid rgba(216, 173, 99, 0.55);
+  font: 600 30px/1.1 "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia,
+    "Times New Roman", serif;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;
+  text-transform: uppercase;
+  color: #efe2c8;
+  text-shadow: 0 2px 24px rgba(255, 190, 107, 0.3);
+}
+
+@keyframes fs-curtain {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  14% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  74% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fs-candle,
   .fs-rise,
-  .fs-sheen {
+  .fs-sheen,
+  .fs-phase-curtain {
     animation: none;
   }
   .fs-press {
@@ -575,7 +637,8 @@
 
 html[data-reduced-motion="true"] .fs-candle,
 html[data-reduced-motion="true"] .fs-rise,
-html[data-reduced-motion="true"] .fs-sheen {
+html[data-reduced-motion="true"] .fs-sheen,
+html[data-reduced-motion="true"] .fs-phase-curtain {
   animation: none !important;
 }
 

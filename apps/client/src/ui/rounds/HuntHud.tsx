@@ -1,3 +1,8 @@
+import {
+  SCORE_MIMIC_PER_OBSERVED_TAUNT,
+  SCORE_MIMIC_TAUNT_STREAK_CAP,
+  SCORE_MIMIC_TAUNT_STREAK_STEP,
+} from "@foldseek/game-sim";
 import { useState, type ReactElement, type ReactNode } from "react";
 
 import type { ForgeController } from "../../forge/ForgeController";
@@ -237,6 +242,19 @@ function leftColumn({
   );
 }
 
+/**
+ * What the next watched taunt pays, on the button itself. A bare "Taunt"
+ * asked the player to trust that baiting was worth something; the tariff is
+ * public everywhere else, so it is public here. Inside the streak cap the
+ * marginal pay is the observed-taunt rate plus one streak step.
+ */
+function tauntPayLabel(streak: number): string {
+  const marginal =
+    SCORE_MIMIC_PER_OBSERVED_TAUNT +
+    (streak >= 1 && streak <= SCORE_MIMIC_TAUNT_STREAK_CAP ? SCORE_MIMIC_TAUNT_STREAK_STEP : 0);
+  return streak > 1 ? `Taunt ×${String(streak)} +${String(marginal)}` : `Taunt +${String(marginal)}`;
+}
+
 /** Low-frequency utilities stay in the dock; Forge tools never reappear on a rail. */
 function HiderDockUtilities({
   state,
@@ -263,11 +281,7 @@ function HiderDockUtilities({
         onClick={onTaunt}
         style={{ ...buttonStyle, margin: 0, padding: "7px 8px", opacity: tauntEnabled ? 1 : 0.45 }}
       >
-        T · {tauntEnabled
-          ? state.self.tauntStreak > 1
-            ? `Taunt ×${String(state.self.tauntStreak)}`
-            : "Taunt"
-          : `${Math.ceil(state.self.tauntCooldownMs / 1_000)}s`}
+        T · {tauntEnabled ? tauntPayLabel(state.self.tauntStreak) : `${Math.ceil(state.self.tauntCooldownMs / 1_000)}s`}
       </button>
       <button
         type="button"

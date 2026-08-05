@@ -258,6 +258,12 @@ const WATCHED_SCENES: Readonly<Record<WatchedLevel, MusicScene>> = {
  */
 export function musicSceneForPhase(phase: MatchPhase, watchedLevel: WatchedLevel): MusicScene {
   if (FORGE_PHASES.has(phase)) return "forge";
+  // The final seconds escalate on their own (QA 2026-08-05): even a hider
+  // nobody is watching hears the score lean in as the clock runs out, so the
+  // countdown never plays under the same calm bed as minute one.
+  if (phase === MatchPhase.FinalCountdown) {
+    return WATCHED_SCENES[watchedLevel === 0 ? 1 : watchedLevel];
+  }
   if (HUNT_PHASES.has(phase)) return WATCHED_SCENES[watchedLevel];
   if (PAYOFF_PHASES.has(phase)) return "reveal";
   if (phase === MatchPhase.Disposed) return "silent";

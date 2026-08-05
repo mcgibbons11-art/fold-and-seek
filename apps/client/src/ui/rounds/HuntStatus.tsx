@@ -67,7 +67,9 @@ export function HuntStatus({ state }: HuntStatusProps): ReactElement {
       }}
       aria-label={`${hidersLeft} still hidden, ${state.timer.secondsRemaining} seconds left`}
     >
-      <AtomicLiveRegion message={`${String(hidersLeft)} Mimics still hidden`} />
+      <AtomicLiveRegion
+        message={`${String(hidersLeft)} ${hidersLeft === 1 ? "Mimic" : "Mimics"} still hidden`}
+      />
       <AtomicLiveRegion message={countdownAnnouncement} />
       <div style={rowStyle}>
         <div style={{ textAlign: "right" }}>

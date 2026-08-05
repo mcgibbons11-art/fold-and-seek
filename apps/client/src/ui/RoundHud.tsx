@@ -45,6 +45,44 @@ const INSPECTION_PHASES: ReadonlySet<MatchPhase> = new Set([
 ]);
 
 /**
+ * The beats worth announcing, and nothing else: phase changes inside the hunt
+ * (Inspection -> FinalCountdown) or into the vote are bookkeeping, not acts.
+ */
+const CURTAIN_NAMES: ReadonlyMap<MatchPhase, string> = new Map([
+  [MatchPhase.Forge, "The Forge"],
+  [MatchPhase.InspectionIntro, "The Hunt"],
+  [MatchPhase.Reveal, "The Reveal"],
+  [MatchPhase.Results, "The Ledger"],
+]);
+
+/**
+ * A letterpress band that names each act as it opens, then gets out of the
+ * way (QA 2026-08-05: the cuts between phases were abrupt). It never shows on
+ * mount, so a player joining or rejoining mid-phase sees the game, not a
+ * title card for a transition that happened without them.
+ */
+function PhaseCurtain({ phase }: { readonly phase: MatchPhase }): ReactElement | null {
+  const [shown, setShown] = useState<MatchPhase | null>(null);
+  const previous = useRef<MatchPhase | null>(null);
+
+  useEffect(() => {
+    const last = previous.current;
+    previous.current = phase;
+    if (last === null || last === phase || !CURTAIN_NAMES.has(phase)) return undefined;
+    setShown(phase);
+    const timeout = window.setTimeout(() => setShown(null), 1_600);
+    return () => window.clearTimeout(timeout);
+  }, [phase]);
+
+  if (shown === null) return null;
+  return (
+    <div className="fs-phase-curtain" aria-hidden>
+      <div className="fs-phase-curtain__band">{CURTAIN_NAMES.get(shown)}</div>
+    </div>
+  );
+}
+
+/**
  * When the missed-finds board has anything to say. The authority reports during
  * the hunt and publishes one exact board at the reveal, so it stays up through
  * the reveal rather than vanishing at the moment the numbers stop being
@@ -181,6 +219,7 @@ export function RoundHud({
         />
         <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
         <SoundCaptionHud captions={engine.soundCaptions} />
+        <PhaseCurtain phase={state.phase} />
       </>
     );
   }
@@ -228,6 +267,7 @@ export function RoundHud({
       />
       <FirstRoundGuide state={state} forge={engine.forge} gun={engine.gun} pointerLocked={engine.pointerLocked} />
       <SoundCaptionHud captions={engine.soundCaptions} />
+      <PhaseCurtain phase={state.phase} />
     </>
   );
 }

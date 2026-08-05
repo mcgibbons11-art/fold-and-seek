@@ -1,5 +1,32 @@
 # STATUS
 
+## Full-game QA tour and the polish wave it ordered (2026-08-05)
+
+The whole game was driven headlessly in the Portals editor's two-player
+view (visual/tourMenus2p.mjs, tourRound2p.mjs, tourHunt2p.mjs, plus local
+lockProbe.mjs and narrowMenuCheck.mjs - a reusable regression suite): every
+menu screen, the full matchmaking flow with join approval, a complete round
+from lobby to rematch on both seats, and a second round with rotated roles.
+Zero console errors in every run. The fixes it ordered, all shipped: the
+hunt board's "1 Mimics" plural; the first-round guide overlapping the lock
+stack at half-width panes (it now clears the right stack and wraps 2x2);
+the title emblem cropping to a floating quarter-ring at narrow widths (it
+tucks whole and quiet inside 1000px); the menu backdrop reading as blurred
+upholstery in a narrow pane (TestRoom's camera now stands further back at
+narrow aspects); the command grid clipping its fact chips under the
+briefing card on short panes; the Inspector's first-round guide arriving in
+the busiest moment (it now opens during the office vigil); two notices on
+the partition band every Inspector spawn faces; the taunt button printing
+its live pay ("Taunt x2 +60") from the real scoring constants; the results
+vote section collapsing to one line when there is nobody to vote for; a
+letterpress phase curtain naming each act (Forge/Hunt/Reveal/Ledger, never
+on join, honours reduced motion); and the score leaning to watched_low
+through the final countdown even when nobody is watching. Retracted after
+verification: the "paint camera crop" (deliberate close-up misread) and
+"thin settings" (the controls all exist inside collapsed accordions).
+Deferred with the user told: spectate-follow for caught hiders, and a
+no-approval room option. 1,406 tests green.
+
 ## Live-play fix wave two (2026-08-05)
 
 Four user verdicts from continued live play. THE WEDGED EXPAND BUTTON: the

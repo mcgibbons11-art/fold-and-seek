@@ -38,7 +38,18 @@ function guidePhase(role: PlayerRole, phase: MatchPhase): boolean {
   if (role === "mimic") {
     return phase === MatchPhase.Forge || phase === MatchPhase.Locking || phase === MatchPhase.InspectionIntro || phase === MatchPhase.Inspection;
   }
-  return role === "inspector" && (phase === MatchPhase.InspectionIntro || phase === MatchPhase.Inspection || phase === MatchPhase.FinalCountdown);
+  // The Inspector's guide used to appear only once the hunt began - the
+  // busiest possible moment. The office vigil is two idle minutes made for
+  // reading, so the primer now opens there (QA 2026-08-05); its steps still
+  // tick off during the hunt itself.
+  return (
+    role === "inspector" &&
+    (phase === MatchPhase.Forge ||
+      phase === MatchPhase.Locking ||
+      phase === MatchPhase.InspectionIntro ||
+      phase === MatchPhase.Inspection ||
+      phase === MatchPhase.FinalCountdown)
+  );
 }
 
 /** A small checklist that advances from real gameplay actions, never from Next buttons. */
@@ -128,7 +139,11 @@ export function FirstRoundGuide({ state, forge, gun, pointerLocked }: FirstRound
         left: "50%",
         bottom: 112,
         transform: "translateX(-50%)",
-        width: "min(520px, calc(100vw - 32px))",
+        // Clear the Forge's right-hand lock stack (176px + edge) on BOTH
+        // sides, so a half-width Portals pane cannot slide the guide under
+        // it (live-play QA, 2026-08-05). The columns wrap 2x2 when squeezed.
+        width: "min(520px, calc(100vw - 400px), calc(100vw - 32px))",
+        minWidth: 264,
         boxSizing: "border-box",
         ...plate(),
         borderRadius: 10,
@@ -151,7 +166,14 @@ export function FirstRoundGuide({ state, forge, gun, pointerLocked }: FirstRound
           Skip
         </button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginTop: 8 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(118px, 1fr))",
+          gap: 6,
+          marginTop: 8,
+        }}
+      >
         {steps.map((step, index) => (
           <div key={step.title} style={{ opacity: progress[index] ? 0.48 : index === activeIndex ? 1 : 0.62 }}>
             <div style={{ color: progress[index] || index === activeIndex ? BRASS_LIT : CREAM, fontWeight: 700 }}>

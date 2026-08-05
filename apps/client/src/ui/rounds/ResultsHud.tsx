@@ -415,20 +415,28 @@ export function ResultsHud({ state, onVote, onRematch }: ResultsHudProps): React
           <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1 }}>
             {RESULTS_VOTE_HEADING}
           </div>
-          <div style={{ fontSize: 12, opacity: 0.7, margin: "3px 0 12px" }}>
-            {RESULTS_VOTE_BLURB}
-          </div>
-          {RESULT_VOTE_CATEGORIES.map((category) => (
-            <AwardRow
-              key={category}
-              category={category}
-              candidates={results.voteCandidates}
-              tallies={results.voteTallies}
-              chosen={results.myVotes[category]}
-              allowed={voteGate.allowed}
-              onVote={onVote}
-            />
-          ))}
+          {results.voteCandidates.length === 0 ? (
+            // A player with nobody to vote for used to read "Nothing to vote
+            // on." three times over (QA 2026-08-05). Once is enough.
+            <div style={{ fontSize: 12, opacity: 0.6, marginTop: 3 }}>{RESULTS_VOTE_NOTHING}</div>
+          ) : (
+            <>
+              <div style={{ fontSize: 12, opacity: 0.7, margin: "3px 0 12px" }}>
+                {RESULTS_VOTE_BLURB}
+              </div>
+              {RESULT_VOTE_CATEGORIES.map((category) => (
+                <AwardRow
+                  key={category}
+                  category={category}
+                  candidates={results.voteCandidates}
+                  tallies={results.voteTallies}
+                  chosen={results.myVotes[category]}
+                  allowed={voteGate.allowed}
+                  onVote={onVote}
+                />
+              ))}
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -273,6 +273,8 @@ export class TestRoom {
   private yawOffset = 0;
   private pitch = 0.11;
   private radius = 3.8;
+  /** Extra pull-back applied at narrow aspects; 1 on a wide pane. */
+  private aspectWiden = 1;
   private dragging = false;
   private dragPointerId = -1;
   private lastPointerX = 0;
@@ -458,6 +460,11 @@ export class TestRoom {
   setViewport(width: number, height: number): void {
     this.camera.aspect = width / Math.max(height, 1);
     this.camera.updateProjectionMatrix();
+    // The title composition was framed for a wide pane. A narrow one (the
+    // Portals editor's split view, a portrait window) keeps the same target
+    // but stands further back, so the menu backdrop stays a room with a lit
+    // table in it rather than a wall of blurred upholstery (QA 2026-08-05).
+    this.aspectWiden = clamp(1.45 / Math.max(this.camera.aspect, 0.2), 1, 1.8);
   }
 
   simulate(fixedStep: number): void {
@@ -567,10 +574,11 @@ export class TestRoom {
 
   private updateCamera(time: number): void {
     const yaw = CAMERA_BASE_YAW + Math.sin(time * CAMERA_ORBIT_SPEED * Math.PI * 2) * CAMERA_YAW_SWEEP + this.yawOffset;
-    const horizontal = Math.cos(this.pitch) * this.radius;
+    const reach = this.radius * this.aspectWiden;
+    const horizontal = Math.cos(this.pitch) * reach;
     this.camera.position.set(
       CAMERA_TARGET_X + Math.sin(yaw) * horizontal,
-      CAMERA_TARGET_Y + Math.sin(this.pitch) * this.radius,
+      CAMERA_TARGET_Y + Math.sin(this.pitch) * reach,
       CAMERA_TARGET_Z + Math.cos(yaw) * horizontal,
     );
     this.camera.lookAt(CAMERA_TARGET_X, CAMERA_TARGET_Y, CAMERA_TARGET_Z);

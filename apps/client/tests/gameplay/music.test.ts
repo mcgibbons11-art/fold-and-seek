@@ -77,6 +77,11 @@ describe("music scene mapping", () => {
     expect(musicSceneForPhase(MatchPhase.FinalCountdown, 2)).toBe("watched_high");
   });
 
+  it("leans in for the final countdown even when nobody is watching", () => {
+    expect(musicSceneForPhase(MatchPhase.FinalCountdown, 0)).toBe("watched_low");
+    expect(musicSceneForPhase(MatchPhase.FinalCountdown, 1)).toBe("watched_low");
+  });
+
   it("leaves the payoff alone whatever the meter last read", () => {
     // A watched level left over from the hunt that just ended must not press on
     // the results.
