@@ -62,12 +62,41 @@ as a minified IIFE targeting es2020:
 This is what `packages/game-sim` being pure, DOM-free and transport-agnostic
 bought: the authoritative simulation can physically run as a server script.
 
+### Verified live 2026-08-06: it runs, from the SERVED BUNDLE
+
+Two identical probe scripts were deployed, one at the repository root and
+one in `portals/`, each writing a differently named `server:` key. Only a
+server script can write a `server:` key, so the key that appears names the
+location Portals used. Read back from a live editor session
+(`visual/serverScriptProbe.mjs`):
+
+```
+serverKeys: ["server:probe_bundle"]
+values:     { "server:probe_bundle": { where: "portals-bundle",
+                                       note: "join", players: 2 } }
+ack:        "ack from portals-bundle"
+```
+
+- **Server scripts work for a game imported from GitHub.** Settled.
+- **`server.js` must live in the SERVED BUNDLE — `portals/` — not the
+  repository root.** The root twin never ran and has been deleted. Anything
+  that generates a server script must therefore emit it into `portals/`,
+  and `syncPortalsBuild.mjs` must learn to publish and check it (today it
+  copies only the Vite output, and a hand-placed file merely survives
+  because the sync prunes nothing but stale `index-*` assets).
+- Client to server to client messaging works: the client sent a probe, the
+  server broadcast an ack, the client received it.
+- The server sees the roster (`players: 2` across the editor's two panes).
+- The live SDK reports **version 1.5.0**. Our vendored
+  `apps/client/src/types/portals.d.ts` is headed v1.4.0, but its member set
+  already matches what the live object exposes (`ready`, `getPlayer`,
+  `quit`, `identity`, `saveState`, `loadState`, `submitScore`,
+  `getLeaderboard`, `net`, `voice`); only the header comment is stale.
+- Client-side `Portals.net` is unchanged: `join`, `leave`, `send`,
+  `setState`, `getState`, `players`, `self`, `on`, `off`.
+
 ### Still unverified (do not treat as settled)
 
-- Whether an imported GitHub bundle picks `server.js` up from the repo root
-  or from the built `portals/` directory that Portals actually serves. The
-  docs say "the root of your project"; our published artifact is `portals/`.
-  Answering this needs a trivial deployed `server.js`, which ships publicly.
 - Whether a full 12-player tick stays inside the ~50 ms CPU budget per
   callback, and the round's traffic inside ~60 broadcasts/s.
 

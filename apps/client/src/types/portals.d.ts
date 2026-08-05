@@ -1,5 +1,5 @@
 /**
- * Portals SDK v1.4.0
+ * Portals SDK v1.5.0 (live surface re-enumerated 2026-08-06)
  *
  * The runtime is injected into hosted games at ./_portals/sdk.js.
  * Reference this file from a TypeScript project or use it for editor
