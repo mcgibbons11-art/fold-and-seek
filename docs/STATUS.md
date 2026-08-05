@@ -1,5 +1,33 @@
 # STATUS
 
+## The Forge audit: every tool driven, four bugs down, and the editor says so (2026-08-06)
+
+The user reported multi-resize absent, no selection feedback, a dead
+material dropper, and a panel tool that "does nothing whatsoever", and
+ordered a full Forge tool audit verified in the editor. The audit harness
+(visual/forgeAudit.mjs locally, visual/forgeAuditEditor.mjs in the live
+editor) drives every tool and asserts what the status line and undo stack
+report. Root causes found and fixed: PANELS - the socket studs are
+body-scaled pucks a few pixels wide on screen; clicking one exactly was
+nearly impossible, so the tool read as dead. Studs tripled, and each now
+carries a fat invisible pick disc (the handles' own cure), pooled so a
+cast still shares one material set and exempt from the prewarm scan.
+MATERIAL DROPPER - replaced my held-F invention with paint's exact
+contract: F arms, the next click copies (room or own parts), F again
+disarms, Dropper F button on the panel shows the armed state. SELECTION -
+a brass outline box now stands on every selected part, so multi-select is
+visible on the body; the editor screenshot shows two boxed parts widening
+from one arrow drag. MATERIAL TRAY REDESIGN (user order): swatches grouped
+under family headings (Woods/Metals/Ceramics/...), metals wear a diagonal
+highlight and polish a sheen, the held swatch gets a preview card, "Apply
+to whole body" replaces the Paint-colliding verb, and the tray scrolls
+inside itself at short heights. THE EDITOR RUN IS THE RECORD: in the live
+editor, first deal, the audit reported Editing thigh_L -> 2 parts selected
+-> resize drag; "Deployed a panel on socket 02"; armed -> "Sampled
+Porcelain from your pelvis" -> "Painted torso_upper with Porcelain"; a
+paint stroke; a limb-grab pose drag; lock and unlock - zero console
+errors. 1,111 client tests green throughout.
+
 ## The two art passes: a hunter with a hat brim, a shop with scuffed boards (2026-08-05, late night)
 
 Both user-approved art items landed. THE MENACE PASS, done properly in the
