@@ -1,4 +1,4 @@
-import { MatchPhase, type MatchSettings } from "@foldseek/shared";
+import { MatchPhase, PLAYER_HEIGHT_M, type MatchSettings } from "@foldseek/shared";
 
 /**
  * Simulation constants that are not part of the tunable match settings in
@@ -7,6 +7,13 @@ import { MatchPhase, type MatchSettings } from "@foldseek/shared";
 
 /** Loading waits for every connected client to report ready, then gives up. */
 export const LOADING_TIMEOUT_MS = 20_000;
+
+/**
+ * A hider whose root sits at least this high counts as elevated for the
+ * opening hint (2026-08-05): one body height off the boards is a climb, not
+ * a doorstep.
+ */
+export const OPENING_HINT_ELEVATED_MIN_Y = PLAYER_HEIGHT_M;
 
 /** Longest FinalCountdown tail inside the inspection deadline (§5.13). */
 export const MAX_FINAL_COUNTDOWN_MS = 10_000;

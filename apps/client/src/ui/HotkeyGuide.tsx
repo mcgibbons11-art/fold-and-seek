@@ -15,7 +15,7 @@ const sectionStyle: CSSProperties = {
 const GENERAL_HOTKEYS: readonly ControlHint[] = [
   { id: "game-menu", keys: ["F1"], label: "Open or close the game menu" },
   { id: "move", keys: ["W", "A", "S", "D"], label: "Move" },
-  { id: "climb", keys: ["Space"], label: "Jump · hold forward at a solid to climb" },
+  { id: "climb", keys: ["Space"], label: "Jump · hold forward at a solid to climb · hold S to climb down" },
   { id: "grapple", keys: ["Q"], label: "Fire or release grapple · S emergency-releases" },
   { id: "board", keys: ["6"], label: "Toggle the missed-finds board" },
   { id: "taunt", keys: ["T"], label: "Taunt as a hiding Mimic" },

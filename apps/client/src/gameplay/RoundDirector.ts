@@ -82,10 +82,16 @@ import {
   phaseLabel,
   wrongAccusationStamp,
   huntHintLine,
+  openingHintLine,
   restockLine,
+  BAIT_NUDGE_BODY,
+  BAIT_NUDGE_TITLE,
   RESTOCK_TITLE,
   DECEPTION_JACKPOT_LABEL,
 } from "./copy";
+
+/** How long a hider goes unobserved before the one bait reminder. */
+const BAIT_NUDGE_AFTER_MS = 45_000;
 import type {
   AccusationFeedEntry,
   DeceptionEventView,
@@ -284,6 +290,14 @@ export class RoundDirector {
   private jackpots = 0;
   private notices: NoticeView[] = [];
   private noticeCounter = 0;
+  /**
+   * When this hider last became unobserved, and whether the once-a-round bait
+   * nudge has gone out (design review 2026-08-05). A hider nobody has looked
+   * at for a while is camping past the scoring: watched taunts and streaks
+   * are where a hidden player earns, and the economy deserves one mention.
+   */
+  private unwatchedSinceLocalMs: number | null = null;
+  private baitNudgeSent = false;
   private myShotsCorrect = 0;
   private myShotsWrong = 0;
   private readonly myWrongByZone = new Map<string, number>();
@@ -527,6 +541,8 @@ export class RoundDirector {
 
       case "watched":
         this.watchedLevel = event.level;
+        if (event.level > 0) this.unwatchedSinceLocalMs = null;
+        else if (this.unwatchedSinceLocalMs === null) this.unwatchedSinceLocalMs = this.localNow();
         break;
 
       case "taunt_streak":
@@ -535,6 +551,10 @@ export class RoundDirector {
 
       case "hunt_hint":
         this.pushNotice("hunt_hint", "Curator's instinct", huntHintLine(event.closePasses));
+        break;
+
+      case "opening_hint":
+        this.pushNotice("hunt_hint", "Curator's instinct", openingHintLine(event.hidden, event.elevated));
         break;
 
       case "close_pass_jackpot": {
@@ -653,6 +673,27 @@ export class RoundDirector {
     for (const owner of sync.privateState?.knownDisguiseOwners ?? []) {
       this.owners.set(owner.publicObjectId, owner);
     }
+    this.maybeNudgeBait(sync);
+  }
+
+  /** One bait reminder per round, and only to a hider nobody has looked at. */
+  private maybeNudgeBait(sync: MatchSync): void {
+    if (this.baitNudgeSent) return;
+    const phase = sync.publicState?.phase;
+    if (phase !== MatchPhase.Inspection && phase !== MatchPhase.FinalCountdown) {
+      this.unwatchedSinceLocalMs = null;
+      return;
+    }
+    const me = sync.privateState;
+    if (me === undefined || me === null || me.role !== "mimic" || me.lifeState !== "active") return;
+    if (this.watchedLevel > 0) return;
+    if (this.unwatchedSinceLocalMs === null) {
+      this.unwatchedSinceLocalMs = this.localNow();
+      return;
+    }
+    if (this.localNow() - this.unwatchedSinceLocalMs < BAIT_NUDGE_AFTER_MS) return;
+    this.baitNudgeSent = true;
+    this.pushNotice("bait_nudge", BAIT_NUDGE_TITLE, BAIT_NUDGE_BODY);
   }
 
   /**
@@ -697,6 +738,8 @@ export class RoundDirector {
     this.tauntStreak = 0;
     this.jackpots = 0;
     this.notices = [];
+    this.unwatchedSinceLocalMs = null;
+    this.baitNudgeSent = false;
     this.myShotsCorrect = 0;
     this.myShotsWrong = 0;
     this.myWrongByZone.clear();

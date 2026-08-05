@@ -3350,7 +3350,9 @@ export class ForgeController {
       } else if (this.draggedPanelSocket !== null) {
         this.pointerGestureDirty = true;
       } else if (this.toolsActive && this.mode === "pose" && !this.locked) {
-        this.setHovered(this.pickHandle());
+        // Hovering the body itself lights the handle a press there would
+        // take, so the limb-grab is discoverable before it is ever used.
+        this.setHovered(this.pickHandle() ?? this.pickHandleNearBody());
       }
       this.lastPointerX = event.clientX;
       this.lastPointerY = event.clientY;
@@ -3725,7 +3727,7 @@ export class ForgeController {
     }
 
     if (this.mode === "pose") {
-      const handle = this.pickHandle();
+      const handle = this.pickHandle() ?? this.pickHandleNearBody();
       if (handle !== null) {
         this.draggedHandle = handle;
         this.setHandleOpacity(handle, HANDLE_OPACITY_DRAG);
@@ -4016,6 +4018,35 @@ export class ForgeController {
       return null;
     }
     return this.handles.find((handle) => handle.pick === first.object) ?? null;
+  }
+
+  /**
+   * Grab a limb, not a handle (design review 2026-08-05): a press that lands
+   * on the body itself takes the nearest IK handle to the point it touched,
+   * so a novice clicks the shin and gets the foot without ever having learned
+   * what the gizmos are. A press on empty air still returns null and falls
+   * through to the camera, which keeps the one-button contract intact.
+   */
+  private pickHandleNearBody(): Handle | null {
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const hits = this.raycaster.intersectObjects([...this.mimic.segmentMeshes], false);
+    const hit = hits[0];
+    if (hit === undefined) return null;
+    let best: Handle | null = null;
+    let bestSq = WORLD_SCALE.playerHeight * WORLD_SCALE.playerHeight;
+    for (const handle of this.handles) {
+      const world = this.pose.worldPositions[handle.boneIndex];
+      if (world === undefined) continue;
+      const dx = world.x - hit.point.x;
+      const dy = world.y - hit.point.y;
+      const dz = world.z - hit.point.z;
+      const distanceSq = dx * dx + dy * dy + dz * dz;
+      if (distanceSq < bestSq) {
+        bestSq = distanceSq;
+        best = handle;
+      }
+    }
+    return best;
   }
 
   private pickSegmentSlot(): number {

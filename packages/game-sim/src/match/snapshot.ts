@@ -164,6 +164,9 @@ export interface MatchSnapshot {
   readonly cpj: readonly string[];
   /** Round the midpoint hunt hint went out for, or -1 (2026-08-04). */
   readonly hh: number;
+  /** Round the hunt-start opening hint went out for, or -1. Optional so a v4
+   * snapshot written before 2026-08-05 still restores. */
+  readonly oh?: number;
   readonly rv: ReadonlyArray<readonly [string, ReadonlyArray<readonly [ResultVoteCategory, string]>]>;
   readonly rm: ReadonlyArray<readonly [string, boolean]>;
   readonly rs: MatchResults | null;

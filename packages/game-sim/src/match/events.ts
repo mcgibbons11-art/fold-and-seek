@@ -278,6 +278,17 @@ export type PrivateSimEvent =
     })
   | (SimEventBase & {
       /**
+       * The opening thread (2026-08-05): delivered to each seeker once, as
+       * the hunt begins. How many hiders are out there, and how many of them
+       * climbed off the floor - a direction to start thinking in, never a
+       * place. Counts only, no objects, no zones, no bearings.
+       */
+      readonly type: "opening_hint";
+      readonly hidden: number;
+      readonly elevated: number;
+    })
+  | (SimEventBase & {
+      /**
        * The bravest blend: a third close pass with the same seeker. Delivered
        * to the hider it pays, once per seeker.
        */

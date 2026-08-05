@@ -819,6 +819,12 @@ export const PrivateSimEventSchema = z.discriminatedUnion("type", [
   }),
   z.strictObject({
     ...eventBase,
+    type: z.literal("opening_hint"),
+    hidden: count,
+    elevated: count,
+  }),
+  z.strictObject({
+    ...eventBase,
     type: z.literal("close_pass_jackpot"),
     inspectorPublicId: id,
   }),
@@ -970,6 +976,7 @@ export const MatchSnapshotSchema = z.strictObject({
     .max(LIMITS.maxPlayersPerMatch),
   cpj: z.array(z.string().max(LIMITS.idLength * 2 + 1)).max(LIMITS.maxCount),
   hh: z.number().int(),
+  oh: z.number().int().optional(),
   rv: z
     .array(z.tuple([id, z.array(z.tuple([ResultVoteCategorySchema, id])).max(LIMITS.maxCount)]))
     .max(LIMITS.maxPlayersPerMatch),

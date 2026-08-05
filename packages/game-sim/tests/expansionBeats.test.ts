@@ -118,6 +118,32 @@ describe("the close-pass jackpot", () => {
   });
 });
 
+describe("the opening hint", () => {
+  it("tells each seeker the census and the climbers as the hunt begins", () => {
+    const harness = huntHarness(9_011);
+    const inspector = harness.inspectorIds()[0] as string;
+
+    harness.tick(250);
+    const hints = harness.privateEventsOfType(inspector, "opening_hint");
+    expect(hints).toHaveLength(1);
+    expect(hints[0]?.hidden).toBe(harness.mimicIds().length);
+    // The harness plants every hider at its default root, which is on the
+    // floor, so nothing counts as having climbed.
+    expect(hints[0]?.elevated).toBe(0);
+
+    // Never a second one, however long the hunt runs.
+    harness.tick(1_000);
+    expect(harness.privateEventsOfType(inspector, "opening_hint")).toHaveLength(1);
+  });
+
+  it("never reaches a hider", () => {
+    const harness = huntHarness(9_012);
+    const mimicId = harness.mimicIds()[0] as string;
+    harness.tick(250);
+    expect(harness.privateEventsOfType(mimicId, "opening_hint")).toHaveLength(0);
+  });
+});
+
 describe("the midpoint hunt hint", () => {
   it("tells each seeker, once, how many live hiders they brushed past", () => {
     const harness = huntHarness(9_005);

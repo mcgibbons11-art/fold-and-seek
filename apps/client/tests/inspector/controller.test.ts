@@ -370,7 +370,7 @@ describe("InspectorController climbing", () => {
     expect(controller.position.y).toBeCloseTo(0, 6);
   });
 
-  it("uses S to drop an Inspector in place even while Forward and Space remain held", () => {
+  it("drops an Inspector in place on an S tap even while Forward and Space remain held", () => {
     const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.78, 0);
     walk(controller, 1, { forward: 1, jump: true });
     walkUntil(
@@ -380,12 +380,38 @@ describe("InspectorController climbing", () => {
     );
     const releasedAt = controller.position.y;
 
-    walk(controller, 1, { forward: 1, jump: true, disengageClimb: true });
+    // A tap: S down for a few frames, well inside the tap window, then
+    // released. The let-go fires on the release (2026-08-05: a held S climbs
+    // down instead).
+    walk(controller, 3, { forward: 1, jump: true, disengageClimb: true });
+    walk(controller, 6, { forward: 1, jump: true });
     expect(controller.climbState).toBeNull();
     expect(controller.position.y).toBeLessThanOrEqual(releasedAt);
-    expect(controller.position.y).toBeGreaterThan(0);
     expect(controller.grounded).toBe(false);
 
+    walkUntil(controller, { jump: false }, (current) => current.grounded);
+    expect(controller.position.y).toBeCloseTo(0, 6);
+  });
+
+  it("climbs back down while S is held, and steps off at the base", () => {
+    const controller = spawned(testNavData({ climbLinks: [] }), YAW_TOWARD_WALL, 0.78, 0);
+    walk(controller, 1, { forward: 1, jump: true });
+    walkUntil(
+      controller,
+      { forward: 1, jump: true },
+      (current) => (current.climbState?.progress ?? 0) > 0.3,
+    );
+    const heldAt = controller.position.y;
+
+    // Past the tap window a held S is a descent, not a bail: still attached,
+    // and lower than where the hold began.
+    walk(controller, 30, { forward: 1, jump: true, disengageClimb: true });
+    expect(controller.climbState).not.toBeNull();
+    expect(controller.position.y).toBeLessThan(heldAt);
+
+    // Ridden all the way down, the climb ends at the base rather than the lip.
+    walk(controller, 600, { forward: 1, jump: true, disengageClimb: true });
+    expect(controller.climbState).toBeNull();
     walkUntil(controller, { jump: false }, (current) => current.grounded);
     expect(controller.position.y).toBeCloseTo(0, 6);
   });

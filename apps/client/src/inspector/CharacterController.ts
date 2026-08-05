@@ -76,6 +76,12 @@ const CLIMB_RELEASE_DOWN_SPEED = WORLD_SCALE.playerHeight * 0.05;
 const CLIMB_RELEASE_OUTWARD_SPEED = WORLD_SCALE.playerHeight * 0.65;
 /** Clearance outside a climbed face. This must exceed the capsule radius. */
 const CLIMB_RELEASE_CLEARANCE = INSPECTOR_RADIUS_M * 1.15;
+/**
+ * S held longer than this climbs down; released inside it lets go (design
+ * review 2026-08-05). A quarter second separates a tap from a hold without
+ * making the descent feel gated.
+ */
+export const CLIMB_TAP_RELEASE_SECONDS = 0.25;
 /** Keeps the grapple capsule wholly outside a ledge until its feet clear it. */
 const GRAPPLE_LIP_CLEARANCE = INSPECTOR_RADIUS_M * 1.2;
 /** Places both feet and capsule centre securely inside the top face. */
@@ -258,6 +264,8 @@ export class CharacterController {
   private hopBaseY: number | null = null;
   private climb: MutableClimb | null = null;
   private grapple: MutableGrapple | null = null;
+  /** Seconds S/back has been held during the current climb; drives descent. */
+  private climbBackSeconds = 0;
   /**
    * The link just travelled. A climb ends standing on its own endpoint, so
    * without this a held forward key would re-enter the link and bounce the
@@ -454,12 +462,31 @@ export class CharacterController {
       return;
     }
 
-    if (this.climb !== null && (input.disengageClimb === true || input.forward < 0)) {
-      this.disengageClimb();
+    if (this.climb !== null) {
+      // S used to let go the instant it was pressed, and instinct presses S
+      // to climb DOWN (design review 2026-08-05). Held past the tap window it
+      // now descends the rise at climb speed; released inside the window it
+      // is still the old let-go, just on the key-up instead of the key-down.
+      const backing = input.disengageClimb === true || input.forward < 0;
+      if (!backing && this.climbBackSeconds > 0 && this.climbBackSeconds <= CLIMB_TAP_RELEASE_SECONDS) {
+        this.climbBackSeconds = 0;
+        this.disengageClimb();
+      } else {
+        this.climbBackSeconds = backing ? this.climbBackSeconds + dtSeconds : 0;
+      }
+    } else if (this.climbBackSeconds !== 0) {
+      this.climbBackSeconds = 0;
     }
     if (this.climb !== null && !input.jump) this.releaseClimbInput();
     if (this.climb !== null) {
-      this.advanceClimb(dtSeconds);
+      this.advanceClimb(
+        dtSeconds,
+        this.climbBackSeconds === 0
+          ? "up"
+          : this.climbBackSeconds > CLIMB_TAP_RELEASE_SECONDS
+            ? "down"
+            : "hold",
+      );
       return;
     }
 
@@ -1457,7 +1484,7 @@ export class CharacterController {
    * releasing after clearing it completes the dismount. A mantle is committed once
    * it starts, matching the authored vault of §26.4.
    */
-  private advanceClimb(dtSeconds: number): void {
+  private advanceClimb(dtSeconds: number, motion: "up" | "hold" | "down" = "up"): void {
     const climb = this.climb;
     if (climb === null) return;
 
@@ -1465,17 +1492,25 @@ export class CharacterController {
     this.speed = 0;
 
     if (climb.phase === "rise") {
-      climb.phaseProgress = Math.min(
-        1,
-        climb.phaseProgress + dtSeconds / climb.riseDurationSeconds,
-      );
+      const step = dtSeconds / climb.riseDurationSeconds;
+      // "hold" is S inside its tap window: the rise pauses so a tap never
+      // fights the descent it might become.
+      if (motion === "down") climb.phaseProgress = Math.max(0, climb.phaseProgress - step);
+      else if (motion === "up") climb.phaseProgress = Math.min(1, climb.phaseProgress + step);
       // The collision capsule stays at its known-safe attachment point until
       // its feet clear the lip. The former diagonal interpolation entered the
       // blocker halfway up, making every early release an embedded exit.
       this.position.x = climb.startX;
       this.position.z = climb.startZ;
       this.position.y = climb.startY + (climb.endY - climb.startY) * climb.phaseProgress;
-      if (climb.phaseProgress < 1) return;
+      // Climbing all the way back down steps off at the base; a held S never
+      // carries the body over the lip.
+      if (motion === "down" && climb.phaseProgress <= 0) {
+        this.climbBackSeconds = 0;
+        this.dropClimb(climb);
+        return;
+      }
+      if (climb.phaseProgress < 1 || motion !== "up") return;
       climb.phase = "topout";
       climb.phaseProgress = 0;
     }

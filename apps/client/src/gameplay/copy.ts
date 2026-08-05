@@ -240,11 +240,36 @@ export function huntHintLine(closePasses: number): string {
   return `Halfway. You have brushed right past ${String(closePasses)} of them.`;
 }
 
+/**
+ * The hunt-start thread for a seeker (2026-08-05): the census, and how many
+ * of them climbed. A direction to think in, never a place.
+ */
+export function openingHintLine(hidden: number, elevated: number): string {
+  const census = hidden === 1 ? "One Mimic is hiding" : `${String(hidden)} Mimics are hiding`;
+  if (hidden === 0) return "Nobody is hiding. Enjoy the quiet.";
+  if (elevated === 0) return `${census} — every one of them kept its feet on the boards.`;
+  if (elevated === hidden) {
+    return hidden === 1
+      ? `${census} — and it climbed. Look up.`
+      : `${census} — and all of them climbed. Look up.`;
+  }
+  return `${census} — ${String(elevated)} climbed off the floor.`;
+}
+
 export const RESTOCK_TITLE = "Warrant case";
 export function restockLine(byMe: boolean, name: string | null): string {
   if (byMe) return "The case snaps open. One warrant refilled.";
   return `${name ?? "A seeker"} refilled a warrant at the case.`;
 }
+
+/**
+ * The once-a-round reminder to a hider nobody has looked at (2026-08-05):
+ * hiding pays by the second, but the real money is in being watched and
+ * getting away with it.
+ */
+export const BAIT_NUDGE_TITLE = "Nobody is watching";
+export const BAIT_NUDGE_BODY =
+  "Safe pays slowly. Bait a passing seeker — a taunt under their gaze pays, and streaks pay more.";
 
 /**
  * The missed-finds board. It reports on a cycle rather than continuously, so a

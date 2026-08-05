@@ -11,6 +11,14 @@ export const INSPECTOR_ASSET_URL =
 /** Blender master is just over two metres from boot sole to head loop. */
 const AUTHORED_HEIGHT_M = 2.05;
 const CROSS_FADE_SECONDS = 0.1;
+/**
+ * Coming to a stop settles rather than cuts (design review 2026-08-05): the
+ * run-to-idle fade is longer than every other transition, so the last stride
+ * finishes as a weight shift instead of a freeze-frame. Starting to run keeps
+ * the quick fade - responsiveness belongs to the player's input, the settle
+ * belongs to the body.
+ */
+const STOP_FADE_SECONDS = 0.28;
 const FIRE_FADE_SECONDS = 0.045;
 const HIT_FADE_SECONDS = 0.065;
 /** Keep the Mixamo stride readable without its exaggerated hip/shoulder swagger. */
@@ -258,7 +266,9 @@ export class InspectorAvatar {
         this.play(inspectorActionForFrame(frame, this.currentAction === "run"));
       }
     } else {
-      this.play(inspectorActionForFrame(frame, this.currentAction === "run"));
+      const next = inspectorActionForFrame(frame, this.currentAction === "run");
+      const stopping = this.currentAction === "run" && next === "rifle-idle";
+      this.play(next, stopping ? STOP_FADE_SECONDS : CROSS_FADE_SECONDS);
     }
 
     const run = this.actions.get("run");

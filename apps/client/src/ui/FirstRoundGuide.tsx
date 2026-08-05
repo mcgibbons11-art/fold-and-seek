@@ -21,10 +21,10 @@ interface GuideStep {
 }
 
 const MIMIC_STEPS: readonly GuideStep[] = [
-  { title: "Move", instruction: "WASD moves · Space hops/climbs · S drops a climb." },
+  { title: "Move", instruction: "WASD moves · hold Space at any solid face to climb it · hold S to climb down, tap S to let go." },
   { title: "Shape", instruction: "Choose a preset or change your disguise." },
   { title: "Paint", instruction: "Press 5, then spray one quick mark." },
-  { title: "Lock", instruction: "Press Enter when the disguise is convincing." },
+  { title: "Lock", instruction: "Press E to see their eyeline, then Enter when the disguise convinces you." },
 ];
 
 const INSPECTOR_STEPS: readonly GuideStep[] = [

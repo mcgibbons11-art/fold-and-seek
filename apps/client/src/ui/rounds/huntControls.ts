@@ -240,7 +240,7 @@ export const HIDER_CONTROL_HINTS: readonly ControlHint[] = [
   { id: "walk", keys: ["W", "A", "S", "D"], label: "Run" },
   { id: "jump", keys: ["Space"], label: "Hop · hold forward at a solid to climb" },
   { id: "camera", keys: ["LMB"], label: "Look around" },
-  { id: "drag", keys: ["LMB"], label: "On a handle: pose" },
+  { id: "drag", keys: ["LMB"], label: "On your body: pose it" },
   { id: "undo", keys: ["Ctrl", "Z"], label: "Undo" },
   { id: "silhouette", keys: ["V"], label: "Silhouette" },
   { id: "eyeline", keys: ["E"], label: "Their eyeline" },

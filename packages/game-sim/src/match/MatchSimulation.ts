@@ -51,6 +51,7 @@ import {
   phaseDurationMs,
   type ResultVoteCategory,
   CLOSE_PASS_JACKPOT_COUNT,
+  OPENING_HINT_ELEVATED_MIN_Y,
   WARRANT_RESTOCK_COUNT,
 } from "./constants";
 import type {
@@ -566,6 +567,8 @@ export class MatchSimulation {
   private readonly closePassJackpotPaid = new Set<string>();
   /** Round the midpoint hunt hint was delivered for, or -1. */
   private huntHintDeliveredRound = -1;
+  /** Round the hunt-start opening hint was delivered for, or -1. */
+  private openingHintRound = -1;
 
   private readonly resultVotes = new Map<string, Map<ResultVoteCategory, string>>();
   private readonly rematchVotes = new Map<string, boolean>();
@@ -730,6 +733,7 @@ export class MatchSimulation {
     // ended on this same tick, and before the board, so what it publishes
     // includes what was just earned.
     this.detectClosePasses();
+    this.deliverOpeningHint();
     this.deliverHuntHint();
     if (this.isInspectionPhase() && this.nowMs >= this.nextMissedFindsAtMs) {
       this.emitMissedFinds(false);
@@ -1219,6 +1223,30 @@ export class MatchSimulation {
   }
 
   /**
+   * The opening thread (2026-08-05): as the hunt begins, each seeker learns
+   * how many hiders are out there and how many of them climbed off the floor.
+   * A new Inspector otherwise spends the first half of the clock walking
+   * rather than deducing; this gives them a direction to think in without
+   * naming an object, a zone, or a bearing.
+   */
+  private deliverOpeningHint(): void {
+    if (this.openingHintRound === this.round) return;
+    if (this.phase !== MatchPhase.Inspection) return;
+    this.openingHintRound = this.round;
+    let hidden = 0;
+    let elevated = 0;
+    for (const record of this.disguises.values()) {
+      if (record.caughtAtMs !== null) continue;
+      hidden += 1;
+      if (record.rootPosition[1] >= OPENING_HINT_ELEVATED_MIN_Y) elevated += 1;
+    }
+    for (const player of this.players.values()) {
+      if (player.role !== "inspector" || !player.connected) continue;
+      this.emitPrivate(player.playerId, { type: "opening_hint", hidden, elevated });
+    }
+  }
+
+  /**
    * The midpoint nudge (2026-08-04): once per round, each seeker privately
    * learns how many live hiders they have already brushed right past. It
    * names no object and no place, so it sharpens the hunt without becoming a
@@ -1573,6 +1601,7 @@ export class MatchSimulation {
       cpn: flattenNested(this.closePassCountBy),
       cpj: [...this.closePassJackpotPaid],
       hh: this.huntHintDeliveredRound,
+      oh: this.openingHintRound,
       rv: flattenNested(this.resultVotes),
       rm: [...this.rematchVotes.entries()].map(([id, yes]) => [id, yes] as const),
       rs: this.copyResults(this.results),
@@ -1664,6 +1693,7 @@ export class MatchSimulation {
     fillNested(sim.closePassCountBy, snapshot.cpn);
     for (const pair of snapshot.cpj) sim.closePassJackpotPaid.add(pair);
     sim.huntHintDeliveredRound = snapshot.hh;
+    sim.openingHintRound = snapshot.oh ?? -1;
     fillNested(sim.resultVotes, snapshot.rv);
     for (const [playerId, yes] of snapshot.rm) sim.rematchVotes.set(playerId, yes);
 
