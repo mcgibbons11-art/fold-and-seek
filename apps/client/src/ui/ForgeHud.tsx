@@ -7,7 +7,11 @@ import {
 } from "../mimic/disguiseState";
 import { PANEL_PROFILE_IDS, type PanelProfileId } from "../mimic/panels";
 import { SEGMENT_PROFILE_IDS, type SegmentProfileId } from "../mimic/segmentForm";
-import { swatchById } from "../mimic/visual/materialSwatches";
+import {
+  swatchById,
+  type MaterialFamily,
+  type MaterialSwatch,
+} from "../mimic/visual/materialSwatches";
 import { PaintPanel } from "./paint/PaintPanel";
 import {
   FORGE_TOOL_MODES,
@@ -1160,47 +1164,146 @@ function MaterialPanel({
       >
         Dropper F{state.materialDropperArmed ? " · click to copy" : ""}
       </button>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12 }}>
-        {controller.swatches.map((swatch) => {
-          const selected = state.sampledSwatchId === swatch.id;
-          return (
-            <button
-              key={swatch.id}
-              type="button"
-              title={swatch.label}
-              onClick={() => {
-                controller.selectSwatch(swatch.id);
-              }}
+      {/* The tray scrolls inside itself: at 720p a full family list ran on
+          under the lock panel, and a swatch nobody can reach is not offered. */}
+      <div style={{ maxHeight: "38vh", overflowY: "auto", paddingRight: 4, marginBottom: 2 }}>
+      {MATERIAL_FAMILY_ORDER.map((family) => {
+        const row = controller.swatches.filter((swatch) => swatch.family === family);
+        if (row.length === 0) return null;
+        return (
+          <div key={family} style={{ marginBottom: 8 }}>
+            <div
               style={{
-                width: 34,
-                height: 34,
-                borderRadius: 7,
-                cursor: "pointer",
-                border: selected ? `2px solid ${BRASS_LIT}` : EDGE,
-                boxShadow: selected
-                  ? "0 0 12px rgba(255, 190, 107, 0.45)"
-                  : "inset 0 1px 0 rgba(255, 255, 255, 0.12)",
-                background: `rgb(${swatch.baseColor.map((value) => Math.round(value * 255)).join(",")})`,
+                fontSize: 9,
+                letterSpacing: "0.16em",
+                textTransform: "uppercase",
+                color: BRASS_LIT,
+                opacity: 0.8,
+                marginBottom: 4,
               }}
-            />
-          );
-        })}
+            >
+              {MATERIAL_FAMILY_LABELS[family]}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {row.map((swatch) => {
+                const selected = state.sampledSwatchId === swatch.id;
+                return (
+                  <button
+                    key={swatch.id}
+                    type="button"
+                    title={swatch.label}
+                    aria-label={swatch.label}
+                    aria-pressed={selected}
+                    onClick={() => {
+                      controller.selectSwatch(swatch.id);
+                    }}
+                    style={{
+                      width: 30,
+                      height: 30,
+                      borderRadius: 7,
+                      cursor: "pointer",
+                      border: selected ? `2px solid ${BRASS_LIT}` : EDGE,
+                      boxShadow: selected
+                        ? "0 0 12px rgba(255, 190, 107, 0.45)"
+                        : "inset 0 1px 0 rgba(255, 255, 255, 0.12)",
+                      background: swatchChipBackground(swatch),
+                    }}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
       </div>
-      <div style={{ marginBottom: 10 }}>
-        Holding: <span style={{ color: BRASS_LIT }}>{held?.label ?? "nothing"}</span>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          margin: "10px 0",
+          padding: "7px 9px",
+          border: EDGE,
+          borderRadius: 8,
+          borderColor: held === null ? undefined : BRASS_LIT,
+        }}
+      >
+        <span
+          aria-hidden
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 5,
+            flexShrink: 0,
+            border: EDGE,
+            background: held === null ? "transparent" : swatchChipBackground(held),
+          }}
+        />
+        <span style={{ minWidth: 0 }}>
+          {held === null ? (
+            <span style={{ opacity: 0.6 }}>Nothing held — pick or sample a swatch.</span>
+          ) : (
+            <>
+              <span style={{ color: BRASS_LIT }}>{held.label}</span>
+              <span style={{ opacity: 0.55 }}> · {MATERIAL_FAMILY_LABELS[held.family]}</span>
+            </>
+          )}
+        </span>
       </div>
       <button
         type="button"
-        style={buttonStyle}
+        className={PRESS_CLASS}
+        disabled={held === null}
+        style={{ ...buttonStyle, opacity: held === null ? 0.5 : 1 }}
         onClick={() => {
           controller.assignSwatch("body");
         }}
       >
-        Paint the whole body
+        Apply to whole body
       </button>
       <div style={{ opacity: 0.6, fontSize: 11 }}>
         Body swatch: {swatchById(state.bodySwatchId)?.label ?? state.bodySwatchId}
       </div>
     </Section>
   );
+}
+
+/** Tray order and tray names for the swatch families a Mimic may wear. */
+const MATERIAL_FAMILY_ORDER: readonly MaterialFamily[] = [
+  "wood",
+  "metal",
+  "ceramic",
+  "paint",
+  "fabric",
+  "paper",
+  "stone",
+  "glass",
+  "plastic",
+];
+const MATERIAL_FAMILY_LABELS: Readonly<Record<MaterialFamily, string>> = {
+  wood: "Woods",
+  metal: "Metals",
+  ceramic: "Ceramics",
+  paint: "Painted",
+  fabric: "Cloth",
+  paper: "Paper",
+  stone: "Stone",
+  glass: "Glass",
+  plastic: "Bakelite",
+};
+
+/**
+ * A chip wears its material, not only its colour: metals catch a diagonal
+ * highlight and polished finishes a top sheen, so the tray reads as finishes
+ * rather than as a paint palette (which is the other tool).
+ */
+function swatchChipBackground(swatch: MaterialSwatch): string {
+  const rgb = `rgb(${swatch.baseColor.map((value) => Math.round(value * 255)).join(",")})`;
+  if (swatch.metalness > 0.5) {
+    return `linear-gradient(135deg, rgba(255,255,255,0.5), rgba(255,255,255,0) 45%), ${rgb}`;
+  }
+  if (swatch.roughness < 0.25) {
+    return `linear-gradient(180deg, rgba(255,255,255,0.32), rgba(255,255,255,0) 38%), ${rgb}`;
+  }
+  return rgb;
 }
