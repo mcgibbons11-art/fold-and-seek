@@ -111,7 +111,7 @@ import {
   type PaintHistoryTarget,
   type PoseSnapshot,
 } from "./forgeCommands";
-import { resolveSurfaceSwatch } from "./roomSwatches";
+import { resolveSurfaceSwatch, traySwatchForSurface } from "./roomSwatches";
 import {
   anchorForBone,
   anchorResidual,
@@ -470,6 +470,8 @@ const GIZMO_TIP_LENGTH_M = WORLD_SCALE.playerHeight * 0.12;
 const GIZMO_TIP_RADIUS_M = WORLD_SCALE.playerHeight * 0.045;
 const GIZMO_PICK_RADIUS_M = WORLD_SCALE.playerHeight * 0.09;
 const GIZMO_PARAM_PER_METRE = 1 / WORLD_SCALE.playerHeight;
+/** How far a body shell may sit in front of a stud before it occludes it. */
+const PANEL_PICK_OCCLUSION_TOLERANCE_M = WORLD_SCALE.playerHeight * 0.1;
 const HANDLE_OPACITY_HOVER = 0.85;
 const HANDLE_OPACITY_DRAG = 1;
 
@@ -1990,7 +1992,14 @@ export class ForgeController {
       return;
     }
     const panel = createDefaultPanelState(socketId);
-    panel.deployed = 0.6;
+    // A fresh panel THROWS itself open (2026-08-06): fully deployed, swung
+    // out on its hinge, and a size that reads. The old 0.6-deployed flat
+    // default hugged the body and the click looked like it did nothing -
+    // which players reported as the tool not working at all.
+    panel.deployed = 1;
+    panel.hingeAngle = 75;
+    panel.width = 0.5;
+    panel.height = 0.5;
     const issuedAt = performance.now();
     const commands = [createPanelCommand(socketId, null, panel, issuedAt)];
     const opposite = this.mirror ? mirroredSlotId(socketId) : null;
@@ -2162,15 +2171,26 @@ export class ForgeController {
       this.emit();
       return;
     }
-    const swatch = swatchById(swatchId);
-    if (swatch === null || !swatch.legalForMimic) {
-      this.status = `${swatch?.label ?? swatchId} is not allowed on a disguise.`;
+    // The room's finishes map onto the body's own tray: sampling wears the
+    // nearest legal equivalent rather than refusing an id the body's table
+    // has never heard of (2026-08-06).
+    const sample = traySwatchForSurface(swatchId);
+    if (sample.kind === "refused") {
+      this.status = `${sample.label} is not allowed on a disguise.`;
       this.emit();
       return;
     }
-    this.sampledSwatchId = swatchId;
+    if (sample.kind === "none") {
+      this.status = "That surface publishes no material swatch.";
+      this.emit();
+      return;
+    }
+    this.sampledSwatchId = sample.tray.id;
     this.audio.play("material_sample");
-    this.status = `Sampled ${swatch.label}. Click a part to paint it, or use "whole body".`;
+    this.status =
+      sample.tray.label === sample.surfaceLabel
+        ? `Sampled ${sample.tray.label}. Click a part to paint it, or use "whole body".`
+        : `Sampled ${sample.surfaceLabel} — worn as ${sample.tray.label}. Click a part to paint it.`;
     this.emit();
   }
 
@@ -3354,15 +3374,22 @@ export class ForgeController {
    * one swells to say it is the one about to fold.
    */
   private layoutHoverAffordances(): void {
-    const hoverWanted =
-      this.toolsActive &&
-      !this.locked &&
-      this.gizmoDrag === null &&
-      this.draggedHandle === null &&
+    const interactive =
+      this.toolsActive && !this.locked && this.gizmoDrag === null && this.draggedHandle === null;
+    const partHoverWanted =
+      interactive &&
       (this.mode === "shape" || this.mode === "material" || this.mode === "pose") &&
       this.hoveredSlot >= 0 &&
       !(this.mode === "shape" && this.selectedSlots.has(this.hoveredSlot));
-    const mesh = hoverWanted ? this.mimic.segmentMeshes[this.hoveredSlot] : undefined;
+    // In panels mode the hovered DEPLOYED plate takes the box, so an
+    // existing panel reads as clickable too, not only the empty studs.
+    const hoveredPlate =
+      interactive && this.mode === "panels" && this.hoveredSocket !== null
+        ? this.mimic.panelMeshes.find(
+            (plate) => plate.visible && plate.userData["panelSocket"] === this.hoveredSocket,
+          )
+        : undefined;
+    const mesh = partHoverWanted ? this.mimic.segmentMeshes[this.hoveredSlot] : hoveredPlate;
     if (mesh !== undefined) {
       if (this.hoverOutline === null) {
         this.hoverOutline = new THREE.LineSegments(
@@ -4491,15 +4518,37 @@ export class ForgeController {
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
     // The invisible pick discs stand in for the studs (2026-08-05): the stud
     // itself is a body-scaled feature a few pixels wide, and asking players
-    // to hit it exactly is why the panel tool read as dead.
+    // to hit it exactly is why the panel tool read as dead. The body's own
+    // shells join the ray as occluders (2026-08-06): without them a click on
+    // the chest reached the stud on the BACK, and the panel it deployed was
+    // invisible from where the player stood - "it did nothing".
     const candidates = [
       ...this.mimic.panelMeshes,
       ...this.mimic.socketMarkers,
       ...this.mimic.socketPicks,
     ].filter((mesh) => mesh.visible);
-    const hits = this.raycaster.intersectObjects(candidates, false);
-    const socket = hits[0]?.object.userData["panelSocket"];
-    return typeof socket === "string" && isPanelSocketName(socket) ? socket : null;
+    const hits = this.raycaster.intersectObjects(
+      [...candidates, ...this.mimic.segmentMeshes],
+      false,
+    );
+    let socketHit: { distance: number; socket: PanelSocketName } | null = null;
+    let bodyDistance = Number.POSITIVE_INFINITY;
+    for (const hit of hits) {
+      const socket = hit.object.userData["panelSocket"];
+      if (typeof socket === "string") {
+        if (socketHit === null && isPanelSocketName(socket)) {
+          socketHit = { distance: hit.distance, socket };
+        }
+      } else if (hit.distance < bodyDistance) {
+        bodyDistance = hit.distance;
+      }
+    }
+    if (socketHit === null) return null;
+    // A stud sits ON the shell, so the shell may beat its own stud by a
+    // hair; only a body hit clearly in FRONT of the socket occludes it.
+    return socketHit.distance <= bodyDistance + PANEL_PICK_OCCLUSION_TOLERANCE_M
+      ? socketHit.socket
+      : null;
   }
 
   private raycastRoom(): THREE.Intersection | null {
