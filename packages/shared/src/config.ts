@@ -163,7 +163,10 @@ export const DEFAULT_MATCH_SETTINGS = {
   forgeMs: 115_000,
   lockGraceMs: 5_000,
   inspectionIntroMs: 4_000,
-  inspectionMs: 75_000,
+  // Raised 75s -> 135s (2026-08-06, user order: "it isn't enough time"). The
+  // expanded shop is two storeys and ~180 inspectable objects; at 75 seconds a
+  // seeker spent the hunt walking rather than deducing.
+  inspectionMs: 135_000,
   revealMs: 12_000,
   resultsMs: 15_000,
   rematchVoteMs: 12_000,

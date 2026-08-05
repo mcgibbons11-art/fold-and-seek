@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MatchPhase, MatchSnapshotSchema } from "@foldseek/shared";
+import { DEFAULT_MATCH_SETTINGS, MatchPhase, MatchSnapshotSchema } from "@foldseek/shared";
 import {
   DEFAULT_OBJECT_REGISTRY,
   MATCH_SNAPSHOT_VERSION,
@@ -391,9 +391,11 @@ describe("host migration snapshot", () => {
       },
       { at: 20_000 },
       // Past the inspection deadline, then far enough for the reveal to resolve
-      // into results, so the comparison covers the end of the round too.
-      { at: 90_000 },
-      { at: 120_000 },
+      // into results, so the comparison covers the end of the round too. Both
+      // beats are derived from the hunt length rather than pinned, so tuning
+      // the clock cannot quietly stop this test reaching the end of a round.
+      { at: DEFAULT_MATCH_SETTINGS.inspectionMs + 20_000 },
+      { at: DEFAULT_MATCH_SETTINGS.inspectionMs + 60_000 },
     ];
 
     const play = (sim: MatchSimulation): string[] => {

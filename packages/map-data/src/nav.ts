@@ -8,7 +8,7 @@ import type {
 } from "./navData";
 import { WORLD_SCALE } from "./navData";
 import { focusBoundsFor } from "./objects";
-import { SHOP_PLACEMENTS, type PropPlacement } from "./placements";
+import { SHOP_PLACEMENTS, SOLID_PROP_VOLUMES, type PropPlacement } from "./placements";
 import {
   ANNEX_SCREEN_NORTH,
   ANNEX_SCREEN_WEST,
@@ -702,7 +702,28 @@ export const OFFICE_DOOR_BLOCKER: AABB = aabb(
   OFFICE_DOOR_MAX_Z,
 );
 
-export const MIMIC_NAV_BLOCKERS: readonly AABB[] = [...NAV_BLOCKERS, OFFICE_DOOR_BLOCKER];
+/**
+ * Solid decor as movement collision for a hiding body (2026-08-06, user
+ * order: "prevent players from hiding inside of objects... everything should
+ * have colliders").
+ *
+ * Occupancy validation already refused a root buried in a bottle, but that is
+ * an authority answer arriving after the fact: nothing stopped the body from
+ * walking in, so a player could stand inside a plant and look hidden on their
+ * own screen. These are the same volumes, made physical.
+ *
+ * `blocksCapsule` ignores a blocker whose top is inside step height, so floor
+ * books and low clutter stay steppable rather than becoming walls, and a prop
+ * standing on a shelf only blocks a body whose feet are on that shelf. The
+ * authored furniture bays are deliberately NOT here: a bookcase hollow is a
+ * hiding place the map means to offer, and its blockers are hand-written
+ * board by board so those bays stay open.
+ */
+export const MIMIC_NAV_BLOCKERS: readonly AABB[] = [
+  ...NAV_BLOCKERS,
+  ...SOLID_PROP_VOLUMES,
+  OFFICE_DOOR_BLOCKER,
+];
 
 // ---------------------------------------------------------------------------
 // Climb links

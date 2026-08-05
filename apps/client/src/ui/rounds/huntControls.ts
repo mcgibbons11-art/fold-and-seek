@@ -199,7 +199,12 @@ export function boardRailAction(open: boolean): RailAction {
 export const CORE_CONTROL_HINTS: readonly ControlHint[] = [
   { id: "walk", keys: ["W", "A", "S", "D"], label: "Move" },
   { id: "camera", keys: ["Hold LMB"], label: "Look around" },
-  { id: "jump", keys: ["Space"], label: "Jump · hold forward at a solid to climb" },
+  { id: "jump", keys: ["Space"], label: "Jump" },
+  // Climb and grapple are movement verbs, not extras: a player who never
+  // learns them never reaches the gallery, and the shop is two storeys
+  // (2026-08-06). Each gets its own line rather than a clause on the jump.
+  { id: "climb", keys: ["Space"], label: "Climb: hold at a solid face · hold S to climb down" },
+  { id: "grapple", keys: ["Q"], label: "Grapple to a latch · S releases" },
 ];
 
 /**
@@ -218,7 +223,9 @@ export const INSPECTOR_ROLE_HINTS: readonly ControlHint[] = [
   { id: "camera", keys: ["Mouse"], label: "Look around" },
   { id: "fire", keys: ["LMB"], label: "Fire a warrant" },
   { id: "aim", keys: ["RMB"], label: "Aim" },
-  { id: "jump", keys: ["Space"], label: "Hop · hold forward at a solid to climb" },
+  { id: "jump", keys: ["Space"], label: "Hop" },
+  { id: "climb", keys: ["Space"], label: "Climb: hold at a solid face · hold S to climb down" },
+  { id: "grapple", keys: ["Q"], label: "Grapple to a latch · S releases" },
 ];
 
 /** Which set a role card prints. Everyone but the Inspector takes the core set. */

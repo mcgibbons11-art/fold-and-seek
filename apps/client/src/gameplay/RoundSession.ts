@@ -1284,12 +1284,22 @@ export class RoundSession {
       // resolves the accusation inside the fire call, so the phase was
       // already "cooling" by the frame's sample and the shot went silent.
       onShot: (outcome) => {
-        if (outcome !== "hit") {
+        // The office is where an Inspector meets the gun (2026-08-06). Nothing
+        // in there is accusable, so every trigger pull took the dry-click path
+        // and the weapon read as broken - which is also why spent warrants
+        // were suspected. A pull during the vigil is a blank: it reports like
+        // the real thing, spends nothing, and says so. The authority cannot be
+        // reached from here in any case; `accuse` is gated on the hunt phase.
+        const testFiring = OFFICE_VIGIL_PHASES.has(this.state().phase);
+        if (outcome !== "hit" && !testFiring) {
           this.audio.play("gun_dry_click");
           return;
         }
         this.audio.play("gun_fire");
-        this.captions.push({ label: "Warrant fired", importance: "critical" });
+        this.captions.push({
+          label: testFiring ? "Test round · no warrant spent" : "Warrant fired",
+          importance: "critical",
+        });
         if (this.gunCycleTimer !== null) clearTimeout(this.gunCycleTimer);
         this.gunCycleTimer = setTimeout(() => {
           this.gunCycleTimer = null;

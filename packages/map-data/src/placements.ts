@@ -3662,6 +3662,11 @@ const SOLID_PROP_FAMILIES: ReadonlySet<PropFamily> = new Set([
   "sculpture",
   "tool",
   "stand",
+  // Added 2026-08-06 (user: "all plants, bottles, books etc... no hiding
+  // inside physical objects"). Lamps and cased clocks are solid objects a
+  // body should stand beside, never inside.
+  "lamp",
+  "frame",
 ]);
 
 /**

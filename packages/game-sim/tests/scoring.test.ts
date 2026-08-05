@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { MatchPhase } from "@foldseek/shared";
-import { scoreInspector, scoreMimic } from "../src";
+import { DEFAULT_MATCH_SETTINGS, MatchPhase } from "@foldseek/shared";
+import {
+  SCORE_INSPECTOR_PER_CORRECT,
+  SCORE_INSPECTOR_PER_SECOND_REMAINING_ON_WIN,
+  scoreInspector,
+  scoreMimic,
+} from "../src";
 import { Harness } from "./harness";
 
 describe("scoring", () => {
@@ -91,14 +96,20 @@ describe("scoring", () => {
 
     const results = harness.eventsOfType("match_ended")[0]?.results;
     expect(results?.winner).toBe("inspectors");
-    // Inspection is 75 s and the last catch landed at 15 s, so 60 s remain.
-    expect(results?.timeRemainingMs).toBe(60_000);
+    // The last catch landed at 15 s, so whatever the hunt is worth minus
+    // those 15 s is what remains. Derived, not pinned: the hunt length is a
+    // tuning knob and this assertion is about the clock, not its value.
+    const remainingMs = DEFAULT_MATCH_SETTINGS.inspectionMs - 15_000;
+    expect(results?.timeRemainingMs).toBe(remainingMs);
 
     const byPublicId = new Map(results?.players.map((entry) => [entry.publicPlayerId, entry]));
     const inspectorPublicId = harness.sim.getPrivateStateFor(inspector)?.publicPlayerId as string;
     const inspectorResult = byPublicId.get(inspectorPublicId);
-    // 2*400 - 0 + 60*8 + 0 focused objects
-    expect(inspectorResult?.score).toBe(1_280);
+    // 2 catches at 400, no wrong shots, plus 8 a second for the time left.
+    expect(inspectorResult?.score).toBe(
+      2 * SCORE_INSPECTOR_PER_CORRECT +
+        (remainingMs / 1000) * SCORE_INSPECTOR_PER_SECOND_REMAINING_ON_WIN,
+    );
 
     const firstPublicId = harness.sim.getPrivateStateFor(firstMimic as string)
       ?.publicPlayerId as string;
