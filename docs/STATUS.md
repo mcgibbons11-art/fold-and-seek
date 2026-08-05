@@ -1,5 +1,18 @@
 # STATUS
 
+## The where-can-I-click layer (2026-08-06, follow-up)
+
+User verdict: players need to know what they are modifying and where to
+click. A soft cream box now stands on whatever body part the cursor rests
+over wherever a click would act on it - select in Shape, paint in
+Material, grab in Pose - distinct from the brass boxes of the selection
+itself; the panel tool's socket studs breathe while the tool is up and the
+hovered stud swells. Hover state clears on tool switch and stow. Verified
+in the LIVE EDITOR (forgeAuditEditor.mjs, commit bf0fd87): hover box on
+the pelvis before any click, a deployed panel standing out of its socket,
+the family-grouped material tray, and the whole tool audit green again
+with zero console errors. 1,111 client tests green.
+
 ## The Forge audit: every tool driven, four bugs down, and the editor says so (2026-08-06)
 
 The user reported multi-resize absent, no selection feedback, a dead
