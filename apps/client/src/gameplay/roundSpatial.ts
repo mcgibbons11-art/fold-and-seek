@@ -3,6 +3,7 @@ import { DEFAULT_MATCH_SETTINGS, type MatchSettings } from "@foldseek/shared";
 
 import { SpatialValidatorImpl } from "../inspector/SpatialValidatorImpl";
 import type { AABB, Vec3Like } from "../inspector/navData";
+import { SOLID_PROP_VOLUMES } from "@foldseek/map-data";
 import { NAV_DATA, WARRANT_RESTOCK_VOLUME } from "../world/maps/nav";
 import { CURIOSITY_SHOP_OBJECTS } from "../world/maps/registry";
 
@@ -158,6 +159,7 @@ export class RoundSpatialBridge implements SpatialValidator {
       floors: NAV_DATA.floors,
       blockers: NAV_DATA.blockers,
       forbiddenOccupancy: [NAV_DATA.securityOffice],
+      solidProps: SOLID_PROP_VOLUMES,
       accusationDistance: this.accusationDistance,
       focusDistance: this.focusDistance,
       restockVolume: WARRANT_RESTOCK_VOLUME,

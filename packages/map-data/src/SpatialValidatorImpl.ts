@@ -35,6 +35,12 @@ export interface SpatialValidatorDeps {
   readonly blockers: readonly AABB[];
   /** Volumes a Mimic root may never occupy even though an Inspector may walk there. */
   readonly forbiddenOccupancy?: readonly AABB[];
+  /**
+   * Solid decor volumes (bottles, busts, crates - `SOLID_PROP_VOLUMES`).
+   * Occupancy-only: they refuse a root buried inside an object without ever
+   * blocking movement past it.
+   */
+  readonly solidProps?: readonly AABB[];
   /** `accusationDistance` from the match settings. */
   readonly accusationDistance: number;
   /** `inspectorFocusDistance` from the match settings. */
@@ -138,6 +144,21 @@ export class SpatialValidatorImpl implements SpatialValidator {
         y < blocker.max.y - OCCUPANCY_PENETRATION_M &&
         z > blocker.min.z + OCCUPANCY_PENETRATION_M &&
         z < blocker.max.z - OCCUPANCY_PENETRATION_M
+      ) {
+        return refuse("inside_blocked_geometry");
+      }
+    }
+
+    // Solid decor is checked the same way with the same tolerance: leaning
+    // against a bottle is a hiding place, being inside it is not.
+    for (const solid of this.deps.solidProps ?? []) {
+      if (
+        x > solid.min.x + OCCUPANCY_PENETRATION_M &&
+        x < solid.max.x - OCCUPANCY_PENETRATION_M &&
+        y > solid.min.y + OCCUPANCY_PENETRATION_M &&
+        y < solid.max.y - OCCUPANCY_PENETRATION_M &&
+        z > solid.min.z + OCCUPANCY_PENETRATION_M &&
+        z < solid.max.z - OCCUPANCY_PENETRATION_M
       ) {
         return refuse("inside_blocked_geometry");
       }

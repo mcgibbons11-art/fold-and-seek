@@ -1,4 +1,5 @@
 import type { InnocentReactionId } from "@foldseek/shared";
+import type { AABB } from "./navData";
 import type { ZoneId } from "./zones";
 
 /**
@@ -89,7 +90,8 @@ export type PropVariant =
   | "display_stand"
   | "ornament"
   | "specimen_jar"
-  | "indicator_light";
+  | "indicator_light"
+  | "case_board";
 
 /** A lamp that actually lights the room rather than only reading as one. */
 export interface PracticalLight {
@@ -3189,6 +3191,191 @@ const SECURITY_OFFICE: readonly PropPlacement[] = [
     inspectable: false,
     focus: [0.85, 0.3, 0.24],
   }),
+
+  // --- 2026-08-05: the guard post gets its casework (user verdict: still
+  // under-decorated). The centrepiece is the investigation board behind the
+  // desk - pinned cards tied with red string - flanked by the evidence shelf,
+  // the guard's coat, and the working clutter of a night watch: desk bell,
+  // truncheon, confiscated parcels, a candle burning on the crate.
+  p({
+    objectId: "office_caseboard_01",
+    variant: "case_board",
+    categoryId: "case_board",
+    family: "frame",
+    zoneId: "security_office",
+    position: [7.42, 1.72, 3.7],
+    rotationY: EAST,
+    size: 1.2,
+    inspectable: false,
+    swatchIds: ["walnut_dark_01", "wool_midnight_03", "velvet_burgundy_01"],
+    focus: [1.3, 0.9, 0.12],
+  }),
+  // The evidence shelf on the south wall: sealed specimens of confiscated
+  // stock beside the watchman's manuals.
+  p({
+    objectId: "office_shelf_02",
+    variant: "wall_shelf",
+    categoryId: "wall_shelf",
+    family: "furniture",
+    zoneId: "security_office",
+    position: [6.9, 1.45, 5.42],
+    rotationY: SOUTH,
+    size: 0.7,
+    inspectable: false,
+    swatchIds: ["walnut_dark_01", "iron_dark_03"],
+    focus: [0.7, 0.2, 0.3],
+  }),
+  p({
+    objectId: "office_jar_01",
+    variant: "specimen_jar",
+    categoryId: "specimen_jar",
+    family: "vessel",
+    zoneId: "security_office",
+    position: [6.72, 1.47, 5.42],
+    inspectable: false,
+    focus: [0.18, 0.3, 0.18],
+  }),
+  p({
+    objectId: "office_jar_02",
+    variant: "specimen_jar",
+    categoryId: "specimen_jar",
+    family: "vessel",
+    zoneId: "security_office",
+    position: [7.05, 1.47, 5.42],
+    rotationY: 0.4,
+    inspectable: false,
+    focus: [0.18, 0.3, 0.18],
+  }),
+  // Standing notices on the south wall over the visitor's side of the room.
+  p({
+    objectId: "office_poster_01",
+    variant: "picture_frame",
+    categoryId: "picture_frame",
+    family: "frame",
+    zoneId: "security_office",
+    position: [5.35, 1.85, 5.4],
+    rotationY: SOUTH,
+    size: 0.34,
+    inspectable: false,
+    swatchIds: ["walnut_mid_02", "paper_kraft_02", "brass_tarnished_01"],
+    focus: [0.42, 0.34, 0.1],
+  }),
+  p({
+    objectId: "office_poster_02",
+    variant: "picture_frame",
+    categoryId: "picture_frame",
+    family: "frame",
+    zoneId: "security_office",
+    position: [5.8, 2.12, 5.4],
+    rotationY: SOUTH,
+    size: 0.28,
+    inspectable: false,
+    swatchIds: ["iron_dark_03", "paper_aged_01", "brass_aged_02"],
+    focus: [0.36, 0.28, 0.1],
+  }),
+  // The guard's greatcoat on its stand by the evidence corner.
+  p({
+    objectId: "office_coat_01",
+    variant: "mannequin",
+    categoryId: "mannequin",
+    family: "stand",
+    zoneId: "security_office",
+    position: [6.55, 0, 5.0],
+    rotationY: 0.55,
+    inspectable: false,
+    swatchIds: ["wool_midnight_03", "iron_dark_03"],
+    focus: [0.5, 1.6, 0.5],
+  }),
+  // A reading lamp against the partition, south of the door swing.
+  p({
+    objectId: "office_lamp_01",
+    variant: "floor_lamp",
+    categoryId: "floor_lamp",
+    family: "lamp",
+    zoneId: "security_office",
+    position: [4.98, 0, 4.62],
+    inspectable: false,
+    swatchIds: ["brass_aged_02", "iron_dark_03"],
+    focus: [0.4, 1.5, 0.4],
+  }),
+  // Desk work: the counter bell and the truncheon within reach of the ledger.
+  p({
+    objectId: "office_bell_01",
+    variant: "bell",
+    categoryId: "bell",
+    family: "tool",
+    zoneId: "security_office",
+    position: [6.82, 0.79, 3.55],
+    inspectable: false,
+    swatchIds: ["brass_aged_02"],
+    focus: [0.14, 0.12, 0.14],
+  }),
+  p({
+    objectId: "office_truncheon_01",
+    variant: "hand_tool",
+    categoryId: "hand_tool",
+    family: "tool",
+    zoneId: "security_office",
+    position: [7.02, 0.79, 3.4],
+    rotationY: 1.9,
+    inspectable: false,
+    swatchIds: ["walnut_dark_01", "iron_dark_03"],
+    focus: [0.3, 0.08, 0.12],
+  }),
+  // The night watch's light on the crate, and the goods it is guarding.
+  p({
+    objectId: "office_candle_01",
+    variant: "candlestick",
+    categoryId: "candlestick",
+    family: "lamp",
+    zoneId: "security_office",
+    position: [5.0, 0.5, 5.15],
+    rotationY: 0.3,
+    inspectable: false,
+    swatchIds: ["brass_aged_02"],
+    focus: [0.12, 0.3, 0.12],
+  }),
+  p({
+    objectId: "office_parcel_01",
+    variant: "parcel",
+    categoryId: "parcel",
+    family: "container",
+    zoneId: "security_office",
+    position: [6.6, 0, 4.72],
+    rotationY: -0.4,
+    size: 0.4,
+    inspectable: false,
+    swatchIds: ["paper_kraft_02", "velvet_burgundy_01"],
+    focus: [0.42, 0.26, 0.36],
+  }),
+  // A second sheaf of floor plans with the first, and the door mat inside
+  // the partition where the Inspector walks out.
+  p({
+    objectId: "office_plans_02",
+    variant: "paper_roll",
+    categoryId: "paper_roll",
+    family: "tool",
+    zoneId: "security_office",
+    position: [4.9, 0, 2.52],
+    rotationY: -0.35,
+    size: 0.6,
+    inspectable: false,
+    swatchIds: ["paper_kraft_02", "walnut_dark_01"],
+    focus: [0.18, 0.65, 0.18],
+  }),
+  p({
+    objectId: "office_mat_01",
+    variant: "rug",
+    categoryId: "rug",
+    family: "textile",
+    zoneId: "security_office",
+    position: [5.35, 0.001, 3.6],
+    rotationY: WEST,
+    size: 0.9,
+    inspectable: false,
+    swatchIds: ["slate_grey_02", "wool_midnight_03"],
+    focus: [0.9, 0.03, 0.65],
+  }),
 ];
 
 // -------------------------------------------------- Hoppable floor clutter
@@ -3429,3 +3616,42 @@ export function countByFamily(placements: readonly PropPlacement[] = SHOP_PLACEM
   }
   return counts;
 }
+
+/**
+ * Families whose props are solid through their whole focus volume, so a
+ * hider's root inside one is a body buried in a bottle rather than a hiding
+ * place (live-play bug, 2026-08-05). Furniture, seats, lamps and fixtures are
+ * deliberately absent: their bays, hollows and under-spaces are the authored
+ * hiding places, and their solid parts are already hand-written blockers in
+ * `nav.ts`.
+ */
+const SOLID_PROP_FAMILIES: ReadonlySet<PropFamily> = new Set([
+  "vessel",
+  "container",
+  "book",
+  "sculpture",
+  "tool",
+  "stand",
+]);
+
+/**
+ * Occupancy-refusal volumes for the solid decor, one conservative AABB per
+ * prop from the same focus box the reticle brackets. These are NOT movement
+ * colliders: a walker still brushes past a vase, and hoppable clutter still
+ * hops. They exist only so `canOccupy` can refuse a root planted inside the
+ * meat of a solid object.
+ */
+export const SOLID_PROP_VOLUMES: readonly AABB[] = SHOP_PLACEMENTS.filter((placement) =>
+  SOLID_PROP_FAMILIES.has(placement.family),
+).map((placement) => {
+  const [x, y, z] = placement.position;
+  const [width, height, depth] = placement.focus;
+  const cos = Math.abs(Math.cos(placement.rotationY));
+  const sin = Math.abs(Math.sin(placement.rotationY));
+  const extentX = (width * cos + depth * sin) / 2;
+  const extentZ = (width * sin + depth * cos) / 2;
+  return {
+    min: { x: x - extentX, y, z: z - extentZ },
+    max: { x: x + extentX, y: y + height, z: z + extentZ },
+  };
+});

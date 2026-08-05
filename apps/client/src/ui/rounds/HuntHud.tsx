@@ -192,36 +192,41 @@ function leftColumn({
     );
   }
   if (isLiveHider) {
+    // The board opens ABOVE the tool panels and regardless of them: it used
+    // to append below a column the Forge tools already filled, so in a short
+    // pane the toggle read as a button that did nothing. A collapsed dock is
+    // a 30px strip, so the board stands outside it then instead of being
+    // crushed into the strip.
     return (
-      <HiderHud
-        state={state}
-        density={density}
-        traversal={traversal}
-        dangerBearingRad={dangerBearingRad}
-        forgeToolsExpanded={forgeToolsExpanded}
-      >
-        {/* The board opens ABOVE the tool panels and regardless of them: it
-            used to append below a column the Forge tools already filled, so
-            in a short pane the toggle read as a button that did nothing. */}
-        {board}
-        {forge === null ? null : (
-          <ForgeToolPanels
-            controller={forge}
-            width="100%"
-            embedded
-            expanded={forgeToolsExpanded}
-            onExpandedChange={onForgeToolsExpandedChange}
-          />
-        )}
-        {forgeToolsExpanded ? (
-          <HiderDockUtilities
-            state={state}
-            boardOpen={boardOpen}
-            onToggleBoard={onToggleBoard}
-            onTaunt={onTaunt}
-          />
-        ) : null}
-      </HiderHud>
+      <>
+        {forgeToolsExpanded ? null : board}
+        <HiderHud
+          state={state}
+          density={density}
+          traversal={traversal}
+          dangerBearingRad={dangerBearingRad}
+          forgeToolsExpanded={forgeToolsExpanded}
+        >
+          {forgeToolsExpanded ? board : null}
+          {forge === null ? null : (
+            <ForgeToolPanels
+              controller={forge}
+              width="100%"
+              embedded
+              expanded={forgeToolsExpanded}
+              onExpandedChange={onForgeToolsExpandedChange}
+            />
+          )}
+          {forgeToolsExpanded ? (
+            <HiderDockUtilities
+              state={state}
+              boardOpen={boardOpen}
+              onToggleBoard={onToggleBoard}
+              onTaunt={onTaunt}
+            />
+          ) : null}
+        </HiderHud>
+      </>
     );
   }
   return (

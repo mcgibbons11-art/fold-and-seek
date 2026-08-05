@@ -5,6 +5,7 @@ import {
   buildBookRow,
   buildBookStack,
   buildBust,
+  buildCaseBoard,
   buildClamp,
   buildDisplayStand,
   buildGlobe,
@@ -116,6 +117,7 @@ export const PROP_BUILDERS: Readonly<Record<PropVariant, PropBuilder>> = {
   ornament: buildOrnament,
   specimen_jar: buildSpecimenJar,
   indicator_light: buildIndicatorLight,
+  case_board: buildCaseBoard,
 };
 
 export { buildArchitecture, OFFICE_DOOR_NAME, OFFICE_STAFF_BARRIER_NAME } from "./architecture";

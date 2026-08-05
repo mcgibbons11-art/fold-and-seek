@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import {
   NAV_DATA,
   PROP_FOCUS_BOUNDS,
+  SHOP_PLACEMENTS,
+  SOLID_PROP_VOLUMES,
   SpatialValidatorImpl,
   buildObjectRegistry,
   CURIOSITY_SHOP_RECORDS,
@@ -64,6 +66,7 @@ describe("map-data answers the questions an authority asks", () => {
     floors: NAV_DATA.floors,
     blockers: NAV_DATA.blockers,
     forbiddenOccupancy: [NAV_DATA.securityOffice],
+    solidProps: SOLID_PROP_VOLUMES,
     accusationDistance: DEFAULT_MATCH_SETTINGS.accusationDistance,
     focusDistance: DEFAULT_MATCH_SETTINGS.inspectorFocusDistance,
     inspectorEye: () => null,
@@ -120,5 +123,21 @@ describe("map-data answers the questions an authority asks", () => {
       ok: false,
       reason: "forbidden_area",
     });
+  });
+
+  it("refuses a root buried inside a bottle but lets one lean against it", () => {
+    // Every solid decor family contributes a volume, and the volumes come from
+    // the same authored focus boxes the reticle brackets.
+    expect(SOLID_PROP_VOLUMES.length).toBeGreaterThan(50);
+
+    const urn = SHOP_PLACEMENTS.find((placement) => placement.objectId === "window_urn_02");
+    expect(urn).toBeDefined();
+    if (urn === undefined) return;
+    const [x, y, z] = urn.position;
+    const [width, height] = urn.focus;
+    const inside = validator.canOccupy("mimic", [x, y + height / 2, z]);
+    expect(inside).toEqual({ ok: false, reason: "inside_blocked_geometry" });
+    // Just beside the urn on the same floor is still a hiding place.
+    expect(validator.canOccupy("mimic", [x + width / 2 + 0.1, y, z]).ok).toBe(true);
   });
 });

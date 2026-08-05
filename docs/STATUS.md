@@ -1,5 +1,32 @@
 # STATUS
 
+## Live-play fix wave two (2026-08-05)
+
+Four user verdicts from continued live play. THE WEDGED EXPAND BUTTON: the
+collapsed "Expand Forge tools" strip in the forge HUD floats outside every
+panel, and the HUD root is pointer-transparent, so the button computed
+pointer-events none - every click fell through to the canvas and the
+collapse was permanent, with the button reading greyed over the dark scene.
+Reproduced headlessly (visual/forgeToggleRepro.mjs serves the bundle
+SDK-less, plays a solo round, and probes the button's element stack), fixed
+with the button's own pointer-events opt-in. A collapsed hunt dock also
+squeezed an open missed-finds board into its 30px strip; the board now
+stands outside the collapsed dock. THE SILENT GUNSHOT: the shot report was
+played from stepGun sampling the weapon's transient "pending" phase, but a
+synchronous authority resolves the accusation inside the fire call, so the
+phase was gone before the frame sampled it; every discharge now plays from
+the weapon's own onShot callback. THE SECURITY OFFICE, round two: a new
+case_board prop builder (felt board, pinned cards, red-string lattice,
+dealt deterministically from the objectId) hangs behind the desk, plus an
+evidence shelf with specimen jars, wall notices, the guard's greatcoat on
+its stand, floor lamp, desk bell, truncheon, candle on the crate, second
+plan sheaf, and a door mat - 13 placements. HIDING INSIDE A BOTTLE: solid
+decor families (vessel, container, book, sculpture, tool, stand) now
+publish SOLID_PROP_VOLUMES from their focus boxes, and canOccupy refuses a
+root buried inside one on BOTH authorities; movement and hoppable clutter
+are untouched, and furniture bays stay legal hiding places. All suites
+green (shared 47, game-sim 203, map-data 9, server 38, client 1,108).
+
 ## Gait retune: the Mimic strides, the Inspector calms down (2026-08-04, night)
 
 User verdict from live play: the Inspector "looks super saucy running

@@ -1269,13 +1269,24 @@ export class RoundSession {
         const selfId = this.options.adapter.getSelfId();
         if (selfId !== null) this.options.spatial.setInspectorEye(selfId, eye);
       },
-      // A round that never becomes an accusation is heard here and nowhere
-      // else. The report of a real shot is played from the weapon's own state
-      // in `stepGun`, so this is only the trigger clicking on nothing: no
-      // target, out of range, a decorative object, or an empty magazine.
+      // Every discharge is heard from the trigger itself. The report used to
+      // be played from `stepGun` watching for the weapon's "pending" phase,
+      // but a synchronous authority (practice rounds, the hosting client)
+      // resolves the accusation inside the fire call, so the phase was
+      // already "cooling" by the frame's sample and the shot went silent.
       onShot: (outcome) => {
-        if (outcome === "hit") return;
-        this.audio.play("gun_dry_click");
+        if (outcome !== "hit") {
+          this.audio.play("gun_dry_click");
+          return;
+        }
+        this.audio.play("gun_fire");
+        this.captions.push({ label: "Warrant fired", importance: "critical" });
+        if (this.gunCycleTimer !== null) clearTimeout(this.gunCycleTimer);
+        this.gunCycleTimer = setTimeout(() => {
+          this.gunCycleTimer = null;
+          this.audio.play("panel_snap", 0.03, 0.4);
+        }, 110);
+        this.duckUnderStinger();
       },
     });
     this.inspector = inspector;
@@ -1434,11 +1445,11 @@ export class RoundSession {
   }
 
   /**
-   * The warrant gun (override 1), heard from the state the weapon publishes
-   * rather than from the input that drove it: the raise as it comes up, the
-   * stamp as it goes off. The empty chamber is not here, because a trigger with
-   * no warrants behind it never reaches the weapon; it comes back as a refusal
-   * and is played from there.
+   * The raise of the warrant gun, heard from the state the weapon publishes.
+   * The discharge is NOT here: a synchronous authority resolves an accusation
+   * inside the fire call, so the "pending" phase this sampler once listened
+   * for can be gone before the frame reads it. Every shot sound plays from
+   * the weapon's own onShot callback instead.
    */
   private stepGun(): void {
     const state = this.gunView().state;
@@ -1446,16 +1457,6 @@ export class RoundSession {
     const previous = this.lastGunState;
     this.lastGunState = state;
     if (state === "aiming" && previous === "idle") this.audio.play("gun_aim");
-    if (state === "pending") {
-      this.audio.play("gun_fire");
-      this.captions.push({ label: "Warrant fired", importance: "critical" });
-      if (this.gunCycleTimer !== null) clearTimeout(this.gunCycleTimer);
-      this.gunCycleTimer = setTimeout(() => {
-        this.gunCycleTimer = null;
-        this.audio.play("panel_snap", 0.03, 0.4);
-      }, 110);
-      this.duckUnderStinger();
-    }
   }
 
   /**

@@ -368,6 +368,90 @@ export function buildPictureFrame(ctx: PropContext, placement: PropPlacement): v
   }, { shadow: false });
 }
 
+/**
+ * The guard's investigation board: a felt-backed frame of pinned paper cards
+ * joined by red string. Swatch roles: 0 = frame, 1 = felt, 2 = string. `size`
+ * is the board width. Cards and threads are dealt deterministically from the
+ * objectId, so every board in the shop pins a different case the same way on
+ * every client.
+ */
+export function buildCaseBoard(ctx: PropContext, placement: PropPlacement): void {
+  const moulding = ctx.materials.get(swatchRole(placement, 0, "walnut_dark_01"));
+  const felt = ctx.materials.get(swatchRole(placement, 1, "wool_midnight_03"));
+  const thread = ctx.materials.get(swatchRole(placement, 2, "velvet_burgundy_01"));
+  const cardPaper = ctx.materials.get("paper_aged_01");
+  const notePaper = ctx.materials.get("paper_kraft_02");
+  const pinBrass = ctx.materials.get("brass_aged_02");
+  const random = makeRandom(seedFrom(placement.objectId));
+  const width = quantize(placement.size ?? 1.1, 0.1);
+  const height = width * 0.68;
+  const b = ctx.batcher;
+
+  const rail = ctx.geometry.get(sized("caseboard.rail", width), () =>
+    chamferedBox(width + 0.08, 0.05, 0.04, 0.008),
+  );
+  const stile = ctx.geometry.get(sized("caseboard.stile", height), () =>
+    chamferedBox(0.05, height, 0.04, 0.008),
+  );
+  for (const dy of [-height / 2 - 0.025, height / 2 + 0.025]) {
+    b.part(rail, moulding, { y: dy }, { shadow: false });
+  }
+  for (const dx of [-width / 2 - 0.025, width / 2 + 0.025]) {
+    b.part(stile, moulding, { x: dx }, { shadow: false });
+  }
+  b.part(
+    ctx.geometry.get(sized("caseboard.felt", width, height), () =>
+      chamferedBox(width, height, 0.02, 0.004),
+    ),
+    felt,
+    { z: -0.006 },
+    { shadow: false },
+  );
+
+  // The pinned cards: two paper stocks, two authored sizes, dealt across the
+  // felt with a margin and a tilt. Their centres double as the string anchors.
+  const anchors: { x: number; y: number }[] = [];
+  const cardCount = 7 + Math.floor(random() * 3);
+  const cardA = ctx.geometry.get("caseboard.cardA", () => chamferedBox(0.13, 0.09, 0.006, 0.002));
+  const cardB = ctx.geometry.get("caseboard.cardB", () => chamferedBox(0.09, 0.12, 0.006, 0.002));
+  const pin = ctx.geometry.get("caseboard.pin", () => new THREE.SphereGeometry(0.0085, 8, 6));
+  for (let i = 0; i < cardCount; i += 1) {
+    const x = (random() - 0.5) * (width - 0.24);
+    const y = (random() - 0.5) * (height - 0.2);
+    anchors.push({ x, y });
+    b.part(
+      i % 2 === 0 ? cardA : cardB,
+      i % 3 === 0 ? notePaper : cardPaper,
+      { x, y, z: 0.012, rz: (random() - 0.5) * 0.3 },
+      { shadow: false },
+    );
+    b.part(pin, pinBrass, { x, y: y + 0.04, z: 0.018 }, { shadow: false });
+  }
+
+  // The string: each card tied to another, the classic conspiracy lattice.
+  for (let i = 1; i < anchors.length; i += 1) {
+    const from = anchors[i];
+    const to = anchors[Math.floor(random() * i)];
+    if (from === undefined || to === undefined) continue;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = quantize(Math.max(0.08, Math.hypot(dx, dy)), 0.05);
+    b.part(
+      ctx.geometry.get(sized("caseboard.string", length), () =>
+        chamferedBox(length, 0.005, 0.004, 0.001),
+      ),
+      thread,
+      {
+        x: (from.x + to.x) / 2,
+        y: (from.y + to.y) / 2,
+        z: 0.02,
+        rz: Math.atan2(dy, dx),
+      },
+      { shadow: false },
+    );
+  }
+}
+
 function clockFace(ctx: PropContext, radius: number): THREE.BufferGeometry {
   return ctx.geometry.get(sized("clock.face", radius), () => new THREE.CircleGeometry(radius, 24));
 }

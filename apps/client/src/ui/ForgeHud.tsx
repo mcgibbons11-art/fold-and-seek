@@ -403,6 +403,11 @@ export function ForgeHud({
             writingMode: "vertical-rl",
             textOrientation: "mixed",
             textAlign: "center",
+            // The HUD root is pointer-transparent and the panels opt back in;
+            // this button floats alone outside every panel, so without its own
+            // opt-in each click fell through to the canvas and the collapse
+            // was permanent (live-play bug, 2026-08-05).
+            pointerEvents: "auto",
           }}
         >
           Expand Forge tools <span aria-hidden>▶</span>
