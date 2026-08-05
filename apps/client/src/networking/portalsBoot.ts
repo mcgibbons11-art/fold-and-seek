@@ -50,38 +50,10 @@ export async function detectPortalsSession(): Promise<PortalsBoot | null> {
   }
 }
 
-/**
- * Hands a local build a real Portals session, when one has been arranged.
- *
- * Outside Portals there is no relay at all, so a local build normally plays
- * offline and multiplayer can only be exercised in the editor. A dev token
- * lifts that: declaring it before the SDK loads puts local sessions on a
- * `dev:` channel namespace, fenced away from live players. It is minted from
- * the account holder's access key, lasts eight hours, and is a password, so it
- * arrives through the environment and is never committed or bundled into a
- * published build.
- *
- * A local session runs the PUBLISHED `server.js`, not the working copy. Only
- * the editor preview runs a draft.
- */
-function declareDevToken(): void {
-  const token = import.meta.env.VITE_PORTALS_DEV_TOKEN;
-  if (typeof token !== "string" || token.length === 0) return;
-  if (import.meta.env.PROD) {
-    // A published bundle carrying a token would hand every player the
-    // account holder's credential.
-    console.warn("[portals] a dev token is set in a production build; ignoring it");
-    return;
-  }
-  const target = window as typeof window & { __PORTALS_DEV__?: { token: string } };
-  target.__PORTALS_DEV__ = { token };
-}
-
 async function loadSdk(): Promise<PortalsSdk | null> {
   const injected = detectPortals();
   if (injected !== null) return injected;
   if (typeof document === "undefined") return null;
-  declareDevToken();
 
   let module: unknown;
   try {

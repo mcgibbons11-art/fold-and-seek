@@ -11,3 +11,7 @@ coverage/
 *.log
 .vite/
 generated-audio-cache/
+
+# A local copy of the Portals-injected SDK, fetched for dev-token sessions.
+# Never committed: Portals stamps it into the served bundle at publish time.
+apps/client/public/_portals/

@@ -147,6 +147,58 @@ Things that change how this game must be built:
   hyphens, starting with a letter or number. A `global:` prefix makes a
   worldwide room, served from the US at higher latency.
 
+### Real multiplayer from localhost, verified 2026-08-05
+
+Four real clients, on live Portals infrastructure, without the editor. The
+third step is the one that is not obvious.
+
+1. **Mint a dev token** with the account access key (from portals.to/mcp):
+   `POST https://portals.to/api/v2/arcade/dev-token`, header
+   `x-access-key: <key>`, body `{"gameId":"gde550c363c6e3710963a93df"}`.
+   Returns `{token: "pdev_…", expiresAt}`, valid eight hours. NOTE the game
+   id: `g69147a46cb26443db7723cd0` in older notes is a different project and
+   mints a token that will not match this game.
+2. **Fetch `_portals/sdk.js`.** It is not in the repo and cannot be: Portals
+   stamps it into the served bundle at publish time, and the arcade origin
+   needs auth. Take the preview token from the editor page
+   (`document.querySelector('iframe').src`), then use a cookie jar:
+   `curl -c cj.txt "https://<gameId>.arcade.portals.to/drafts/editor/_preview-auth?token=<PREVIEW_TOKEN>"`
+   then
+   `curl -b cj.txt -o sdk.js "https://<gameId>.arcade.portals.to/drafts/editor/_portals/sdk.js"`.
+3. **Declare the token BEFORE the SDK script.** The SDK captures its mode when
+   it loads. Setting `window.__PORTALS_DEV__` afterwards - from a module or
+   from the console - does nothing, and `net.join()` keeps failing with "no
+   host page". `vite.config.ts` now does this with a dev-only
+   `transformIndexHtml` plugin, so `pnpm dev` is enough; drop the SDK at
+   `apps/client/public/_portals/sdk.js` (gitignored) and Vite serves it at
+   the path the boot code already looks for. Watch for a `200` there that is
+   actually Vite's HTML fallback rather than the file.
+4. **Open N tabs.** Each tab is a separate client with its own token.
+
+Facts this harness settled:
+
+- **A local dev session gets NO server script**: the status line reads "no
+  referee". So this harness exercises the client-authority FALLBACK path, not
+  the authoritative server. One caveat before treating it as a platform rule:
+  the docs say a local session runs the PUBLISHED `server.js`, and this game
+  has no published release, so "no server" may mean "no release yet" rather
+  than "never local". Publishing once and re-running is the cheap test that
+  distinguishes them, and it matters, because it decides whether the
+  authority is testable outside editor preview at all.
+- Sessions are fenced into a `dev:` channel namespace and cannot reach
+  published games.
+- Two joiners firing at the same wall-clock instant landed on distinct seats
+  (C and D), so the fallback's seat assignment converges on live
+  infrastructure, not only under a fake relay.
+- **Backgrounded tabs produce phantom abandonment warnings.** Chrome throttles
+  timers in background tabs, so the silence watcher does not run and the host
+  shows "Opponent is not responding · match ends in 55s" against perfectly
+  healthy clients. It clears itself once the timers catch up. Any automated
+  multi-tab harness will see this; it is not a bug.
+- Neither the token nor the SDK copy may ever enter the repo. Both are
+  gitignored, and the Vite plugin is `apply: "serve"` so a build cannot carry
+  a token however the environment is set.
+
 ### Still unverified (do not treat as settled)
 
 - Whether a full six-player round stays inside the ~50 ms CPU budget per
