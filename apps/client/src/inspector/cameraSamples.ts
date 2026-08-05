@@ -23,7 +23,16 @@ export interface BufferedCameraFrame {
   readonly mode: "held" | "interpolated" | "extrapolated" | "stale";
 }
 
-const PRESENTATION_DELAY_MS = 50;
+/**
+ * How far the remote playhead trails the newest sample. Telemetry arrives at
+ * `cameraSampleHz` (10 Hz, so 100 ms apart): trailing by less than one whole
+ * interval put every steady-state frame PAST the newest sample, so the remote
+ * body lived in extrapolate-stall-snap instead of gliding between two real
+ * samples — the live-play "inspector moves very weird on the mimic's screen"
+ * report (2026-08-06). One and a half intervals keeps the playhead bracketed
+ * by real samples through ordinary relay jitter.
+ */
+export const REMOTE_PRESENTATION_DELAY_MS = 150;
 const MAX_EXTRAPOLATION_MS = 100;
 const MAX_BUFFERED_SAMPLES = 24;
 
@@ -71,7 +80,7 @@ export class CameraSampleInterpolationBuffer {
       sample.atMs > last.atMs &&
       sample.atMs < this.playheadMs - MAX_EXTRAPOLATION_MS
     ) {
-      this.playheadMs = sample.atMs - PRESENTATION_DELAY_MS;
+      this.playheadMs = sample.atMs - REMOTE_PRESENTATION_DELAY_MS;
     }
     const reordered = last !== undefined && sample.atMs < last.atMs;
     const index = this.samples.findIndex((entry) => entry.atMs > sample.atMs);
@@ -79,7 +88,7 @@ export class CameraSampleInterpolationBuffer {
     else this.samples.splice(index, 0, sample);
 
     if (this.playheadMs === null) {
-      this.playheadMs = sample.atMs - PRESENTATION_DELAY_MS;
+      this.playheadMs = sample.atMs - REMOTE_PRESENTATION_DELAY_MS;
     }
     if (this.samples.length > MAX_BUFFERED_SAMPLES) {
       this.samples.splice(0, this.samples.length - MAX_BUFFERED_SAMPLES);
