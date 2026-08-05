@@ -766,6 +766,15 @@ export class ForgeController {
   private readonly selectionOutlines = new Map<number, THREE.LineSegments>();
   private selectionOutlineMaterial: THREE.LineBasicMaterial | null = null;
   private readonly selectionBox = new THREE.Box3();
+  /**
+   * The part under the cursor (2026-08-06): a soft box on whatever a click
+   * would act on - select in Shape, paint in Material, grab in Pose - so
+   * the body itself says where clicking means something.
+   */
+  private hoveredSlot = -1;
+  private hoverOutline: THREE.LineSegments | null = null;
+  /** The socket stud under the cursor while the panel tool is up. */
+  private hoveredSocket: PanelSocketName | null = null;
   private gizmoArrows: Array<{
     key: "width" | "length" | "depth";
     dir: THREE.Vector3;
@@ -1707,6 +1716,8 @@ export class ForgeController {
     }
     this.mimic.setSocketMarkersVisible(mode === "panels");
     this.materialDropperArmed = false;
+    this.hoveredSlot = -1;
+    this.hoveredSocket = null;
     this.layoutPanelTipHandles();
     this.status = TOOL_HINTS[mode];
     this.audio.play("ui_click");
@@ -1722,6 +1733,8 @@ export class ForgeController {
     this.handleGroup.visible = false;
     this.setHovered(null);
     this.materialDropperArmed = false;
+    this.hoveredSlot = -1;
+    this.hoveredSocket = null;
     this.mimic.setSocketMarkersVisible(false);
     this.layoutPanelTipHandles();
     this.status = "Forge tools stowed. Choose a tool to resume editing.";
@@ -3331,6 +3344,62 @@ export class ForgeController {
       handle.pick.scale.setScalar(pickRadius / (radius * emphasis));
     }
     this.layoutResizeGizmo();
+    this.layoutHoverAffordances();
+  }
+
+  /**
+   * The where-can-I-click layer (2026-08-06). A soft cream box stands on the
+   * part under the cursor wherever a click would act on it, and the panel
+   * tool's socket studs breathe so they can be found at all - the hovered
+   * one swells to say it is the one about to fold.
+   */
+  private layoutHoverAffordances(): void {
+    const hoverWanted =
+      this.toolsActive &&
+      !this.locked &&
+      this.gizmoDrag === null &&
+      this.draggedHandle === null &&
+      (this.mode === "shape" || this.mode === "material" || this.mode === "pose") &&
+      this.hoveredSlot >= 0 &&
+      !(this.mode === "shape" && this.selectedSlots.has(this.hoveredSlot));
+    const mesh = hoverWanted ? this.mimic.segmentMeshes[this.hoveredSlot] : undefined;
+    if (mesh !== undefined) {
+      if (this.hoverOutline === null) {
+        this.hoverOutline = new THREE.LineSegments(
+          new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+          new THREE.LineBasicMaterial({
+            color: 0xf3e6c8,
+            transparent: true,
+            opacity: 0.45,
+            depthTest: false,
+          }),
+        );
+        this.hoverOutline.renderOrder = 28;
+        this.handleGroup.add(this.hoverOutline);
+      }
+      this.hoverOutline.visible = true;
+      this.selectionBox.setFromObject(mesh);
+      this.selectionBox.getCenter(this.hoverOutline.position);
+      this.selectionBox.getSize(this.scratchVector);
+      this.hoverOutline.scale.set(
+        Math.max(this.scratchVector.x, 1e-4) * 1.04,
+        Math.max(this.scratchVector.y, 1e-4) * 1.04,
+        Math.max(this.scratchVector.z, 1e-4) * 1.04,
+      );
+      this.hoverOutline.quaternion.identity();
+    } else if (this.hoverOutline !== null) {
+      this.hoverOutline.visible = false;
+    }
+
+    // The studs breathe while the panel tool is up; the hovered one swells.
+    const panelsUp = this.toolsActive && !this.locked && this.mode === "panels";
+    const pulse = 1 + 0.14 * Math.sin(performance.now() * 0.005);
+    for (const marker of this.mimic.socketMarkers) {
+      if (!marker.visible) continue;
+      const socket = marker.userData["panelSocket"];
+      const hovered = panelsUp && socket === this.hoveredSocket;
+      marker.scale.setScalar(panelsUp ? (hovered ? 1.7 : pulse) : 1);
+    }
   }
 
   /** Builds the three-arrow resize gizmo once, hidden until shape mode. */
@@ -3663,6 +3732,11 @@ export class ForgeController {
         // Hovering the body itself lights the handle a press there would
         // take, so the limb-grab is discoverable before it is ever used.
         this.setHovered(this.pickHandle() ?? this.pickHandleNearBody());
+        this.hoveredSlot = this.pickSegmentSlot();
+      } else if (this.toolsActive && !this.locked && (this.mode === "shape" || this.mode === "material")) {
+        this.hoveredSlot = this.pickSegmentSlot();
+      } else if (this.toolsActive && !this.locked && this.mode === "panels") {
+        this.hoveredSocket = this.pickSocket();
       }
       this.lastPointerX = event.clientX;
       this.lastPointerY = event.clientY;

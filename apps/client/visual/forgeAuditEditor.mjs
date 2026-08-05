@@ -185,9 +185,13 @@ for (const [fx, fy] of [[0.5, 0.42], [0.5, 0.47], [0.5, 0.55], [0.5, 0.62], [0.4
 note("panels", { panelHit });
 await shot("editor-audit-panels.png");
 
-// MATERIAL: arm the dropper, copy an own part, apply to another.
+// MATERIAL: hover affordance first, then arm, copy an own part, apply.
 await page.keyboard.press("4");
 await page.waitForTimeout(500);
+const hoverPoint = await at(0.5, 0.55);
+await page.mouse.move(hoverPoint.x, hoverPoint.y);
+await page.waitForTimeout(600);
+await shot("editor-audit-hover.png");
 await page.keyboard.press("f");
 await page.waitForTimeout(400);
 note("material-armed", { status: await interesting() });

@@ -163,6 +163,10 @@ await shot("audit-3-panels-after.png");
 await resetUndo();
 await page.keyboard.press("4");
 await page.waitForTimeout(500);
+// Hover affordance: resting the cursor on a part boxes it before any click.
+await page.mouse.move(640, 380);
+await page.waitForTimeout(500);
+await shot("audit-4b-hover.png");
 // F arms the dropper, exactly as paint's does.
 await page.keyboard.press("f");
 await page.waitForTimeout(400);
