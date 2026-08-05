@@ -1,5 +1,29 @@
 # STATUS
 
+## The dropper stops refusing the room, and panels throw themselves open (2026-08-06, later)
+
+Two live-play verdicts. THE "NOT ALLOWED" SPAM was an id mismatch, not a
+legality rule: the room's 26 swatches and the body's 11 keep separate
+tables on purpose, and the dropper looked room ids up in the body's table,
+found nothing, and refused nearly every surface in the shop with a raw id.
+Sampling now bridges to the nearest legal body finish (family first,
+closest colour breaks the tie) and says so: "Sampled Oak floorboard - worn
+as Walnut." Only the map's own refusals (the glasses) still refuse, by
+name. PANELS FELT DEAD AND USELESS for two reasons: a fresh panel deployed
+at 0.6, flat against the body - the click looked like it did nothing - and
+the socket ray ignored the body's own shells, so a click on the chest
+could deploy a panel invisibly on the BACK. A fresh panel now deploys
+fully, swung 75 degrees out at a size that reads; the socket ray treats
+shells as occluders with a stud-on-shell tolerance; and the hovered
+deployed plate takes the cream hover box. Verified IN THE LIVE EDITOR
+(forgeAuditEditor.mjs at 471b0b5): the deployed plate stands off the chest
+inside its hover box with Shield/Blade/Wing/Tile presets live, and the
+whole tool audit is green with zero console errors. OPERATIONAL NOTE: the
+sync stalled because Portals pushed new account onboarding over the
+settings page; visual/syncPageProbe.mjs diagnoses that state, the
+onboarding path was answered, and a pending "confirm your purchase / EU
+waiver" dialog on the account was left for the user. 1,111 client tests.
+
 ## The where-can-I-click layer (2026-08-06, follow-up)
 
 User verdict: players need to know what they are modifying and where to
