@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { DEFAULT_MATCH_SETTINGS } from "@foldseek/shared";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -208,8 +209,9 @@ describe("the room browser", () => {
     expect(row.textContent).toContain("The Attic");
     expect(row.textContent).toContain(opened.code);
     expect(row.textContent).toContain("Waiting");
-    // One seat taken of the twelve the first room's key ranges can carry.
-    expect(row.textContent).toContain("1/12");
+    // One seat taken of the room's advertised capacity, which is the match's
+    // own seat cap rather than anything the browser decides.
+    expect(row.textContent).toContain(`1/${String(DEFAULT_MATCH_SETTINGS.maxPlayers)}`);
 
     const request = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Request to join",

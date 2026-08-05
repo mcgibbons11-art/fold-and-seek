@@ -2,6 +2,7 @@ import type { MatchSettingsPatch, PrivateSimEvent, SimEvent } from "@foldseek/ga
 import {
   createReferenceDisguiseWire,
   decodeDisguiseWire,
+  DEFAULT_MATCH_SETTINGS,
   encodeDisguiseWire,
   encodePaintLayer,
   MAX_PAINT_STROKES,
@@ -299,6 +300,13 @@ afterEach(() => {
  * the final countdown, and a Forge long enough to still be running when a host
  * is dropped part way through it.
  */
+/**
+ * Every seat the game will ever deal. The transport budgets below are worst
+ * cases, so they are measured against a room that is actually full rather than
+ * a fixed count that drifts the moment the seat cap moves.
+ */
+const FULL_ROOM = DEFAULT_MATCH_SETTINGS.maxPlayers;
+
 const RECONNECT_SETTINGS: MatchSettingsPatch = {
   forgeMs: 5_000,
   inspectionMs: 20_000,
@@ -1385,7 +1393,7 @@ describe("PortalsNetAdapter transport budget", () => {
   it("publishes a full room inside the state key and write budgets", async () => {
     vi.useFakeTimers();
     const session = new Session(RECONNECT_SETTINGS);
-    for (let index = 0; index < 8; index += 1) {
+    for (let index = 0; index < FULL_ROOM; index += 1) {
       await session.addPeer(`p${index}`, `Visitor ${index}`);
     }
     session.advance(4);
@@ -1410,7 +1418,7 @@ describe("PortalsNetAdapter transport budget", () => {
     const poses = decodePoseBook(state);
     expect(publication).not.toBeNull();
     expect(poses).not.toBeNull();
-    expect(publication?.publicState.players).toHaveLength(8);
+    expect(publication?.publicState.players).toHaveLength(FULL_ROOM);
 
     const published = measure(SNAPSHOT_STATE_KEYS);
     const poseRange = measure(POSE_STATE_KEYS);
@@ -1440,7 +1448,7 @@ describe("PortalsNetAdapter transport budget", () => {
   it("stays under the twenty sends per second relay allowance", async () => {
     vi.useFakeTimers();
     const session = new Session();
-    for (let index = 0; index < 8; index += 1) {
+    for (let index = 0; index < FULL_ROOM; index += 1) {
       await session.addPeer(`p${index}`, `Visitor ${index}`);
     }
 

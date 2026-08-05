@@ -9,12 +9,13 @@
     "dev:client": "pnpm --filter @foldseek/client dev",
     "dev:server": "pnpm --filter @foldseek/server dev",
     "build": "pnpm -r build",
-    "build:portals": "pnpm --filter @foldseek/client build && node apps/client/scripts/syncPortalsBuild.mjs",
-    "portals:check": "pnpm --filter @foldseek/client build && node apps/client/scripts/syncPortalsBuild.mjs --check",
+    "build:portals": "pnpm --filter @foldseek/client build && node apps/client/scripts/syncPortalsBuild.mjs && pnpm build:server",
+    "portals:check": "pnpm --filter @foldseek/client build && node apps/client/scripts/syncPortalsBuild.mjs --check && pnpm --filter @foldseek/server-script build -- --check",
     "typecheck": "pnpm -r typecheck",
     "lint": "eslint .",
     "test": "pnpm -r test",
-    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm portals:check"
+    "check": "pnpm typecheck && pnpm test && pnpm build && pnpm portals:check",
+    "build:server": "pnpm --filter @foldseek/server-script build"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

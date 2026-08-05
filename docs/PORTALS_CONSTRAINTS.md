@@ -95,10 +95,65 @@ ack:        "ack from portals-bundle"
 - Client-side `Portals.net` is unchanged: `join`, `leave`, `send`,
   `setState`, `getState`, `players`, `self`, `on`, `off`.
 
+### From the full doc read, 2026-08-05 (every page, not just the SDK overview)
+
+Read: documentation index, `advanced-tooling` index, `portals-sdk`,
+`multiplayer-and-voice`, `server-scripts` (including its code examples),
+`my-games` + `publish-your-game`, `api`, `portals-functions-quick-reference`,
+`troubleshooting`, `start-here`. The Function Effect and JavaScript Function
+sections describe the no-code room editor's scripting and do not apply to an
+uploaded bundle.
+
+Things that change how this game must be built:
+
+- **Two identities, not one.** A player is
+  `{ id, playerId, displayName, avatarUrl }`, where `id` is one connection
+  (a second tab is a second player) and `playerId` is the signed-in account,
+  **null when signed out**. A seat must therefore be keyed on
+  `playerId ?? id`, which is what lets a player who drops and returns keep
+  their disguise, warrants, and score.
+- **`server.log` output is not surfaced anywhere.** The documented technique
+  is to publish diagnostics to a state key instead. Error paths that only
+  call `log` are silent in production.
+- **The server's `state` event is `(key, value)` with no writer.** A client
+  may write any key that is not `server:`-prefixed, and the server cannot
+  attribute the write. So a client-published pose book is forgeable: nothing
+  stops one client writing another's pose key. Poses and paint must instead
+  travel to the server as **messages**, where `fromId` is the relay's own
+  word, and be republished by the server under `server:` keys, which no
+  client can write.
+- **Only the server may write `server:` keys**; a client attempting it gets an
+  `error` event with code `forbidden`. Clients read those keys normally.
+- **`server.send` broadcasts only.** There is no addressed send, so private
+  batches carry the seat they belong to and are filtered on arrival. This is
+  the same exposure the relay protocol already accepted under §43.8.
+- **A crashed or over-budget server does not end the session.** Players are
+  never disconnected, and the documented guidance is to "keep the game
+  playable when the server is absent" and to gate lobby UI on `server:` state
+  appearing. This is in direct tension with an outright cutover; see below.
+- **Channels partition servers exactly as they partition players** — one
+  server instance per channel. Real channel-per-room matchmaking is therefore
+  possible now, which the logical-room key budget existed to work around.
+  Not acted on yet.
+- **Editor preview runs the DRAFT `server.js`; a local dev session runs the
+  PUBLISHED one.** So a draft is testable only in the preview.
+- A dev token (`POST /api/v2/arcade/dev-token` with an `x-access-key`, valid
+  8 hours, declared as `window.__PORTALS_DEV__` before the SDK script) gives a
+  local build a real session on a fenced `dev:` channel. This is the only
+  route to real multiplayer testing outside the editor, and it needs an
+  access key the user holds.
+- Client `state` events fire for the writer too; `message` does not.
+- Channel names are 1–64 chars of letters, numbers, colons, underscores, and
+  hyphens, starting with a letter or number. A `global:` prefix makes a
+  worldwide room, served from the US at higher latency.
+
 ### Still unverified (do not treat as settled)
 
-- Whether a full 12-player tick stays inside the ~50 ms CPU budget per
-  callback, and the round's traffic inside ~60 broadcasts/s.
+- Whether a full six-player round stays inside the ~50 ms CPU budget per
+  callback **in the real sandbox**. Measured only in Node: worst tick
+  1.133 ms of 50 ms at six seats, mean 0.0022 ms.
+- Whether the authority's own traffic stays inside ~60 broadcasts/s and
+  ~30 state writes/s once poses and paint are republished through it.
 
 ## Bundle and runtime
 

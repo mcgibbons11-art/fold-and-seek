@@ -143,7 +143,11 @@ export const DUAL_SEEKER_MIN_SEATS = 4;
 
 export const DEFAULT_MATCH_SETTINGS = {
   minPlayers: 2,
-  maxPlayers: 12,
+  // Lowered 12 -> 6 (2026-08-06, user order). Six is the roster the shop
+  // actually plays well at, and it is the number the authoritative server
+  // script is sized against: fewer seats mean less state, fewer broadcasts,
+  // and more room inside the sandbox's per-callback budget.
+  maxPlayers: 6,
   /**
    * Seekers the host asks for, one or two. It is a floor rather than the final
    * count: a roster too small to support a second seeker gets one anyway, and

@@ -11,7 +11,10 @@ import {
   type SpatialValidator,
 } from "@foldseek/game-sim";
 import {
+  baseSeatIdOf,
   DEFAULT_MATCH_SETTINGS,
+  DERIVED_SEAT_SEPARATOR,
+  derivedSeatId,
   encodePaintLayer,
   eyesAgree,
   LIMITS,
@@ -179,11 +182,11 @@ export interface RoomJoinDecision {
   readonly reason: "accepted" | "declined" | "expired" | "room_full" | "room_started" | "host_left";
 }
 /**
- * Separates an account id from the connection that made a second seat of it.
- * Never produced by Portals in either half, so a derived seat cannot be
- * mistaken for an account id some other client is using whole.
+ * Seat identity lives in `@foldseek/shared` because the authoritative server
+ * script assigns seats too, and two definitions of who a player is would let
+ * the two halves disagree about whose disguise is whose.
  */
-export const DERIVED_SEAT_SEPARATOR = "~";
+export { baseSeatIdOf, DERIVED_SEAT_SEPARATOR, derivedSeatId };
 
 export interface PortalsAdapterOptions extends BotSeatOptions {
   readonly settings?: MatchSettingsPatch;
@@ -3200,32 +3203,6 @@ export function coalesceDisguiseUpdates(events: readonly SimEvent[]): SimEvent[]
 /** Millimetres. Finer than any check the authority makes, and shorter on the wire. */
 function round3(value: number): number {
   return Math.round(value * 1_000) / 1_000;
-}
-
-/**
- * The seat a connection takes when nobody else is holding its account's.
- * Signed-in players get an id that is stable across reconnections, which is
- * what a rejoin lands on; a guest has none, so their connection stands in and
- * two guest tabs have always been two players.
- */
-export function baseSeatIdOf(player: PortalsNetPlayer): string {
-  return player.playerId ?? player.id;
-}
-
-/**
- * The seat a second live connection of one account takes.
- *
- * The connection id is kept whole and the account id is trimmed to fit, because
- * the connection id is what makes the seat unique: two accounts whose ids share
- * a prefix would collide if the trimming went the other way, while no two live
- * connections ever share an id. The result must fit `LIMITS.idLength`, which is
- * the bound every schema carrying a seat applies, and the protocol already
- * holds connection ids to the same length.
- */
-export function derivedSeatId(baseSeatId: string, connectionId: string): string {
-  const suffix = `${DERIVED_SEAT_SEPARATOR}${connectionId}`;
-  const room = Math.max(0, LIMITS.idLength - suffix.length);
-  return `${baseSeatId.slice(0, room)}${suffix}`.slice(0, LIMITS.idLength);
 }
 
 /**

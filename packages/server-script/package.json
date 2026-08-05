@@ -1,0 +1,27 @@
+{
+  "name": "@foldseek/server-script",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/main.ts",
+  "types": "src/main.ts",
+  "exports": {
+    ".": "./src/main.ts"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@foldseek/game-sim": "workspace:*",
+    "@foldseek/map-data": "workspace:*",
+    "@foldseek/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

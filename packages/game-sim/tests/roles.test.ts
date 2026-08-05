@@ -69,7 +69,9 @@ describe("role assignment", () => {
   });
 
   it("assigns two inspectors in a nine player match", () => {
-    const harness = new Harness({ players: 9, seed: 61 });
+    // Nine seats is above the default cap, so the host raises it first; the
+    // roster rule of §5.5 then deals the second Inspector on its own.
+    const harness = new Harness({ players: 9, seed: 61, settings: { maxPlayers: 9 } });
     harness.toForge();
     expect(harness.inspectorIds()).toHaveLength(2);
     expect(harness.mimicIds()).toHaveLength(7);

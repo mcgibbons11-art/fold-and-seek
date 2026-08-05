@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The Portals sandbox has no DOM, no window, and no network. Keeping the
+    // browser libs out means a slip is a compile error here rather than a
+    // script that dies on a server nobody is watching. Node's types supply
+    // the globals `@foldseek/shared` needs without bringing the browser back.
+    "lib": ["ES2022"],
+    "types": ["node"]
+  },
+  "include": ["src", "tests"]
+}
