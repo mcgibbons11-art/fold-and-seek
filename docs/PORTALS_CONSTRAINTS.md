@@ -30,10 +30,46 @@ therefore host-elected client authority plus host migration):
 - A session survives the server crashing or exceeding its budget.
 - `server.js` SHIPS PUBLICLY with the bundle: never put a secret in it.
 
-Not yet verified for this project (do not treat as settled): whether an
-imported GitHub bundle picks up `server.js` from the repo root or the built
-`portals/` directory, and whether `packages/game-sim` plus its zod dependency
-bundle to a single import-free file inside the 512 KB script limit.
+### The `server` API, as documented 2026-08-06
+
+Top-level code, no exports. One frozen `server` global:
+
+- `server.on("message" | "playerjoin" | "playerleave" | "state", handler)`
+  — `message` is `(data, fromId)`, the roster events are `(player, players)`
+  with `player = { id, playerId, displayName, avatarUrl }`, `state` is
+  `(key, value)`.
+- `server.send(data)` — broadcasts to ALL players. There is no addressed
+  send. That is PARITY for this game, not a regression: private sim events
+  already travel as broadcasts carrying a `to` field and are filtered by the
+  receiving client (see `portalsProtocol.ts`).
+- `server.setState(key, value)` / `server.getState(key?)`, `server.players()`,
+  `server.kick(sessionId)`, `server.setTimeout` / `setInterval` /
+  `clearTimer`, `server.log(...)`.
+
+### Measured 2026-08-06: the simulation fits
+
+Bundled `packages/game-sim` (with `@foldseek/shared` and zod) through esbuild
+as a minified IIFE targeting es2020:
+
+- **382.5 KB**, against the 512 KB script cap — about 130 KB of headroom.
+- Zero `import`, `require`, or `export` in the output.
+- Zero references to `window`, `document`, `process`, `navigator`, `fetch`,
+  `WebSocket`, or `localStorage`.
+- The sim's randomness is its own seeded RNG (`deterministic/rng.ts`); the
+  only `Math.random`/`Date.now` in the tree is `generateId`, which the sim
+  never calls. Determinism therefore survives the move.
+
+This is what `packages/game-sim` being pure, DOM-free and transport-agnostic
+bought: the authoritative simulation can physically run as a server script.
+
+### Still unverified (do not treat as settled)
+
+- Whether an imported GitHub bundle picks `server.js` up from the repo root
+  or from the built `portals/` directory that Portals actually serves. The
+  docs say "the root of your project"; our published artifact is `portals/`.
+  Answering this needs a trivial deployed `server.js`, which ships publicly.
+- Whether a full 12-player tick stays inside the ~50 ms CPU budget per
+  callback, and the round's traffic inside ~60 broadcasts/s.
 
 ## Bundle and runtime
 
