@@ -322,6 +322,12 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private roomCode: string | null = null;
   private roomSlot: RoomSlot = DEFAULT_ROOM_SLOT;
   private roomName = "";
+  /**
+   * True while this room admits joiners without host approval (2026-08-05).
+   * Every seat remembers it from the advert, not only the creator, so a host
+   * migration keeps the door open.
+   */
+  private roomOpen = false;
   /** The settings the room was opened with, clamped to what its slot can carry. */
   private roomSettings: MatchSettingsPatch = {};
   /**
@@ -720,7 +726,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
    * seated past its slot would stop publishing the very thing that makes its
    * disguises visible (roomRegistry.ts).
    */
-  createRoom(name: string): RoomEntryResult {
+  createRoom(name: string, options?: { readonly open?: boolean }): RoomEntryResult {
     if (this.connection.status !== "connected" || this.selfSeatId === null) {
       return { ok: false, reason: "not_in_session" };
     }
@@ -741,6 +747,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       ),
     };
     this.resetRoomState();
+    this.roomOpen = options?.open ?? false;
 
     // The room's first host is whoever opened it, without an election: nobody
     // else is in it, so there is nothing to elect between.
@@ -782,6 +789,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       maxPlayers: Math.min(listing.maxPlayers, slot.maxPlayers),
     };
     this.resetRoomState();
+    this.roomOpen = listing.open ?? false;
 
     this.poseBook = decodePoseBook(state, slot.keys.pose) ?? {};
     this.paintBook = decodePaintBook(state, slot.keys.paint) ?? {};
@@ -836,6 +844,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "exit", term: this.authorityTerm });
 
     this.roomCode = null;
+    this.roomOpen = false;
     this.authoritySeatId = null;
     this.releaseAuthority();
     this.resetRoomState();
@@ -1340,6 +1349,20 @@ export class PortalsNetAdapter implements NetworkAdapter {
           to: fromId,
           accepted: false,
           reason: "room_full",
+        });
+        return;
+      }
+      // An open door answers for itself (approved 2026-08-05): no pending
+      // entry, and no declining of the others - every arrival with a seat
+      // left is welcome until the round starts, whatever screen the host is
+      // looking at.
+      if (this.roomOpen) {
+        this.sendForRoom(envelope.r, {
+          v: PORTALS_PROTOCOL_VERSION,
+          t: "join_decision",
+          to: fromId,
+          accepted: true,
+          reason: "accepted",
         });
         return;
       }
@@ -2786,6 +2809,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
       ),
       seekers: state?.settings.seekerCount ?? DEFAULT_MATCH_SETTINGS.seekerCount,
       phase: state?.phase ?? MatchPhase.Lobby,
+      open: this.roomOpen,
     } as const;
 
     const nowMs = this.clock();

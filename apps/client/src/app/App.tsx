@@ -1053,11 +1053,18 @@ export function App(): ReactElement {
             lastRoomActionRef.current = attempt;
             attempt();
           },
-          onCreate: (name) => {
+          onCreate: (name, open) => {
             const attempt = (): void => {
-              const result = lobby.adapter.createRoom(name);
-              if (!result.ok) setRoundError(ROOM_FAILURE_COPY[result.reason]);
-              else setRoundError(null);
+              const result = lobby.adapter.createRoom(name, { open });
+              if (!result.ok) {
+                setRoundError(ROOM_FAILURE_COPY[result.reason]);
+                return;
+              }
+              setRoundError(null);
+              // An open-door host has nothing to approve, so there is nothing
+              // to wait on the browser screen for: they take their own lobby
+              // seat at once and friends walk in while they ready up.
+              if (open) onEnterRoom(() => result);
             };
             lastRoomActionRef.current = attempt;
             attempt();

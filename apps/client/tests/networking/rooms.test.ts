@@ -446,6 +446,35 @@ describe("rooms over one channel", () => {
     session.dispose();
   });
 
+  it("admits a requester at once when the room's door is open", async () => {
+    vi.useFakeTimers();
+    const session = new RoomSession();
+    const ada = await session.browse("a", "Ada");
+    const bex = await session.browse("b", "Bex");
+    const opened = ada.adapter.createRoom("The Attic", { open: true });
+    if (!opened.ok) throw new Error(opened.reason);
+    session.advance(2);
+
+    // The door advertises itself, so a browser can say "Join" plainly.
+    expect(bex.adapter.listRooms()[0]?.open).toBe(true);
+
+    let acceptedCode: string | null = null;
+    bex.adapter.onRoomDecision((decision) => {
+      if (decision.accepted) acceptedCode = decision.roomCode;
+    });
+    expect(bex.adapter.requestRoom(opened.code).ok).toBe(true);
+    session.advance(2);
+
+    // Nothing waited on the host's hand, and nothing was queued for it.
+    expect(ada.adapter.pendingJoinRequests()).toEqual([]);
+    expect(acceptedCode).toBe(opened.code);
+    expect(bex.adapter.enterRoom(acceptedCode as string).ok).toBe(true);
+    session.advance(4);
+    expect(bex.adapter.getRoomCode()).toBe(opened.code);
+    expect(session.relay.violations).toEqual([]);
+    session.dispose();
+  });
+
   it("lists a new room for creator and peers when state callbacks are missing", async () => {
     vi.useFakeTimers();
     const session = new RoomSession();

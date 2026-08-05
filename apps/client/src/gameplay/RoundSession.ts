@@ -195,6 +195,13 @@ const PROXIMITY_FAR_M = 3.2;
 const ELEVATED_LISTENER_Y_M = 1.8;
 const SPECTATE_MIN_RADIUS_M = 1.6;
 const SPECTATE_MAX_RADIUS_M = 7.5;
+/**
+ * The caught hider's follow shot (approved 2026-08-05): the orbit point rides
+ * the nearest Inspector, close enough to read the hunt and learn it. Touching
+ * WASD detaches into the free-cam; F picks the hunter back up.
+ */
+const SPECTATE_FOLLOW_RADIUS_M = 2.6;
+const SPECTATE_FOLLOW_SETTLE_MS = 240;
 
 /**
  * Where the Inspector waits out the fold: inside the Security Office, on the
@@ -331,6 +338,8 @@ export class RoundSession {
   private readonly spectateTarget = new THREE.Vector3(-0.5, 0.8, 0);
   private spectateRadius = SURVEY_RADIUS_M;
   private readonly spectateKeys = new Set<string>();
+  /** True while the spectate orbit rides the nearest Inspector (default). */
+  private spectateFollow = true;
   /** The office door leaf, resolved from the map once and cached. */
   private officeDoor: THREE.Object3D | null = null;
   private officeDoorSearched = false;
@@ -1537,6 +1546,7 @@ export class RoundSession {
 
   private readonly onSpectateKeyDown = (event: KeyboardEvent): void => {
     if (this.mode !== "survey") return;
+    if (event.code === "KeyF") this.spectateFollow = true;
     this.spectateKeys.add(event.code);
   };
 
@@ -1581,9 +1591,11 @@ export class RoundSession {
       INSPECTION_PHASES.has(state.phase);
     if (spectating) {
       this.stepSpectatePan(dtMs);
+      if (this.spectateFollow) this.stepSpectateFollow(dtMs);
     } else {
       this.spectateTarget.copy(SURVEY_TARGET);
       this.spectateRadius = SURVEY_RADIUS_M;
+      this.spectateFollow = true;
     }
     // The survey turns about whatever it is looking at; the vigil turns about
     // the middle of the office and keeps looking at the door, because the door
@@ -1623,6 +1635,8 @@ export class RoundSession {
       (keys.has("KeyD") || keys.has("ArrowRight") ? 1 : 0) -
       (keys.has("KeyA") || keys.has("ArrowLeft") ? 1 : 0);
     if (forward === 0 && strafe === 0) return;
+    // Taking the keys takes the camera: the follow shot yields to the hand.
+    this.spectateFollow = false;
     // Pan in the camera's own frame: forward is toward the orbit point.
     const sin = Math.sin(this.surveyAngle);
     const cos = Math.cos(this.surveyAngle);
@@ -1631,6 +1645,30 @@ export class RoundSession {
     this.spectateTarget.z += (-cos * forward - sin * strafe) * step;
     this.spectateTarget.x = Math.min(SHOP_MAX_X - 0.4, Math.max(SHOP_MIN_X + 0.4, this.spectateTarget.x));
     this.spectateTarget.z = Math.min(SHOP_MAX_Z - 0.4, Math.max(SHOP_MIN_Z + 0.4, this.spectateTarget.z));
+  }
+
+  /**
+   * Rides the orbit point after the nearest Inspector. A caught hider learns
+   * more from the hunter's shoulder than from an empty aisle, so the follow
+   * shot is the default; it eases rather than snaps, and if no Inspector eye
+   * has been heard yet the camera simply stays where it was.
+   */
+  private stepSpectateFollow(dtMs: number): void {
+    let nearest: THREE.Vector3 | null = null;
+    let best = Number.POSITIVE_INFINITY;
+    for (const remote of this.remoteInspectors.values()) {
+      const eye = remote.eye;
+      if (eye === null) continue;
+      const distance = eye.distanceToSquared(this.spectateTarget);
+      if (distance < best) {
+        best = distance;
+        nearest = eye;
+      }
+    }
+    if (nearest === null) return;
+    const rate = 1 - Math.exp(-dtMs / SPECTATE_FOLLOW_SETTLE_MS);
+    this.spectateTarget.lerp(nearest, rate);
+    this.spectateRadius += (SPECTATE_FOLLOW_RADIUS_M - this.spectateRadius) * rate;
   }
 
   /** True while this client is the Inspector and the Mimics are folding. */

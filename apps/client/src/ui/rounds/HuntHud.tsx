@@ -318,6 +318,9 @@ function SpectatorStatusCard({ state }: { readonly state: RoundViewState }): Rea
       </div>
       <div style={{ ...labelStyle, marginTop: 10 }}>Still standing</div>
       <div style={figureStyle}>{state.mimicsRemaining}</div>
+      <div style={{ ...labelStyle, marginTop: 8, opacity: 0.75 }}>
+        Camera follows the Inspector · WASD roams free · F follows again
+      </div>
     </div>
   );
 }

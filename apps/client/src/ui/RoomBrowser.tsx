@@ -156,7 +156,8 @@ export interface RoomBrowserProps {
   readonly pendingRequests?: readonly PendingRoomJoinRequest[];
   readonly outgoingRequest?: OutgoingRoomJoinRequest | null;
   readonly onJoin: (code: string) => void;
-  readonly onCreate: (name: string) => void;
+  /** `open` hosts a room whose joiners are admitted without approval. */
+  readonly onCreate: (name: string, open: boolean) => void;
   readonly onQuickJoin: () => void;
   readonly onForgePractice?: () => void;
   readonly busy?: boolean;
@@ -197,6 +198,8 @@ export function RoomBrowser({
   onBack,
 }: RoomBrowserProps): ReactElement {
   const [name, setName] = useState("");
+  /** Host an open door (no approval step) or vet each arrival. */
+  const [hostOpenDoor, setHostOpenDoor] = useState(false);
   const [selectedCode, setSelectedCode] = useState<string | null>(rooms[0]?.code ?? null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [customOpen, setCustomOpen] = useState(false);
@@ -286,7 +289,7 @@ export function RoomBrowser({
   };
   const submitRoom = (): void => {
     if (busy || full || currentCode !== null || outgoingRequest !== null) return;
-    onCreate(name);
+    onCreate(name, hostOpenDoor);
     setName("");
   };
   const moveRoomFocus = (index: number, direction: -1 | 1): void => {
@@ -419,6 +422,7 @@ export function RoomBrowser({
                       <div style={nameStyle}>{room.name}</div>
                       <div style={metaStyle}>
                         {room.code} · {roomStatus(room.phase)}
+                        {room.open === true ? " · open door" : ""}
                       </div>
                     </div>
                     <div style={countStyle}>
@@ -589,7 +593,13 @@ export function RoomBrowser({
                   onJoin(selected.code);
                 }}
               >
-                {busy ? "Opening…" : selected.joinable ? "Request to join" : "Room full"}
+                {busy
+                  ? "Opening…"
+                  : !selected.joinable
+                    ? "Room full"
+                    : selected.open === true
+                      ? "Join"
+                      : "Request to join"}
               </button>
               )}
             </>
@@ -643,6 +653,20 @@ export function RoomBrowser({
                 submitRoom();
               }}
             />
+            <button
+              type="button"
+              className={PRESS_CLASS}
+              aria-pressed={hostOpenDoor}
+              style={{
+                ...buttonStyle,
+                width: "100%",
+                marginTop: 9,
+                borderColor: hostOpenDoor ? BRASS_LIT : undefined,
+              }}
+              onClick={() => setHostOpenDoor((value) => !value)}
+            >
+              {hostOpenDoor ? "Open door · friends walk straight in" : "Vetted door · approve each arrival"}
+            </button>
             <button
               type="button"
               className={PRESS_CLASS}

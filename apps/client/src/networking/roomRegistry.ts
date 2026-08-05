@@ -210,6 +210,13 @@ export const RoomAdSchema = z.strictObject({
   seekers: z.number().int().min(1).max(LIMITS.maxPlayersPerMatch),
   phase: z.nativeEnum(MatchPhase),
   beat: z.number().int().min(0),
+  /**
+   * True when the host admits session joiners without the approval step
+   * (approved 2026-08-05): the browser shows JOIN instead of REQUEST TO
+   * JOIN, and the host's adapter answers requests itself. Optional so the
+   * adverts of builds that predate the flag still parse.
+   */
+  open: z.boolean().optional(),
 });
 
 export type RoomAd = z.infer<typeof RoomAdSchema>;
