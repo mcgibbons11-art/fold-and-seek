@@ -28,8 +28,19 @@ import { PortalsServerRuntime, type ServerGlobal } from "./runtime";
 /** Ticks per second. The sandbox floors timers at 50 ms, which is this exactly. */
 const TICK_MS = 50;
 
-/** How often authoritative public state is republished, in ticks. */
-const STATE_EVERY_TICKS = 4;
+/**
+ * How often authoritative public state is republished, in ticks.
+ *
+ * Twice a second, which is a write budget rather than a taste: a full round's
+ * state spans four or five keys, the session allows about thirty state writes
+ * a second in total, and a change anywhere near the front of the state shifts
+ * every chunk boundary after it, so a publication almost always rewrites the
+ * whole range. Ten writes a second leaves room for everything else.
+ *
+ * Nothing time-critical rides on this. Events carry the round as it happens;
+ * published state is what a late joiner or a resync reads.
+ */
+const STATE_EVERY_TICKS = 10;
 
 declare const server: ServerGlobal;
 

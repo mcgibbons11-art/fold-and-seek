@@ -5,12 +5,13 @@ import type {
   SimOutput,
 } from "@foldseek/game-sim";
 import type { Vec3Like } from "@foldseek/map-data";
-import { baseSeatIdOf, derivedSeatId } from "@foldseek/shared";
+import { baseSeatIdOf, derivedSeatId, encodeStateChunks } from "@foldseek/shared";
 
 import {
+  MAX_SERVER_STATE_CHUNKS,
   SERVER_DEBUG_KEY,
   SERVER_HELLO_KEY,
-  SERVER_STATE_KEY,
+  SERVER_STATE_KEYS,
   type ClientToServer,
   type ServerToClient,
 } from "./protocol";
@@ -69,6 +70,9 @@ export class PortalsServerRuntime {
    * the two only coincide for a signed-out guest.
    */
   private readonly seatByConnection = new Map<string, string>();
+  /** How many keys the last publication used, so a shorter one clears the tail. */
+  private publishedCount = 0;
+  private stateSeq = 0;
   /**
    * The session clock. The sandbox gives no promise about `Date.now`, and the
    * simulation only ever needs a monotonic millisecond count, so the runtime
@@ -220,8 +224,41 @@ export class PortalsServerRuntime {
     this.options.onPlacements(this.sim.getDisguisePlacements());
   }
 
+  /**
+   * Publishes the authoritative state across its key range.
+   *
+   * Every chunk of a publication is written, including one whose payload
+   * happens to match the last: readers only assemble a set that shares a
+   * sequence number, so leaving one key on an older sequence would make the
+   * whole publication unreadable rather than saving a write. The budget is
+   * kept by publishing less often instead, which `STATE_EVERY_TICKS` sets.
+   */
   private publishState(): void {
-    this.host.setState(SERVER_STATE_KEY, this.sim.getPublicState());
+    this.stateSeq += 1;
+    const chunks = encodeStateChunks(
+      this.sim.getPublicState(),
+      this.stateSeq,
+      MAX_SERVER_STATE_CHUNKS,
+    );
+    if (chunks === null) {
+      // Refusing to publish beats publishing a truncated round: a client would
+      // decode the shortened state as a real one with players missing.
+      this.note(`public state does not fit ${String(MAX_SERVER_STATE_CHUNKS)} keys`);
+      return;
+    }
+
+    for (const chunk of chunks) {
+      const key = SERVER_STATE_KEYS[chunk.i];
+      if (key !== undefined) this.host.setState(key, chunk);
+    }
+
+    // A publication needing fewer keys than the last must not leave the tail
+    // of the old one behind, where a reader could assemble it as a whole.
+    for (let index = chunks.length; index < this.publishedCount; index += 1) {
+      const key = SERVER_STATE_KEYS[index];
+      if (key !== undefined) this.host.setState(key, null);
+    }
+    this.publishedCount = chunks.length;
   }
 
   /**

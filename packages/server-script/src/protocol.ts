@@ -20,8 +20,32 @@ export const SERVER_PROTOCOL_VERSION = 1;
 
 /** State key holding the server's presence, which is also how clients detect it. */
 export const SERVER_HELLO_KEY = "server:hello";
-/** State key holding the authoritative public match state. */
-export const SERVER_STATE_KEY = "server:match";
+/**
+ * Key range holding the authoritative public match state.
+ *
+ * A range rather than a key because the state does not fit one. Measured at
+ * six seats with disguises manifested it reaches about 27 KB against an 8 KB
+ * per-value ceiling, so it is published in sequenced chunks and reassembled
+ * on arrival. Eight keys is roughly double the four that measurement needs,
+ * which leaves room for the state to grow without a protocol change.
+ */
+export const SERVER_STATE_KEYS = [
+  "server:match0",
+  "server:match1",
+  "server:match2",
+  "server:match3",
+  "server:match4",
+  "server:match5",
+  "server:match6",
+  "server:match7",
+] as const;
+
+export const MAX_SERVER_STATE_CHUNKS = SERVER_STATE_KEYS.length;
+
+/** What the sandbox allows the authority in total, documented as about thirty. */
+export const SERVER_STATE_WRITES_PER_SECOND = 30;
+/** What the authority may broadcast in a second, documented as about sixty. */
+export const SERVER_BROADCASTS_PER_SECOND = 60;
 /**
  * State key carrying the authority's own diagnostics.
  *

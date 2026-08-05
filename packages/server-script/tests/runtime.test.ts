@@ -1,12 +1,22 @@
 import { MatchSimulation } from "@foldseek/game-sim";
-import { DEFAULT_MATCH_SETTINGS, derivedSeatId, MatchPhase } from "@foldseek/shared";
+import {
+  createReferenceDisguiseWire,
+  DEFAULT_MATCH_SETTINGS,
+  decodeStateChunks,
+  derivedSeatId,
+  encodeDisguiseWire,
+  jsonByteLength,
+  MatchPhase,
+  MAX_STATE_VALUE_BYTES,
+} from "@foldseek/shared";
 import { describe, expect, it } from "vitest";
 
 import {
   SERVER_DEBUG_KEY,
   SERVER_HELLO_KEY,
   SERVER_PROTOCOL_VERSION,
-  SERVER_STATE_KEY,
+  SERVER_STATE_KEYS,
+  SERVER_STATE_WRITES_PER_SECOND,
 } from "../src/protocol";
 import { PortalsServerRuntime, type ServerGlobal, type ServerPlayer } from "../src/runtime";
 
@@ -45,7 +55,10 @@ class FakeHost implements ServerGlobal {
     this.sent.push(data);
   }
 
+  stateWrites = 0;
+
   setState(key: string, value: unknown): void {
+    this.stateWrites += 1;
     this.state.set(key, value);
   }
 
@@ -118,6 +131,13 @@ function startRuntime(): { host: FakeHost; runtime: PortalsServerRuntime; sim: M
 
 const command = (cmd: unknown): unknown => ({ v: SERVER_PROTOCOL_VERSION, t: "cmd", cmd });
 
+/** Reads the published state exactly as a client does, through the chunk range. */
+function publishedState(host: FakeHost): Record<string, unknown> {
+  const decoded = decodeStateChunks(Object.fromEntries(host.state), SERVER_STATE_KEYS);
+  if (decoded === null) throw new Error("no complete state was published");
+  return decoded.value as Record<string, unknown>;
+}
+
 describe("the authoritative server script", () => {
   it("announces itself on a protected key the moment a session opens", () => {
     const { host } = startRuntime();
@@ -125,7 +145,7 @@ describe("the authoritative server script", () => {
     // The key is server-owned; that prefix is the whole reason a client cannot
     // forge authority once this ships.
     expect(SERVER_HELLO_KEY.startsWith("server:")).toBe(true);
-    expect(SERVER_STATE_KEY.startsWith("server:")).toBe(true);
+    expect(SERVER_STATE_KEYS.every((key) => key.startsWith("server:"))).toBe(true);
   });
 
   it("seats arrivals and publishes the roster as authoritative state", () => {
@@ -134,7 +154,7 @@ describe("the authoritative server script", () => {
     host.arrive({ id: "seat-b", displayName: "Bex" });
     runtime.tick();
 
-    const state = host.state.get(SERVER_STATE_KEY) as { players: { displayName: string }[] };
+    const state = publishedState(host) as unknown as { players: { displayName: string }[] };
     expect(state.players.map((player) => player.displayName).sort()).toEqual(["Ada", "Bex"]);
   });
 
@@ -153,7 +173,7 @@ describe("the authoritative server script", () => {
     // worth pinning: a client that never reports must not wedge a session.
     for (let i = 0; i < 500; i += 1) runtime.tick();
 
-    const state = host.state.get(SERVER_STATE_KEY) as { phase: MatchPhase };
+    const state = publishedState(host) as unknown as { phase: MatchPhase };
     expect(state.phase).not.toBe(MatchPhase.Lobby);
     expect(state.phase).not.toBe(MatchPhase.Loading);
     // Roles are dealt by the server, and reach their owner as a private batch
@@ -203,7 +223,7 @@ describe("the authoritative server script", () => {
     host.depart("seat-b");
     runtime.tick();
 
-    const held = host.state.get(SERVER_STATE_KEY) as {
+    const held = publishedState(host) as unknown as {
       players: { displayName: string; connected: boolean }[];
     };
     // Still at the table, just not answering: a player who closes the tab
@@ -216,7 +236,7 @@ describe("the authoritative server script", () => {
     const graceTicks = Math.ceil(DEFAULT_MATCH_SETTINGS.reconnectGraceMs / 50) + 4;
     for (let i = 0; i < graceTicks; i += 1) runtime.tick();
 
-    const state = host.state.get(SERVER_STATE_KEY) as { players: { displayName: string }[] };
+    const state = publishedState(host) as unknown as { players: { displayName: string }[] };
     expect(state.players.map((player) => player.displayName)).toEqual(["Ada"]);
   });
 
@@ -242,7 +262,7 @@ describe("the authoritative server script", () => {
     expect(sync).toMatchObject({ to: "conn-3", seat: "account-ada" });
     // The same seat, still holding the role it was dealt before the drop.
     expect(sim.getPrivateStateFor("account-ada")).not.toBeNull();
-    const players = (host.state.get(SERVER_STATE_KEY) as { players: unknown[] }).players;
+    const players = (publishedState(host) as unknown as { players: unknown[] }).players;
     expect(players).toHaveLength(2);
   });
 
@@ -254,7 +274,7 @@ describe("the authoritative server script", () => {
 
     const seats = host.sentOfType("sync").map((entry) => entry.seat);
     expect(seats).toEqual(["account-ada", derivedSeatId("account-ada", "conn-2")]);
-    const players = (host.state.get(SERVER_STATE_KEY) as { players: unknown[] }).players;
+    const players = (publishedState(host) as unknown as { players: unknown[] }).players;
     expect(players).toHaveLength(2);
   });
 
@@ -284,11 +304,110 @@ describe("the authoritative server script", () => {
     expect(debug?.note).toContain("room_full");
   });
 
+  it("publishes a full room's disguises without exceeding the 8 KB value cap", () => {
+    const host = new FakeHost();
+    const sim = new MatchSimulation({}, 7);
+    const runtime = new PortalsServerRuntime(host, sim, {
+      tickMs: 50,
+      stateEveryTicks: 4,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
+      onEye: () => undefined,
+      onPlacements: () => undefined,
+    });
+    runtime.start();
+
+    const seats = ["s0", "s1", "s2", "s3", "s4", "s5"];
+    for (const id of seats) {
+      host.arrive({ id, displayName: id });
+      host.message(command({ type: "player_ready", ready: true }), id);
+    }
+    host.message(command({ type: "start_match" }), "s0");
+
+    // Into the Forge, where every Mimic authors a real pose. This is the state
+    // that does not fit one key: six seats of encoded geometry measure about
+    // 27 KB against an 8 KB ceiling.
+    let posed = false;
+    for (let i = 0; i < 3_000; i += 1) {
+      runtime.tick();
+      const phase = sim.getPublicState().phase;
+      if (!posed && phase === MatchPhase.Forge) {
+        seats.forEach((id, index) => {
+          const wire = createReferenceDisguiseWire(1);
+          wire.root.position = [index / 10, 0, 0];
+          sim.recordForgeSnapshot(id, encodeDisguiseWire(wire), 1);
+        });
+        posed = true;
+      }
+    }
+
+    expect(posed).toBe(true);
+    const state = publishedState(host) as unknown as {
+      phase: MatchPhase;
+      disguises?: unknown[];
+    };
+    // Manifested, so the poses really are in the published state.
+    expect(state.phase).toBe(MatchPhase.Inspection);
+    expect((state.disguises ?? []).length).toBeGreaterThan(0);
+    expect(JSON.stringify(state).length).toBeGreaterThan(MAX_STATE_VALUE_BYTES);
+
+    // Every individual key still fits what Portals will accept.
+    for (const key of SERVER_STATE_KEYS) {
+      const value = host.state.get(key);
+      if (value === undefined || value === null) continue;
+      expect(jsonByteLength(value)).toBeLessThanOrEqual(MAX_STATE_VALUE_BYTES);
+    }
+  });
+
+  it("publishes a full round inside the session's state write budget", () => {
+    const host = new FakeHost();
+    const sim = new MatchSimulation({}, 7);
+    // The cadence the shipped script runs at, which is what the budget is set
+    // against; a faster one would spend the whole allowance on republishing.
+    const runtime = new PortalsServerRuntime(host, sim, {
+      tickMs: 50,
+      stateEveryTicks: 10,
+      protocolVersion: SERVER_PROTOCOL_VERSION,
+      onEye: () => undefined,
+      onPlacements: () => undefined,
+    });
+    runtime.start();
+
+    const seats = ["s0", "s1", "s2", "s3", "s4", "s5"];
+    for (const id of seats) {
+      host.arrive({ id, displayName: id });
+      host.message(command({ type: "player_ready", ready: true }), id);
+    }
+    host.message(command({ type: "start_match" }), "s0");
+
+    let posed = false;
+    let worstPerSecond = 0;
+    let windowStart = host.stateWrites;
+    for (let i = 1; i <= 4_000; i += 1) {
+      runtime.tick();
+      if (!posed && sim.getPublicState().phase === MatchPhase.Forge) {
+        seats.forEach((id, index) => {
+          const wire = createReferenceDisguiseWire(1);
+          wire.root.position = [index / 10, 0, 0];
+          sim.recordForgeSnapshot(id, encodeDisguiseWire(wire), 1);
+        });
+        posed = true;
+      }
+      // Twenty ticks of 50 ms is one second of session time.
+      if (i % 20 === 0) {
+        worstPerSecond = Math.max(worstPerSecond, host.stateWrites - windowStart);
+        windowStart = host.stateWrites;
+      }
+    }
+
+    expect(posed).toBe(true);
+    expect(worstPerSecond).toBeLessThanOrEqual(SERVER_STATE_WRITES_PER_SECOND);
+  });
+
   it("keeps its own clock rather than trusting the sandbox for time", () => {
     const { host, runtime } = startRuntime();
     host.arrive({ id: "seat-a", displayName: "Ada" });
     for (let i = 0; i < 8; i += 1) runtime.tick();
-    const state = host.state.get(SERVER_STATE_KEY) as { now: number };
+    const state = publishedState(host) as unknown as { now: number };
     // Eight ticks of the 50 ms interval, counted by the runtime itself.
     expect(state.now).toBe(400);
   });
