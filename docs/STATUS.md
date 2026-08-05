@@ -1,5 +1,19 @@
 # STATUS
 
+## Two approved features: follow-cam and open rooms (2026-08-05, later)
+
+Spectate-follow: a caught hider's orbit now rides the nearest Inspector's
+eye by default (eased, radius 2.6), WASD detaches into the free-cam, F
+re-follows, and the spectator card explains all three. Open rooms: NEW
+ROOM carries a door choice; an open door advertises itself (optional
+`open` flag on the room ad, remembered by every seat so host migration
+keeps the door open), shows a plain JOIN in the browser, auto-admits each
+arrival at the adapter whatever screen the host is on, and seats the host
+straight into their own lobby. Pinned by a fake-relay test and VERIFIED
+LIVE in the editor's two panes (visual/tourOpenRoom2p.mjs): open-door
+badge, plain JOIN, no ACCEPT PLAYER on the host, both seats readied, round
+started, zero console errors. 1,407 tests green; commit e4cd7cf synced.
+
 ## Full-game QA tour and the polish wave it ordered (2026-08-05)
 
 The whole game was driven headlessly in the Portals editor's two-player
