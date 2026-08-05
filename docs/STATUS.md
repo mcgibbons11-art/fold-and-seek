@@ -1,5 +1,27 @@
 # STATUS
 
+## Seen-colour sampling and a remote Inspector that glides (2026-08-06, night)
+
+Two more live-play verdicts. "PUBLISHES NO MATERIAL SWATCH" spam: most of
+the room declares no swatch (re-projected floors, walls, undeclared
+batches), so the dropper's second refusal fired constantly. When the
+declaration is missing the dropper now does exactly what paint's
+eyedropper does - reads the displayed colour under the hit and wears the
+nearest legal finish ("Matched the colour under the cursor - worn as
+Walnut"), proven across floor/walls/furniture by visual/dropperProbe.mjs.
+THE STUTTERING REMOTE INSPECTOR: telemetry crosses the relay at 10 Hz but
+the presentation playhead trailed the newest sample by only 50 ms, so
+every steady-state frame ran into extrapolation, stalled, and snapped on
+the next packet. The playhead now trails 150 ms (1.5 intervals), keeping
+it bracketed between real samples: pure interpolation in the steady state,
+extrapolation reserved for real packet loss. REMOTE_PRESENTATION_DELAY_MS
+is exported, the buffer tests derive from it, and a new test pins the
+delay-exceeds-interval invariant whose absence was the bug. The added
+~100 ms of remote-body display latency is the standard price of smooth
+interpolation; the FEEL verdict on both fixes belongs to the user's own
+Chrome (network diagnostics in settings shows interpolated vs extrapolated
+counts). 1,411 tests green; commit 8f2f0c4 synced.
+
 ## The dropper stops refusing the room, and panels throw themselves open (2026-08-06, later)
 
 Two live-play verdicts. THE "NOT ALLOWED" SPAM was an id mismatch, not a
