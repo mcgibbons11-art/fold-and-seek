@@ -96,3 +96,24 @@ export function traySwatchForSurface(surfaceId: string): SurfaceSampleResult {
     ? { kind: "none" }
     : { kind: "wear", tray: best, surfaceLabel: map.label };
 }
+
+/**
+ * The body finish nearest a sampled colour (2026-08-06). This is the seen-
+ * colour fallback for surfaces that declare no swatch at all - the floor's
+ * re-projected boards, the walls, anything batched without a declaration.
+ * Paint's eyedropper reads the colour the player is looking at; this turns
+ * that colour into the closest thing a disguise may legally wear, so no
+ * visible surface ever answers "publishes no swatch".
+ */
+export function trayForColor(color: readonly [number, number, number]): MaterialSwatch {
+  let best = MIMIC_LEGAL_SWATCHES[0] as MaterialSwatch;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const tray of MIMIC_LEGAL_SWATCHES) {
+    const score = colorDistance(tray.baseColor, color);
+    if (score < bestScore) {
+      bestScore = score;
+      best = tray;
+    }
+  }
+  return best;
+}

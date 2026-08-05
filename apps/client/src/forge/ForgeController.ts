@@ -111,7 +111,8 @@ import {
   type PaintHistoryTarget,
   type PoseSnapshot,
 } from "./forgeCommands";
-import { resolveSurfaceSwatch, traySwatchForSurface } from "./roomSwatches";
+import { resolveSurfaceSwatch, trayForColor, traySwatchForSurface } from "./roomSwatches";
+import { Eyedropper } from "../paint/Eyedropper";
 import {
   anchorForBone,
   anchorResidual,
@@ -763,6 +764,8 @@ export class ForgeController {
    * leaving the tool.
    */
   private materialDropperArmed = false;
+  /** Paint's own colour reader, for surfaces that declare no swatch. */
+  private materialEyedropper: Eyedropper | null = null;
   private resizeGizmo: THREE.Group | null = null;
   /** Brass outline per selected part, so multi-select is visible on the body. */
   private readonly selectionOutlines = new Map<number, THREE.LineSegments>();
@@ -2165,23 +2168,33 @@ export class ForgeController {
       this.emit();
       return;
     }
-    const swatchId = resolveSurfaceSwatch(hit.object);
-    if (swatchId === null) {
-      this.status = "That surface publishes no material swatch.";
-      this.emit();
-      return;
-    }
     // The room's finishes map onto the body's own tray: sampling wears the
     // nearest legal equivalent rather than refusing an id the body's table
     // has never heard of (2026-08-06).
-    const sample = traySwatchForSurface(swatchId);
+    const swatchId = resolveSurfaceSwatch(hit.object);
+    const sample = swatchId === null ? ({ kind: "none" } as const) : traySwatchForSurface(swatchId);
     if (sample.kind === "refused") {
       this.status = `${sample.label} is not allowed on a disguise.`;
       this.emit();
       return;
     }
     if (sample.kind === "none") {
-      this.status = "That surface publishes no material swatch.";
+      // No declaration on the surface: read the colour the player is looking
+      // at, exactly as paint's eyedropper does, and wear the nearest finish.
+      this.materialEyedropper ??= new Eyedropper({
+        raycaster: this.raycaster,
+        camera: this.camera,
+      });
+      const seen = this.materialEyedropper.sampleIntersection(hit);
+      if (seen === null) {
+        this.status = "Nothing under the cursor to sample.";
+        this.emit();
+        return;
+      }
+      const tray = trayForColor(seen.color);
+      this.sampledSwatchId = tray.id;
+      this.audio.play("material_sample");
+      this.status = `Matched the colour under the cursor — worn as ${tray.label}. Click a part to paint it.`;
       this.emit();
       return;
     }

@@ -53,7 +53,7 @@ const statusLine = async () => {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) =>
-      /editing|selected|sampled|dropper|holding|panel|socket|cannot|locked|stowed|undid|copied|swatch|allowed|resize|nothing under/i.test(
+      /editing|selected|sampled|matched|worn as|dropper|holding|panel|socket|cannot|locked|stowed|undid|copied|swatch|allowed|resize|nothing under/i.test(
         line,
       ),
     );
