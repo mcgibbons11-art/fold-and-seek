@@ -11,11 +11,24 @@ import { isSwatchLegalForMimic } from "../mimic/visual/materialSwatches";
 
 export const BODY_SLOT_ID = "body";
 
+/**
+ * The eye glow (2026-08-06, user: "the player eyes should be colorable"). It
+ * is a slot like any other, so it rides the existing materials list and needs
+ * no wire change; what makes it special is that the swatch tints an emissive
+ * rather than a surface.
+ */
+export const EYE_SLOT_ID = "eyes";
+
 export type SlotAssignmentError = "unknown-slot" | "illegal-swatch";
 
 /** Slot ids the Forge is allowed to write. */
 export function isAssignableSlot(slotId: string): boolean {
-  return slotId === BODY_SLOT_ID || isBoneName(slotId) || isPanelSocketName(slotId);
+  return (
+    slotId === BODY_SLOT_ID ||
+    slotId === EYE_SLOT_ID ||
+    isBoneName(slotId) ||
+    isPanelSocketName(slotId)
+  );
 }
 
 export function assignmentFor(

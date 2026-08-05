@@ -267,6 +267,8 @@ export class MimicVisual {
   private readonly shutter: THREE.Mesh;
   private panelStates: readonly PanelState[] = [];
   private locked = false;
+  /** Swatch tinting the eye glow, or null for the authored default. */
+  private eyeSwatchId: string | null = null;
 
   /**
    * `pool` lets several bodies share one set of materials, which is what keeps
@@ -705,6 +707,11 @@ export class MimicVisual {
       bySlot.set(assignment.slotId, assignment.swatchId);
     }
     const bodySwatch = bySlot.get("body") ?? PORCELAIN_SWATCH_ID;
+    // The eyes are their own slot and deliberately do NOT fall back to the
+    // body swatch: a body painted walnut still wants its lit amber eyes
+    // unless the player says otherwise (2026-08-06).
+    this.eyeSwatchId = bySlot.get("eyes") ?? null;
+    this.applyEyeMaterials();
 
     for (const segment of this.segments) {
       const bone = SEGMENT_BONES[segment.slot];
@@ -770,17 +777,23 @@ export class MimicVisual {
     }
   }
 
+  /** Puts the current eye colour on the eyes and the crown signal. */
+  private applyEyeMaterials(): void {
+    const pair = this.pool.eyeMaterials(this.eyeSwatchId);
+    const material = this.locked ? pair.shut : pair.lit;
+    for (const eye of this.eyes) {
+      eye.material = material;
+    }
+    this.crownSignal.material = material;
+  }
+
   /** A locked disguise closes its shutters: the eyes are the giveaway (§7.2). */
   setLocked(locked: boolean): void {
     if (this.locked === locked) {
       return;
     }
     this.locked = locked;
-    const eyeMaterial = locked ? this.pool.eyeShut : this.pool.eyeLit;
-    for (const eye of this.eyes) {
-      eye.material = eyeMaterial;
-    }
-    this.crownSignal.material = eyeMaterial;
+    this.applyEyeMaterials();
     this.layoutHeadPod();
   }
 

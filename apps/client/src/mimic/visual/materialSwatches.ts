@@ -275,6 +275,10 @@ export class MimicMaterialPool {
    * one instead of minting one each.
    */
   readonly pickProxy: THREE.MeshBasicMaterial;
+  private readonly eyeVariants = new Map<
+    string,
+    { readonly lit: THREE.MeshStandardMaterial; readonly shut: THREE.MeshStandardMaterial }
+  >();
 
   constructor() {
     this.graphite = new THREE.MeshPhysicalMaterial({
@@ -299,9 +303,35 @@ export class MimicMaterialPool {
     this.pickProxy.name = "mimic_pick_proxy";
   }
 
+  /**
+   * Lit and shut eye materials for one swatch (2026-08-06). Cached by swatch
+   * rather than built per body, so a cast sharing an eye colour still shares
+   * one pair and the material economy holds; the default colour reuses the
+   * pool's own pair and costs nothing at all.
+   */
+  eyeMaterials(swatchId: string | null): {
+    readonly lit: THREE.MeshStandardMaterial;
+    readonly shut: THREE.MeshStandardMaterial;
+  } {
+    if (swatchId === null) return { lit: this.eyeLit, shut: this.eyeShut };
+    const cached = this.eyeVariants.get(swatchId);
+    if (cached !== undefined) return cached;
+    const swatch = swatchById(swatchId);
+    if (swatch === null) return { lit: this.eyeLit, shut: this.eyeShut };
+    const lit = this.eyeLit.clone();
+    lit.name = `mimic_eye_lit_${swatchId}`;
+    lit.emissive = new THREE.Color(swatch.baseColor[0], swatch.baseColor[1], swatch.baseColor[2]);
+    const shut = lit.clone();
+    shut.name = `mimic_eye_shut_${swatchId}`;
+    shut.emissiveIntensity = 0;
+    const pair = { lit, shut };
+    this.eyeVariants.set(swatchId, pair);
+    return pair;
+  }
+
   /** Distinct materials built so far, which is what a compile pass has to cover. */
   get size(): number {
-    return this.swatches.size + 4;
+    return this.swatches.size + 4 + this.eyeVariants.size * 2;
   }
 
   dispose(): void {
@@ -310,6 +340,11 @@ export class MimicMaterialPool {
     this.brass.dispose();
     this.eyeLit.dispose();
     this.eyeShut.dispose();
+    for (const pair of this.eyeVariants.values()) {
+      pair.lit.dispose();
+      pair.shut.dispose();
+    }
+    this.eyeVariants.clear();
     this.pickProxy.dispose();
   }
 }

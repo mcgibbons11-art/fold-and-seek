@@ -1250,17 +1250,49 @@ function MaterialPanel({
           )}
         </span>
       </div>
-      <button
-        type="button"
-        className={PRESS_CLASS}
-        disabled={held === null}
-        style={{ ...buttonStyle, opacity: held === null ? 0.5 : 1 }}
-        onClick={() => {
-          controller.assignSwatch("body");
-        }}
-      >
-        Apply to whole body
-      </button>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          disabled={held === null}
+          style={{ ...buttonStyle, margin: 0, opacity: held === null ? 0.5 : 1 }}
+          onClick={() => {
+            controller.assignSwatch("body");
+          }}
+        >
+          Apply to whole body
+        </button>
+        {/* The eyes are their own slot: they keep their amber unless the
+            player deliberately tints them (2026-08-06). */}
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          disabled={held === null}
+          style={{
+            ...buttonStyle,
+            margin: 0,
+            opacity: held === null ? 0.5 : 1,
+            borderColor: state.eyeSwatchId === null ? undefined : BRASS_LIT,
+          }}
+          onClick={() => {
+            controller.assignSwatch("eyes");
+          }}
+        >
+          Apply to eyes
+        </button>
+      </div>
+      {state.eyeSwatchId === null ? null : (
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={{ ...buttonStyle, width: "100%", marginTop: 6 }}
+          onClick={() => {
+            controller.clearEyeSwatch();
+          }}
+        >
+          Eyes: {swatchById(state.eyeSwatchId)?.label ?? state.eyeSwatchId} · reset
+        </button>
+      )}
       <div style={{ opacity: 0.6, fontSize: 11 }}>
         Body swatch: {swatchById(state.bodySwatchId)?.label ?? state.bodySwatchId}
       </div>

@@ -88,8 +88,10 @@ import type { QualitySettings } from "../rendering/quality";
 import { AudioPlayer } from "./AudioPlayer";
 import { actionForCode, readStandardGamepad, type InputAction } from "../gameplay/inputBindings";
 import {
+  assignmentFor,
   assignmentSlots,
   BODY_SLOT_ID,
+  EYE_SLOT_ID,
   mirroredSlotId,
   resolvedSwatchFor,
   validateAssignment,
@@ -250,6 +252,8 @@ export interface ForgeHudState {
   readonly sampledSwatchId: string | null;
   /** True while F has armed the material dropper and a click will sample. */
   readonly materialDropperArmed: boolean;
+  /** Swatch tinting the eye glow, or null while they wear the default amber. */
+  readonly eyeSwatchId: string | null;
   readonly bodySwatchId: string;
   readonly arrangementId: StarterArrangementId;
   readonly previewArrangementId: StarterArrangementId | null;
@@ -1655,6 +1659,7 @@ export class ForgeController {
             },
       sampledSwatchId: this.sampledSwatchId,
       materialDropperArmed: this.materialDropperArmed,
+      eyeSwatchId: assignmentFor(this.state.materials, EYE_SLOT_ID),
       bodySwatchId: resolvedSwatchFor(this.state.materials, BODY_SLOT_ID, DEFAULT_BODY_SWATCH_ID),
       arrangementId: STARTER_ARRANGEMENT_IDS[this.arrangementIndex] ?? "upright",
       previewArrangementId: this.previewArrangementId,
@@ -2204,6 +2209,23 @@ export class ForgeController {
       sample.tray.label === sample.surfaceLabel
         ? `Sampled ${sample.tray.label}. Click a part to paint it, or use "whole body".`
         : `Sampled ${sample.surfaceLabel} — worn as ${sample.tray.label}. Click a part to paint it.`;
+    this.emit();
+  }
+
+  /** Returns the eyes to their authored amber, which is the absence of a slot. */
+  clearEyeSwatch(): void {
+    if (this.locked) return;
+    const current = assignmentFor(this.state.materials, EYE_SLOT_ID);
+    if (current === null) return;
+    // A null assignment removes the slot, which is what "back to default"
+    // means here: the eyes have no fallback to the body swatch.
+    this.commands.push(
+      createMaterialCommand([EYE_SLOT_ID], [current], null, performance.now()),
+      this.state,
+    );
+    this.mimic.applyMaterials(this.state.materials);
+    this.audio.play("ui_back");
+    this.status = "Eyes back to their own amber.";
     this.emit();
   }
 
