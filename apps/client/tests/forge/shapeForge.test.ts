@@ -88,12 +88,17 @@ const WALL_INNER_Z = 1.4;
 
 /** The handful of browser globals the controller touches on construction. */
 beforeEach(() => {
+  windowKeys.length = 0;
   const globals = globalThis as Record<string, unknown>;
   globals["HTMLInputElement"] ??= class {};
   globals["HTMLTextAreaElement"] ??= class {};
   globals["Element"] ??= class {};
-  globals["window"] ??= {
-    addEventListener: () => undefined,
+  // Keydown reaches the Forge through the window, so the stub keeps the
+  // listener: pressing a key in a test has to travel the path the browser uses.
+  globals["window"] = {
+    addEventListener: (type: string, handler: (event: unknown) => void) => {
+      if (type === "keydown") windowKeys.push(handler);
+    },
     removeEventListener: () => undefined,
   };
   globals["Audio"] ??= class {
@@ -108,6 +113,26 @@ beforeEach(() => {
     removeAttribute(): void {}
   };
 });
+
+const windowKeys: ((event: unknown) => void)[] = [];
+
+/** One key press, down the path the browser would use. */
+function press(key: string): void {
+  for (const handler of windowKeys) {
+    handler({
+      key,
+      code: key,
+      repeat: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+      target: null,
+      preventDefault: () => undefined,
+      stopPropagation: () => undefined,
+    });
+  }
+}
 
 describe("building a disguise in the Forge", () => {
   it("adds a shape as one undoable command", () => {
@@ -146,6 +171,23 @@ describe("building a disguise in the Forge", () => {
     forge.addShape("cube");
     forge.addShape("cylinder");
     expect(forge.shapeList().map((row) => row.label)).toEqual(["Cube 1", "Cylinder 1"]);
+  });
+
+  it("copies and removes a shape from the keys, not only from a panel", () => {
+    // Building is a stream of small edits under a short clock, so the verbs a
+    // player presses most have to be under their hand rather than behind a
+    // trip to a panel.
+    const forge = controller();
+    forge.addShape("cube");
+
+    press("d");
+    expect(forge.disguise.shapes).toHaveLength(2);
+
+    press("Delete");
+    expect(forge.disguise.shapes).toHaveLength(1);
+    // Both keys, because half of players reach for one and half the other.
+    press("Backspace");
+    expect(forge.disguise.shapes).toHaveLength(0);
   });
 
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {

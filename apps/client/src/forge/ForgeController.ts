@@ -4171,6 +4171,18 @@ export class ForgeController {
       case "v":
         this.setSilhouette(!this.silhouette);
         break;
+      case "d":
+        // Next to the movement keys and next to nothing else, because it is
+        // the verb a player presses most while building: a barrel's bands, a
+        // pot's rim and a row of legs are all one shape copied.
+        if (this.toolsActive) this.duplicateSelectedShape();
+        break;
+      case "delete":
+      case "backspace":
+        // Both, because half of players reach for one and half the other, and
+        // being wrong costs a trip to a panel to find the button.
+        if (this.toolsActive) this.deleteSelectedShape();
+        break;
       case "f":
         // In paint mode F belongs to the brush's eyedropper, which the paint
         // panel binds. In material mode F arms the same contract the paint
