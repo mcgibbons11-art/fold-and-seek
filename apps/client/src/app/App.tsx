@@ -791,7 +791,7 @@ export function App(): ReactElement {
         // never sees the requests of anyone who asks afterwards, so a room
         // could only ever admit one player. Everyone waits together until the
         // host presses the button, which is what carries the whole party in.
-        setRoundError(null);
+        setRoundError("You are in the party. The host will bring everyone in.");
         return;
       }
       const copy = {

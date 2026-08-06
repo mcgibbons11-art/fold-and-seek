@@ -371,6 +371,15 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private displayName = "";
   /** The channel this client is moving to, so a repeated launch is ignored. */
   private launchingTo: string | null = null;
+  /**
+   * The room this client has been accepted into but has not entered.
+   *
+   * Acceptance no longer moves anybody: the party gathers in the shared lobby
+   * so the host keeps receiving requests, and travels together when the host
+   * launches. Until then a guest holds only this, which is what tells it that
+   * a launch of that room is meant for it.
+   */
+  private acceptedRoomCode: string | null = null;
   private readonly directory = new RoomDirectory();
   private readonly directorySignal = new Signal<readonly RoomListing[]>();
   private readonly roomRequestsSignal = new Signal<readonly PendingRoomJoinRequest[]>();
@@ -957,6 +966,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
     const outgoing = this.outgoingRoomRequest;
     if (outgoing !== null && outgoing.expiresAt <= nowMs) {
       this.outgoingRoomRequest = null;
+      this.acceptedRoomCode = null;
       this.emitRoomRequests();
       this.roomDecisionSignal.emit({
         roomCode: outgoing.roomCode,
@@ -1450,9 +1460,16 @@ export class PortalsNetAdapter implements NetworkAdapter {
       // Only from the room this client is actually sitting in, and only from
       // its host: a launch moves everyone off this channel, so it is the one
       // message a stranger must never be able to send.
-      if (envelope.r !== this.roomCode) return;
+      // Meant for the room this client is in, or the one it is waiting to be
+      // taken into: a guest that was accepted never entered a room, so it has
+      // no roomCode to match on and would otherwise be left behind.
+      if (envelope.r !== this.roomCode && envelope.r !== this.acceptedRoomCode) return;
+      // From that room's host and nobody else. The directory names the host
+      // seat, which a browsing guest can check as well as a member can.
+      const listing = this.directory.find(envelope.r, this.clock());
       const senderSeat = this.connectionSeats.get(fromId);
-      if (senderSeat === undefined || senderSeat !== this.authoritySeatId) return;
+      if (senderSeat === undefined) return;
+      if (senderSeat !== (listing?.host ?? this.authoritySeatId)) return;
       void this.followLaunch(envelope.channel);
       return;
     }
@@ -1530,6 +1547,9 @@ export class PortalsNetAdapter implements NetworkAdapter {
         directoryFromSeat !== outgoing.hostSeatId
       ) return;
       this.outgoingRoomRequest = null;
+      // Accepted means a place in the party, not a move: this is what a
+      // launch of that room is later matched against.
+      this.acceptedRoomCode = envelope.accepted ? envelope.r : null;
       this.emitRoomRequests();
       this.roomDecisionSignal.emit({
         roomCode: envelope.r,

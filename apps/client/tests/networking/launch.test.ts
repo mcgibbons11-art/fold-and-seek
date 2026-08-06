@@ -116,6 +116,36 @@ describe("launching a room into its own channel", () => {
     second.dispose();
   });
 
+  it("carries an accepted guest in, though it never entered the room", async () => {
+    const host = peer(relay, "a");
+    await host.connect();
+    await host.joinSession(CHANNEL, "Ada");
+    host.createRoom("The Attic");
+    await elapse(200);
+
+    const guest = peer(relay, "b");
+    await guest.connect();
+    await guest.joinSession(CHANNEL, "Bex");
+    guest.requestRoom(host.getRoomCode() ?? "");
+    await elapse(200);
+    expect(host.acceptRoomRequest("b").ok).toBe(true);
+    await elapse(200);
+
+    // Accepted, and deliberately still outside the room: it holds no room
+    // code, so a launch has to be matched against what it WAS accepted into
+    // or it would simply be left behind in the lobby.
+    expect(guest.getRoomCode()).toBeNull();
+
+    const guestJoins = relay.joinAttempts.get("b") ?? 0;
+    expect(host.launchRoom()).toMatchObject({ ok: true });
+    await elapse(500);
+
+    expect(relay.joinAttempts.get("b") ?? 0).toBeGreaterThan(guestJoins);
+
+    host.dispose();
+    guest.dispose();
+  });
+
   it("refuses to launch a room from a client that is not its host", async () => {
     const host = peer(relay, "a");
     await host.connect();
