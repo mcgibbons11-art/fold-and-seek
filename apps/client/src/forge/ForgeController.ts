@@ -2409,6 +2409,70 @@ export class ForgeController {
   }
 
   /** Samples whatever the pointer is over, the `F` key of §7.5. */
+  /**
+   * Copies the FORM of the thing under the cursor, the way the dropper copies
+   * its colour.
+   *
+   * Pointing at a jar and getting a jar-sized cylinder is the difference
+   * between a Forge you can finish in 115 seconds and one you cannot. It also
+   * teaches the room's vocabulary by example: the proportions that read as a
+   * barrel are the barrel's own, not a guess made by eye at toy scale, where a
+   * body is 0.35 m tall and judging a few centimetres is genuinely hard.
+   *
+   * The shape arrives sized and oriented to the prop's own box; what it does
+   * not do is finish the job. It is a starting point to stretch, turn and
+   * paint, which is what keeps a disguise the player's work rather than a
+   * button that wins.
+   */
+  sampleFormUnderPointer(): boolean {
+    if (this.locked) {
+      this.status = "The disguise is locked. Unlock it to keep building.";
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+    const hit = this.raycastRoom();
+    if (hit === null) {
+      this.status = "Point at something in the room to copy its shape.";
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+
+    const box = new THREE.Box3().setFromObject(hit.object);
+    const size = box.getSize(this.scratchVector.clone());
+    if (!Number.isFinite(size.x) || size.x <= 0) {
+      this.status = "That has no shape to copy.";
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+
+    // Round things read as cylinders, square things as cubes. A jar sampled as
+    // a box would need every one of its corners taken off by hand.
+    const roundish = Math.abs(size.x - size.z) < Math.max(size.x, size.z) * 0.25;
+    const profileId: ShapeProfileId = roundish ? "cylinder" : "cube";
+    if (!this.addShape(profileId)) return false;
+
+    const shape = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
+    if (shape === undefined) return true;
+    const before = cloneDisguiseState(this.state);
+    shape.scale = [
+      clamp(size.x, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
+      clamp(size.y, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
+      clamp(size.z, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
+    ];
+    this.commands.pushApplied(
+      createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "sample form"),
+      this.state,
+    );
+    this.audio.play("material_sample");
+    this.status = `Copied that shape: a ${profileId} its size. Stretch and turn it from here.`;
+    this.refreshAll();
+    this.emit();
+    return true;
+  }
+
   sampleUnderPointer(): void {
     // Own body first (2026-08-05): pointing at your own part copies the
     // swatch it wears, the way paint's dropper reads its own strokes.
@@ -4476,6 +4540,13 @@ export class ForgeController {
         // dropper keeps: press, then click to copy. Everywhere else it stays
         // the §7.5 instant sample at the pointer.
         if (!this.toolsActive) break;
+        if (this.mode === "panels") {
+          // Same key as paint's and material's droppers, because it is the
+          // same idea: point at the room and take something from it. There it
+          // is the colour; here it is the form.
+          this.sampleFormUnderPointer();
+          break;
+        }
         if (this.mode === "material") {
           this.setMaterialDropperArmed(!this.materialDropperArmed);
         } else if (this.mode !== "paint") {

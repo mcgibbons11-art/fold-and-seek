@@ -875,6 +875,15 @@ function BuildPanel({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={labelStyle}>Add a shape</div>
+      <button
+        type="button"
+        className={PRESS_CLASS}
+        style={{ ...buttonStyle, marginBottom: 0 }}
+        disabled={state.locked}
+        onClick={() => controller.sampleFormUnderPointer()}
+      >
+        Copy a shape from the room · F
+      </button>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
         {SHAPE_PROFILE_IDS.map((profileId) => (
           <button

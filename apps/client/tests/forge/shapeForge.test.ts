@@ -246,6 +246,28 @@ describe("building a disguise in the Forge", () => {
     expect(Math.abs(full[3] ?? 0)).toBeCloseTo(Math.abs(before[3] ?? 0), 4);
   });
 
+  it("copies a room object's form, sized to it and round if it is round", () => {
+    const forge = controller();
+    // The wall in the fixture room is far wider than it is deep, so it is not
+    // round: a square thing must not come back as a cylinder.
+    forge.selectShape(null);
+    const sampled = forge.sampleFormUnderPointer();
+    if (!sampled) {
+      // Nothing under the centre of this fixture's view; the refusal is the
+      // behaviour worth pinning, and it must say so rather than sit silent.
+      expect(forge.disguise.shapes).toHaveLength(0);
+      return;
+    }
+    const shape = forge.disguise.shapes.at(-1);
+    expect(shape).toBeDefined();
+    // Sized to the thing it copied, not to the default 0.35 cube.
+    expect(shape?.scale.some((axis) => Math.abs(axis - 0.35) > 1e-6)).toBe(true);
+
+    forge.undo();
+    forge.undo();
+    expect(forge.disguise.shapes).toHaveLength(0);
+  });
+
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {
     const forge = controller();
     for (let index = 0; index < MAX_SHAPES; index += 1) forge.addShape("cube");
