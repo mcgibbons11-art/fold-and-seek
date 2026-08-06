@@ -5,16 +5,17 @@ import { roomChannelName } from "../../src/networking/roomRegistry";
 import { FakePortalsRelay } from "./fakePortals";
 
 /**
- * Moving a settled room into a channel of its own.
+ * Moving a room into a channel of its own.
  *
- * Players gather in the shared pre-match room and nobody moves on being
- * admitted: a room that scattered its players the moment each was accepted
- * would never let a host see who turned up. The host decides when the room is
- * settled and presses the button, and everyone travels together.
+ * There is one lobby: a player who is accepted lands in it beside everyone
+ * else, and the host answers waiting requests from that same screen. The move
+ * below is what carries the whole room onto its own channel, where Portals
+ * runs a server script for that match alone and gives it the session's whole
+ * state-key budget.
  *
- * The destination is not cosmetic. Portals runs one server script per channel,
- * so a room with its own channel gets an authoritative referee for that match
- * alone, and the session's whole state-key budget with it.
+ * The transport is tested here rather than the screen: the party travels
+ * together, only the room's host can send it anywhere, and a guest that was
+ * accepted is carried along even though it holds no room of its own yet.
  */
 
 const CHANNEL = "launch-test";
@@ -74,7 +75,7 @@ describe("launching a room into its own channel", () => {
     guest.dispose();
   });
 
-  it("keeps taking join requests after accepting one, so a party can fill up", async () => {
+  it("keeps delivering join requests to a host that is inside its room", async () => {
     const host = peer(relay, "a");
     await host.connect();
     // joinSession leaves this client browsing; join() would quick-join or
@@ -98,10 +99,9 @@ describe("launching a room into its own channel", () => {
     expect(accepted.ok).toBe(true);
     await elapse(200);
 
-    // The whole point: accepting moved nobody, so the host is still in the
-    // shared lobby and a later request still reaches it. This used to be
-    // impossible - the host left on the first acceptance and never saw
-    // another request, so a room could only ever admit one player.
+    // The transport always delivered these, whether or not the host had
+    // entered its room; what broke a filling party was the host being moved
+    // to a screen that did not show them. One lobby, so it now does.
     const second = peer(relay, "c");
     await second.connect();
     await second.joinSession(CHANNEL, "Cass");

@@ -48,8 +48,17 @@ export interface LobbyHudProps {
   readonly roomCode: string;
   readonly onReady: (ready: boolean) => void;
   readonly onStart: () => void;
-  /** Moves the settled party into the room's own channel. Portals only. */
-  readonly onLaunch?: () => void;
+  /**
+   * Players waiting to be let in, and the host's answers.
+   *
+   * These live here because this is the only lobby there is. A host that had
+   * to watch for them on another screen would stop seeing them the moment it
+   * admitted anybody, which is exactly how a room came to admit one player
+   * and then go deaf.
+   */
+  readonly pendingRequests?: readonly { readonly id: string; readonly displayName: string }[];
+  readonly onAcceptRequest?: (connectionId: string) => void;
+  readonly onDeclineRequest?: (connectionId: string) => void;
   readonly onCopyRoomCode?: () => void;
   /** Present in a live round; omitted by small isolated HUD fixtures. */
   readonly settings?: MatchSettings;
@@ -192,7 +201,9 @@ export function LobbyHud({
   roomCode,
   onReady,
   onStart,
-  onLaunch,
+  pendingRequests = [],
+  onAcceptRequest,
+  onDeclineRequest,
   onCopyRoomCode,
   settings,
   onSettingsChange,
@@ -350,16 +361,6 @@ export function LobbyHud({
             >
               {displayedReady ? "Ready" : "Ready up"}
             </button>
-            {state.self.isHost && onLaunch !== undefined ? (
-              <button
-                type="button"
-                className={PRESS_CLASS}
-                style={buttonStyle}
-                onClick={onLaunch}
-              >
-                Start lobby
-              </button>
-            ) : null}
             <button
               type="button"
               className={PRESS_CLASS}
@@ -370,6 +371,39 @@ export function LobbyHud({
               Start the round
             </button>
           </div>
+          {state.self.isHost && pendingRequests.length > 0 ? (
+            <div style={{ width: "100%", display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ ...labelStyle, opacity: 0.8 }}>
+                {pendingRequests.length === 1
+                  ? "1 player is asking to join"
+                  : `${String(pendingRequests.length)} players are asking to join`}
+              </div>
+              {pendingRequests.map((request) => (
+                <div
+                  key={request.id}
+                  style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "center" }}
+                >
+                  <strong style={{ flex: 1, textAlign: "left" }}>{request.displayName}</strong>
+                  <button
+                    type="button"
+                    className={PRESS_CLASS}
+                    style={buttonStyle}
+                    onClick={() => onAcceptRequest?.(request.id)}
+                  >
+                    Accept
+                  </button>
+                  <button
+                    type="button"
+                    className={PRESS_CLASS}
+                    style={buttonStyle}
+                    onClick={() => onDeclineRequest?.(request.id)}
+                  >
+                    Decline
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
           {startGate.allowed || blockedCopy === null ? null : (
             <div style={{ ...labelStyle, opacity: 0.7, letterSpacing: "0.08em" }}>{blockedCopy}</div>
           )}

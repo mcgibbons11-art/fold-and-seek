@@ -97,6 +97,10 @@ export interface RoundHudProps {
   readonly director: RoundDirector;
   readonly session: RoundSession;
   readonly onLeave: () => void;
+  /** Players waiting to be let into this room, shown to the host in the lobby. */
+  readonly pendingRequests?: readonly { readonly id: string; readonly displayName: string }[];
+  readonly onAcceptRequest?: (connectionId: string) => void;
+  readonly onDeclineRequest?: (connectionId: string) => void;
   readonly qualityTier: QualityTier;
   readonly onQualityTierChange: (tier: QualityTier) => void;
 }
@@ -105,6 +109,9 @@ export function RoundHud({
   director,
   session,
   onLeave,
+  pendingRequests,
+  onAcceptRequest,
+  onDeclineRequest,
   qualityTier,
   onQualityTierChange,
 }: RoundHudProps): ReactElement {
@@ -119,10 +126,6 @@ export function RoundHud({
 
   const onReady = useCallback((ready: boolean) => session.actions.ready(ready), [session]);
   const onStart = useCallback(() => session.actions.startMatch(), [session]);
-  // Offered only where there is somewhere to move to: the Portals transport
-  // gathers a room in a shared channel and gives the match a channel of its
-  // own, and nothing else has channels at all.
-  const onLaunch = useCallback(() => session.actions.launchRoom(), [session]);
   const onSettings = useCallback(
     (settings: MatchSettingsPatch) => session.actions.setSettings(settings),
     [session],
@@ -242,7 +245,9 @@ export function RoundHud({
           ),
         onReady,
         onStart,
-        onLaunch,
+        ...(pendingRequests === undefined ? {} : { pendingRequests }),
+        ...(onAcceptRequest === undefined ? {} : { onAcceptRequest }),
+        ...(onDeclineRequest === undefined ? {} : { onDeclineRequest }),
         roomCode: session.roomCode,
         onCopyRoomCode,
         settings: session.matchSettings,
@@ -281,7 +286,9 @@ interface PhaseHandlers {
   readonly forgeTools: ReactElement | null;
   readonly onReady: (ready: boolean) => void;
   readonly onStart: () => void;
-  readonly onLaunch: () => void;
+  readonly pendingRequests?: readonly { readonly id: string; readonly displayName: string }[];
+  readonly onAcceptRequest?: (connectionId: string) => void;
+  readonly onDeclineRequest?: (connectionId: string) => void;
   readonly roomCode: string;
   readonly onCopyRoomCode: () => void;
   readonly settings: MatchSettings;
@@ -303,7 +310,9 @@ function phaseHud(state: RoundViewState, handlers: PhaseHandlers): ReactElement 
           onCopyRoomCode={handlers.roomCode === "" ? undefined : handlers.onCopyRoomCode}
           onReady={handlers.onReady}
           onStart={handlers.onStart}
-          onLaunch={handlers.onLaunch}
+          {...(handlers.pendingRequests === undefined ? {} : { pendingRequests: handlers.pendingRequests })}
+          {...(handlers.onAcceptRequest === undefined ? {} : { onAcceptRequest: handlers.onAcceptRequest })}
+          {...(handlers.onDeclineRequest === undefined ? {} : { onDeclineRequest: handlers.onDeclineRequest })}
           settings={handlers.settings}
           onSettingsChange={handlers.onSettings}
           onAddBot={handlers.onAddBot}
