@@ -4,7 +4,7 @@ import * as THREE from "three/webgpu";
 import { DisposalBag } from "../engine/DisposalBag";
 import { tryReleasePointerCapture, trySetPointerCapture } from "../engine/pointerCapture";
 import { LoopingSoundVoice } from "../audio/LoopingSoundVoice";
-import type { AnchorState } from "../mimic/disguiseState";
+import { cloneDisguiseState, type AnchorState } from "../mimic/disguiseState";
 import {
   applyDisguiseStateToPose,
   capturePoseToDisguiseState,
@@ -39,6 +39,15 @@ import {
   type PanelProfileId,
   type PanelState,
 } from "../mimic/panels";
+import { MAX_SHAPES, type ShapeProfileId } from "@foldseek/shared";
+import type { BoneName } from "../mimic/rig";
+import {
+  addShape as addShapeToList,
+  duplicateShapeById,
+  removeShapeById,
+  shapeLabels,
+  type ShapeEdit,
+} from "./shapeAuthoring";
 import type { CharacterController } from "../inspector/CharacterController";
 import { nearestBlockerEntry } from "../inspector/geometry";
 import { GrappleVisual } from "../inspector/GrappleVisual";
@@ -768,6 +777,8 @@ export class ForgeController {
    * leaving the tool.
    */
   private materialDropperArmed = false;
+  /** The shape the gizmo drives, and the row the object panel highlights. */
+  private selectedShapeId: string | null = null;
   /** Paint's own colour reader, for surfaces that declare no swatch. */
   private materialEyedropper: Eyedropper | null = null;
   private resizeGizmo: THREE.Group | null = null;
@@ -1994,6 +2005,86 @@ export class ForgeController {
   }
 
   // --- Panels --------------------------------------------------------------
+
+  /**
+   * Adds a primitive to the disguise and selects it.
+   *
+   * The bone is where the shape rides, and it defaults to whatever the player
+   * currently has selected: a shape appears on the part they were just looking
+   * at rather than at an origin they then have to hunt for.
+   */
+  addShape(profileId: ShapeProfileId, bone?: BoneName): boolean {
+    if (this.locked) return false;
+    const edit = addShapeToList(this.state.shapes, profileId, bone ?? this.shapeBone(), "body");
+    if (edit === null) {
+      this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
+      this.audio.play("ui_deny");
+      return false;
+    }
+    this.commitShapes(edit, `add ${profileId}`);
+    this.status = `Added a ${profileId}. Drag its arrows to place it.`;
+    return true;
+  }
+
+  /**
+   * Copies the selected shape. This is the verb that makes building fast -
+   * barrel bands, a pot's rim, a row of legs - so it is worth a key of its own.
+   */
+  duplicateSelectedShape(): boolean {
+    if (this.locked || this.selectedShapeId === null) return false;
+    const edit = duplicateShapeById(this.state.shapes, this.selectedShapeId);
+    if (edit === null) {
+      this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
+      this.audio.play("ui_deny");
+      return false;
+    }
+    this.commitShapes(edit, "duplicate shape");
+    this.status = "Duplicated. The copy is beside the original.";
+    return true;
+  }
+
+  /** Removes the selected shape, leaving its neighbour selected. */
+  deleteSelectedShape(): boolean {
+    if (this.locked || this.selectedShapeId === null) return false;
+    const edit = removeShapeById(this.state.shapes, this.selectedShapeId);
+    if (edit === null) return false;
+    this.commitShapes(edit, "delete shape");
+    this.status = "Removed a shape.";
+    return true;
+  }
+
+  selectShape(id: string | null): void {
+    this.selectedShapeId = id;
+    this.refreshAll();
+  }
+
+  /** The shapes a disguise carries, with the names the object panel draws. */
+  shapeList(): readonly { readonly id: string; readonly label: string; readonly selected: boolean }[] {
+    const labels = shapeLabels(this.state.shapes);
+    return this.state.shapes.map((shape) => ({
+      id: shape.id,
+      label: labels.get(shape.id) ?? shape.id,
+      selected: shape.id === this.selectedShapeId,
+    }));
+  }
+
+  /** Where a new shape rides: the selected part, or the pelvis as the body's centre. */
+  private shapeBone(): BoneName {
+    const slot = [...this.selectedSlots][0];
+    const bone = slot === undefined ? undefined : SEGMENT_BONES[slot];
+    return bone ?? "pelvis";
+  }
+
+  /** One accepted edit becomes one undoable command, as every Forge edit does. */
+  private commitShapes(edit: ShapeEdit, label: string): void {
+    const before = cloneDisguiseState(this.state);
+    const after = cloneDisguiseState(this.state);
+    after.shapes = edit.shapes;
+    this.commands.push(createReplaceCommand(before, after, performance.now(), label), this.state);
+    this.selectedShapeId = edit.selectedId === "" ? null : edit.selectedId;
+    this.audio.play("panel_snap");
+    this.refreshAll();
+  }
 
   addPanel(socketId: string): void {
     if (this.locked || !isPanelSocketName(socketId) || this.findPanel(socketId) !== null) {
