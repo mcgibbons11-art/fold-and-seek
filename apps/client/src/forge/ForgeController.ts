@@ -516,6 +516,8 @@ const GIZMO_TIP_LENGTH_M = WORLD_SCALE.playerHeight * 0.12;
 const GIZMO_TIP_RADIUS_M = WORLD_SCALE.playerHeight * 0.045;
 const GIZMO_PICK_RADIUS_M = WORLD_SCALE.playerHeight * 0.09;
 /** A shape may not be scaled away to nothing, nor past the body's own reach. */
+/** One arrow press, about a fiftieth of the body's height. */
+const SHAPE_NUDGE_M = 0.007;
 const SHAPE_MIN_SCALE = 0.02;
 const SHAPE_MAX_SCALE = 4;
 /** A drag the width of the body turns a shape most of a half circle. */
@@ -4631,6 +4633,27 @@ export class ForgeController {
         this.setSilhouette(!this.silhouette);
         break;
 
+      case "arrowleft":
+      case "arrowright":
+      case "arrowup":
+      case "arrowdown":
+      case "pageup":
+      case "pagedown": {
+        // Precise placement by key. At this scale - the body is 0.35 m tall -
+        // a shape that needs to sit a few millimetres over is genuinely hard
+        // to drag there, and a mouse that overshoots costs more time than the
+        // move saved. Arrows move in the body's own frame: left and right
+        // across it, up and down along it, page keys through it.
+        if (!this.toolsActive || this.mode !== "panels" || this.selectedShapeId === null) break;
+        event.preventDefault();
+        const step = key === "arrowleft" || key === "arrowdown" || key === "pagedown"
+          ? -SHAPE_NUDGE_M
+          : SHAPE_NUDGE_M;
+        if (key === "arrowleft" || key === "arrowright") this.nudgeSelectedShape(step, 0, 0);
+        else if (key === "arrowup" || key === "arrowdown") this.nudgeSelectedShape(0, step, 0);
+        else this.nudgeSelectedShape(0, 0, step);
+        break;
+      }
       case "delete":
       case "backspace":
         // Both, because half of players reach for one and half the other, and

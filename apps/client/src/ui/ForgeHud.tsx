@@ -946,7 +946,7 @@ function BuildPanel({
           </div>
           <div style={labelStyle}>Stretch it</div>
           <div style={{ ...labelStyle, opacity: 0.6, textTransform: "none" }}>
-            Drag an arrow to move · hold Shift to turn freely
+            Drag an arrow to move · hold Shift to turn · arrow keys nudge
           </div>
           {(["X", "Y", "Z"] as const).map((name, axis) => (
             <div key={name} style={{ display: "flex", gap: 6, alignItems: "center" }}>

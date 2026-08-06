@@ -288,6 +288,23 @@ describe("building a disguise in the Forge", () => {
     expect(forge.disguise.shapes).toHaveLength(1);
   });
 
+  it("nudges the selected shape with the arrow keys", () => {
+    const forge = controller();
+    forge.setToolMode("panels");
+    forge.addShape("cube");
+    const before = [...(forge.disguise.shapes[0]?.position ?? [])];
+
+    press("ArrowRight");
+    const afterX = forge.disguise.shapes[0]?.position ?? [];
+    // Moved on the axis asked for and left alone on the others, or a nudge
+    // becomes a drift a player has to correct.
+    expect(afterX[0]).toBeGreaterThan(before[0] ?? 0);
+    expect(afterX[1]).toBeCloseTo(before[1] ?? 0, 9);
+
+    press("ArrowLeft");
+    expect(forge.disguise.shapes[0]?.position[0]).toBeCloseTo(before[0] ?? 0, 9);
+  });
+
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {
     const forge = controller();
     for (let index = 0; index < MAX_SHAPES; index += 1) forge.addShape("cube");

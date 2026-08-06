@@ -189,6 +189,14 @@ record("form dropper is reachable and answers", sampledForm &&
   afterSample !== beforeSample,
   (afterSample.match(/copied that shape[^.]*\.|point at something[^.]*\./i) ?? ["no answer"])[0].slice(0, 60));
 
+// Mirror: the verb that halves a symmetric build.
+const beforeMirror = (await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0";
+const mirrored = await clickIf(/^mirror$/i, 6_000);
+await page.waitForTimeout(900);
+const afterMirror = (await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0";
+record("mirror adds the other side", mirrored && Number(afterMirror) === Number(beforeMirror) + 1,
+  `${beforeMirror} then ${afterMirror}`);
+
 // The two verdicts a hider builds against.
 const verdicts = await textOf();
 record("panel reports what it reads as and how hidden the body is",
