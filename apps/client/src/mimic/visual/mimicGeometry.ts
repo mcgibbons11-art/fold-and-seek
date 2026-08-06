@@ -1,5 +1,7 @@
 import * as THREE from "three/webgpu";
 
+import type { ShapeProfileId } from "@foldseek/shared";
+
 import type { PanelProfileId } from "../panels";
 import type { SegmentProfileId } from "../segmentForm";
 
@@ -426,4 +428,50 @@ export function createPuckGeometry(radius: number, thickness: number): THREE.Buf
   const geometry = new THREE.LatheGeometry(points, 24);
   geometry.computeVertexNormals();
   return geometry;
+}
+
+/**
+ * The solid a shape profile draws.
+ *
+ * Unit-sized and centred, because a shape carries its own scale: geometry is
+ * built once per profile and shared by every instance, so an edit moves a
+ * transform rather than rewriting vertices. A Forge that rebuilt geometry on
+ * every drag would hitch on every press.
+ *
+ * Segment counts are deliberately low. Six players carry up to sixteen of
+ * these each, and a disguise is read at a distance as a silhouette, where a
+ * cylinder's facet count is invisible and its draw cost is not.
+ */
+export function createShapeGeometry(profileId: ShapeProfileId): THREE.BufferGeometry {
+  switch (profileId) {
+    case "cylinder":
+      return new THREE.CylinderGeometry(0.5, 0.5, 1, 16);
+    case "sphere":
+      return new THREE.SphereGeometry(0.5, 16, 12);
+    case "wedge": {
+      // A box with one edge collapsed: the roof, lid and ramp form that a cube
+      // and a cylinder together cannot make.
+      const wedge = new THREE.BufferGeometry();
+      const h = 0.5;
+      wedge.setAttribute("position", new THREE.BufferAttribute(new Float32Array([
+        -h, -h, -h, h, -h, -h, h, -h, h,
+        -h, -h, -h, h, -h, h, -h, -h, h,
+        -h, h, -h, h, h, -h, h, -h, h,
+        -h, h, -h, h, -h, h, -h, -h, h,
+        -h, -h, -h, -h, h, -h, h, h, -h,
+        -h, -h, -h, h, h, -h, h, -h, -h,
+        h, -h, -h, h, h, -h, h, -h, h,
+        -h, -h, h, h, -h, h, -h, h, -h,
+      ]), 3));
+      wedge.computeVertexNormals();
+      return wedge;
+    }
+    case "plane":
+      // A thin slab rather than a true plane: a disguise is seen from every
+      // angle, and a one-sided face vanishes from behind.
+      return new THREE.BoxGeometry(1, 1, 0.02);
+    case "cube":
+    default:
+      return new THREE.BoxGeometry(1, 1, 1);
+  }
 }

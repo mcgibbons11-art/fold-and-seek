@@ -2558,6 +2558,7 @@ export class ForgeController {
   private refreshAll(reapplyMaterials = false): void {
     this.mimic.applyForms(this.pose);
     this.mimic.applyPanels(this.state.panels);
+    this.mimic.applyShapes(this.state.shapes);
     if (reapplyMaterials) {
       this.mimic.applyMaterials(this.state.materials);
     }
@@ -2907,6 +2908,7 @@ export class ForgeController {
     );
     clampPanelState(panel);
     this.mimic.applyPanels(this.state.panels);
+    this.mimic.applyShapes(this.state.shapes);
     this.applyPoseToVisual();
     return true;
   }

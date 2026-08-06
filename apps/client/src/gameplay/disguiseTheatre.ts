@@ -324,6 +324,7 @@ export class DisguiseTheatre {
       this.scene.add(visual.root);
       visual.applyForms(pose);
       visual.applyPanels(state.panels);
+      visual.applyShapes(state.shapes);
       visual.applyMaterials(state.materials);
       visual.applyPose(pose);
       visual.root.position.y = PREWARM_PARK_Y;
@@ -627,6 +628,7 @@ export class DisguiseTheatre {
       applyDisguiseStateToPose(state, actor.pose);
       actor.visual.applyForms(actor.pose);
       actor.visual.applyPanels(state.panels);
+      actor.visual.applyShapes(state.shapes);
       // Swatches first, when they moved: the paint binder clones whatever
       // material is on a part and bakes its colour into the unpainted texel, so
       // binding before this would leave the layer sitting on the previous one.

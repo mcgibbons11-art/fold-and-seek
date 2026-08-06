@@ -21,12 +21,15 @@ import {
   type PanelProfileId,
   type PanelState,
 } from "../panels";
+import { MAX_SHAPES, SHAPE_PROFILE_IDS, type ShapeProfileId } from "@foldseek/shared";
+import type { ShapeState } from "../shapes";
 import {
   BELLOWS_OUTER_RATIO,
   createBellowsGeometry,
   createPanelGeometry,
   createPuckGeometry,
   createSegmentShellGeometry,
+  createShapeGeometry,
   writeSegmentShell,
 } from "./mimicGeometry";
 import { MimicMaterialPool, PORCELAIN_SWATCH_ID } from "./materialSwatches";
@@ -181,6 +184,19 @@ const SOCKET_ALIGNMENTS: readonly THREE.Quaternion[] = PANEL_SOCKET_NAMES.map((n
   );
 });
 
+/** Reused per shape per frame, so drawing a disguise allocates nothing. */
+const shapeBoneScratch = new THREE.Quaternion();
+const shapeOffsetScratch = new THREE.Vector3();
+
+interface ShapeVisual {
+  readonly mesh: THREE.Mesh;
+  /** The shape's own offset and turn inside its bone's frame. */
+  readonly localPosition: THREE.Vector3;
+  readonly localRotation: THREE.Quaternion;
+  boneIndex: number;
+  present: boolean;
+}
+
 interface SegmentVisual {
   readonly slot: number;
   readonly boneIndex: number;
@@ -251,11 +267,22 @@ export class MimicVisual {
    * pointer actually hits.
    */
   readonly socketPicks: readonly THREE.Mesh[];
+  /**
+   * The primitives a disguise is built from, pooled to the wire's ceiling.
+   *
+   * Siblings of the shells, never children: a shell is scaled to its segment's
+   * form, and a shape parented to one would be stretched by whatever the body
+   * happened to be doing. Each is placed from its bone's world transform
+   * instead, so it rides the fold without inheriting it.
+   */
+  readonly shapeMeshes: readonly THREE.Mesh[];
 
   private readonly bag = new DisposalBag();
   private readonly pool: MimicMaterialPool;
   private readonly segments: readonly SegmentVisual[];
   private readonly panels: readonly PanelVisual[];
+  private readonly shapes: readonly ShapeVisual[];
+  private readonly shapeGeometries = new Map<ShapeProfileId, THREE.BufferGeometry>();
   private readonly bellows: readonly THREE.Mesh[];
   private readonly bellowsBones: readonly number[];
   private readonly panelGeometries: ReadonlyMap<PanelProfileId, THREE.BufferGeometry>;
@@ -422,6 +449,34 @@ export class MimicVisual {
       socketPicks.push(pick);
     }
     this.panels = panels;
+
+    // Built once per profile and shared: a disguise is edited constantly, and
+    // rebuilding geometry per edit is the difference between a Forge that
+    // feels immediate and one that hitches on every press.
+    for (const profileId of SHAPE_PROFILE_IDS) {
+      this.shapeGeometries.set(profileId, this.bag.add(createShapeGeometry(profileId)));
+    }
+    const shapes: ShapeVisual[] = [];
+    for (let index = 0; index < MAX_SHAPES; index += 1) {
+      const mesh = new THREE.Mesh(this.shapeGeometries.get("cube"), porcelain);
+      mesh.name = `mimic_shape_${String(index)}`;
+      mesh.userData[MIMIC_BODY_TAG] = true;
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      // Deliberately NOT added to the scene yet. A parked mesh that merely
+      // hides is still traversed by the merge and still measured by
+      // `Box3.setFromObject`, which is how a disguise ends up with a focus box
+      // reaching out to parts nobody can see.
+      shapes.push({
+        mesh,
+        localPosition: new THREE.Vector3(),
+        localRotation: new THREE.Quaternion(),
+        boneIndex: 0,
+        present: false,
+      });
+    }
+    this.shapes = shapes;
+    this.shapeMeshes = shapes.map((shape) => shape.mesh);
     this.panelMeshes = panelMeshes;
     this.socketMarkers = socketMarkers;
     this.socketPicks = socketPicks;
@@ -593,7 +648,59 @@ export class MimicVisual {
   }
 
   /** Places every part from the rig's world transforms. Allocates nothing. */
+  /**
+   * Draws the shapes a disguise carries, and detaches the rest.
+   *
+   * Unused meshes leave the scene graph entirely rather than turning
+   * invisible: the merged body gathers what it finds under the root, and the
+   * focus box measures hidden children too, so a parked mesh that is merely
+   * hidden still costs a draw slot and still stretches the box the reticle
+   * brackets and the gun is checked against.
+   */
+  applyShapes(shapes: readonly ShapeState[]): void {
+    for (const [index, visual] of this.shapes.entries()) {
+      const state = shapes[index];
+      if (state === undefined) {
+        if (visual.present) this.root.remove(visual.mesh);
+        visual.present = false;
+        continue;
+      }
+      if (!visual.present) this.root.add(visual.mesh);
+      visual.present = true;
+      visual.boneIndex = boneIndex(state.bone);
+      visual.localPosition.set(state.position[0], state.position[1], state.position[2]);
+      visual.localRotation.set(
+        state.rotation[0],
+        state.rotation[1],
+        state.rotation[2],
+        state.rotation[3],
+      );
+      visual.mesh.scale.set(state.scale[0], state.scale[1], state.scale[2]);
+      const geometry = this.shapeGeometries.get(state.profileId);
+      if (geometry !== undefined && visual.mesh.geometry !== geometry) {
+        visual.mesh.geometry = geometry;
+      }
+    }
+  }
+
   applyPose(pose: PoseState): void {
+    for (const visual of this.shapes) {
+      if (!visual.present) continue;
+      const position = pose.worldPositions[visual.boneIndex];
+      const rotation = pose.worldRotations[visual.boneIndex];
+      if (position === undefined || rotation === undefined) continue;
+      // The bone's frame, then the shape's own offset within it: attached, so
+      // a construction travels with the body instead of shearing off it.
+      shapeBoneScratch.set(rotation.x, rotation.y, rotation.z, rotation.w);
+      shapeOffsetScratch.copy(visual.localPosition).applyQuaternion(shapeBoneScratch);
+      visual.mesh.position.set(
+        position.x + shapeOffsetScratch.x,
+        position.y + shapeOffsetScratch.y,
+        position.z + shapeOffsetScratch.z,
+      );
+      visual.mesh.quaternion.copy(shapeBoneScratch).multiply(visual.localRotation);
+    }
+
     for (const segment of this.segments) {
       const position = pose.worldPositions[segment.boneIndex];
       const rotation = pose.worldRotations[segment.boneIndex];
