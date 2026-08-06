@@ -499,6 +499,13 @@ const GIZMO_SHAFT_RADIUS_M = WORLD_SCALE.playerHeight * 0.016;
 const GIZMO_TIP_LENGTH_M = WORLD_SCALE.playerHeight * 0.12;
 const GIZMO_TIP_RADIUS_M = WORLD_SCALE.playerHeight * 0.045;
 const GIZMO_PICK_RADIUS_M = WORLD_SCALE.playerHeight * 0.09;
+/** A shape may not be scaled away to nothing, nor past the body's own reach. */
+const SHAPE_MIN_SCALE = 0.02;
+const SHAPE_MAX_SCALE = 4;
+const SHAPE_AXIS_X = new THREE.Vector3(1, 0, 0);
+const SHAPE_AXIS_Y = new THREE.Vector3(0, 1, 0);
+const SHAPE_AXIS_Z = new THREE.Vector3(0, 0, 1);
+
 const GIZMO_PARAM_PER_METRE = 1 / WORLD_SCALE.playerHeight;
 /** How far a body shell may sit in front of a stud before it occludes it. */
 const PANEL_PICK_OCCLUSION_TOLERANCE_M = WORLD_SCALE.playerHeight * 0.1;
@@ -2130,6 +2137,78 @@ export class ForgeController {
     this.selectedShapeId = id;
     this.refreshAll();
     this.emit();
+  }
+
+  /**
+   * Stretches the selected shape along one axis, as one undoable edit.
+   *
+   * This is what turns the five primitives into a room's worth of objects: a
+   * cylinder squashed on Y is a jar's rim, stretched is a barrel, and a cube
+   * flattened on one axis is a shelf or a lid. Without per-axis scale the
+   * palette is five shapes; with it, it is every object those five can be
+   * pulled into.
+   */
+  scaleSelectedShape(axis: 0 | 1 | 2, factor: number): boolean {
+    const shape = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
+    if (this.locked || shape === undefined || !Number.isFinite(factor) || factor <= 0) {
+      this.status = this.locked
+        ? "The disguise is locked. Unlock it to keep building."
+        : "Select a shape first, in the room or in the list.";
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+    const before = cloneDisguiseState(this.state);
+    // Clamped so a shape cannot be scaled to nothing, which would leave an
+    // invisible thing in the list that still answers clicks and still counts
+    // against the sixteen.
+    shape.scale[axis] = clamp((shape.scale[axis] ?? 1) * factor, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE);
+    this.commands.pushApplied(
+      createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "scale shape"),
+      this.state,
+    );
+    this.refreshAll();
+    this.emit();
+    return true;
+  }
+
+  /**
+   * Turns the selected shape a quarter at a time about one axis.
+   *
+   * Quarters rather than free rotation because rooms are built square: a lid
+   * lies flat, a barrel stands up, a plank runs along a shelf. Free rotation
+   * is a later refinement; snapping is what makes a convincing object fast.
+   */
+  rotateSelectedShape(axis: 0 | 1 | 2, quarters: number): boolean {
+    const shape = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
+    if (this.locked || shape === undefined) {
+      this.status = this.locked
+        ? "The disguise is locked. Unlock it to keep building."
+        : "Select a shape first, in the room or in the list.";
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+    const before = cloneDisguiseState(this.state);
+    const turn = new THREE.Quaternion().setFromAxisAngle(
+      axis === 0 ? SHAPE_AXIS_X : axis === 1 ? SHAPE_AXIS_Y : SHAPE_AXIS_Z,
+      (Math.PI / 2) * quarters,
+    );
+    const current = new THREE.Quaternion(
+      shape.rotation[0],
+      shape.rotation[1],
+      shape.rotation[2],
+      shape.rotation[3],
+    );
+    current.multiply(turn).normalize();
+    shape.rotation = [current.x, current.y, current.z, current.w];
+    this.commands.pushApplied(
+      createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "turn shape"),
+      this.state,
+    );
+    this.refreshAll();
+    this.emit();
+    return true;
   }
 
   /** The shapes a disguise carries, with the names the object panel draws. */

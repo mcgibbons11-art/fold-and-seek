@@ -918,6 +918,44 @@ function BuildPanel({
         </div>
       )}
 
+      {state.shapes.length === 0 ? null : (
+        <>
+          <div style={labelStyle}>Stretch it</div>
+          {(["X", "Y", "Z"] as const).map((name, axis) => (
+            <div key={name} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <span style={{ ...labelStyle, width: 16 }}>{name}</span>
+              <button
+                type="button"
+                className={PRESS_CLASS}
+                style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
+                disabled={state.locked}
+                onClick={() => controller.scaleSelectedShape(axis as 0 | 1 | 2, 1 / 1.25)}
+              >
+                shorter
+              </button>
+              <button
+                type="button"
+                className={PRESS_CLASS}
+                style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
+                disabled={state.locked}
+                onClick={() => controller.scaleSelectedShape(axis as 0 | 1 | 2, 1.25)}
+              >
+                longer
+              </button>
+              <button
+                type="button"
+                className={PRESS_CLASS}
+                style={{ ...buttonStyle, marginBottom: 0 }}
+                disabled={state.locked}
+                onClick={() => controller.rotateSelectedShape(axis as 0 | 1 | 2, 1)}
+              >
+                turn
+              </button>
+            </div>
+          ))}
+        </>
+      )}
+
       <div style={{ display: "flex", gap: 6 }}>
         <button
           type="button"

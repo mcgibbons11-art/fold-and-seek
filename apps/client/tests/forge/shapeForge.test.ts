@@ -207,6 +207,45 @@ describe("building a disguise in the Forge", () => {
     expect(forge.disguise.shapes[0]?.position[0]).toBeCloseTo(before[0], 5);
   });
 
+  it("stretches a shape on one axis, which is what makes a barrel out of a cylinder", () => {
+    const forge = controller();
+    forge.addShape("cylinder");
+    const before = [...(forge.disguise.shapes[0]?.scale ?? [])];
+
+    expect(forge.scaleSelectedShape(1, 2)).toBe(true);
+    const after = forge.disguise.shapes[0]?.scale ?? [];
+    expect(after[1]).toBeCloseTo((before[1] ?? 0) * 2, 5);
+    // Only the axis asked for: stretching Y must not fatten X and Z, or every
+    // shape stays a scaled copy of itself and the palette never grows.
+    expect(after[0]).toBeCloseTo(before[0] ?? 0, 5);
+    expect(after[2]).toBeCloseTo(before[2] ?? 0, 5);
+
+    forge.undo();
+    expect(forge.disguise.shapes[0]?.scale[1]).toBeCloseTo(before[1] ?? 0, 5);
+  });
+
+  it("never scales a shape away to nothing", () => {
+    const forge = controller();
+    forge.addShape("cube");
+    // An invisible shape still answers clicks and still counts against the
+    // sixteen, so it is a trap rather than a deletion.
+    for (let index = 0; index < 40; index += 1) forge.scaleSelectedShape(0, 0.5);
+    expect(forge.disguise.shapes[0]?.scale[0] ?? 0).toBeGreaterThan(0);
+  });
+
+  it("turns a shape in quarters, because rooms are built square", () => {
+    const forge = controller();
+    forge.addShape("wedge");
+    const before = [...(forge.disguise.shapes[0]?.rotation ?? [])];
+    expect(forge.rotateSelectedShape(1, 1)).toBe(true);
+    expect(forge.disguise.shapes[0]?.rotation).not.toEqual(before);
+
+    // Four quarters is a full turn: back where it started.
+    for (let index = 0; index < 3; index += 1) forge.rotateSelectedShape(1, 1);
+    const full = forge.disguise.shapes[0]?.rotation ?? [];
+    expect(Math.abs(full[3] ?? 0)).toBeCloseTo(Math.abs(before[3] ?? 0), 4);
+  });
+
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {
     const forge = controller();
     for (let index = 0; index < MAX_SHAPES; index += 1) forge.addShape("cube");
