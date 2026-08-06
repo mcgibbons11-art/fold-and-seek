@@ -189,6 +189,13 @@ record("form dropper is reachable and answers", sampledForm &&
   afterSample !== beforeSample,
   (afterSample.match(/copied that shape[^.]*\.|point at something[^.]*\./i) ?? ["no answer"])[0].slice(0, 60));
 
+// The two verdicts a hider builds against.
+const verdicts = await textOf();
+record("panel reports what it reads as and how hidden the body is",
+  /reads as a/i.test(verdicts) && /body hidden/i.test(verdicts),
+  ((verdicts.match(/reads as a [^·]+· \d+%/i) ?? ["no verdict"])[0] + " | " +
+   (verdicts.match(/body hidden · \d+%/i) ?? ["none"])[0]).slice(0, 70));
+
 // Stretch and turn: the controls that make a barrel out of a cylinder.
 const stretched = await clickIf(/^longer$/i, 6_000);
 await page.waitForTimeout(700);

@@ -268,6 +268,26 @@ describe("building a disguise in the Forge", () => {
     expect(forge.disguise.shapes).toHaveLength(0);
   });
 
+  it("mirrors a shape to the other side of the body", () => {
+    const forge = controller();
+    forge.addShape("cylinder");
+    forge.nudgeSelectedShape(0.2, 0.1, 0);
+    const source = forge.disguise.shapes[0];
+    expect(source).toBeDefined();
+
+    expect(forge.mirrorSelectedShape()).toBe(true);
+    const copy = forge.disguise.shapes.at(-1);
+    // Reflected across the body's own left-right axis, not merely offset.
+    expect(copy?.position[0]).toBeCloseTo(-(source?.position[0] ?? 0), 6);
+    // And unchanged on the axes a mirror does not touch, or a barrel's second
+    // band would come back at a different height from its first.
+    expect(copy?.position[1]).toBeCloseTo(source?.position[1] ?? 0, 6);
+    expect(copy?.position[2]).toBeCloseTo(source?.position[2] ?? 0, 6);
+
+    forge.undo();
+    expect(forge.disguise.shapes).toHaveLength(1);
+  });
+
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {
     const forge = controller();
     for (let index = 0; index < MAX_SHAPES; index += 1) forge.addShape("cube");

@@ -2119,6 +2119,54 @@ export class ForgeController {
     return true;
   }
 
+  /**
+   * Copies the selected shape to the other side of the body.
+   *
+   * Almost everything a room contains is symmetric - a barrel's two bands, a
+   * chair's legs, a lamp's arms - so building the second half by hand is
+   * exactly half of a 115 second Forge spent doing what the first half
+   * already said. Mirroring is the single largest speed-up available to this
+   * tool, which is why it gets a verb of its own rather than living inside
+   * Duplicate.
+   *
+   * Across X, the body's own left-right axis, because that is the symmetry a
+   * body has and the one a player means.
+   */
+  mirrorSelectedShape(): boolean {
+    const shape = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
+    if (this.locked || shape === undefined) {
+      this.status = this.locked
+        ? "The disguise is locked. Unlock it to keep building."
+        : "Select a shape first, in the room or in the list.";
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+    const edit = duplicateShapeById(this.state.shapes, shape.id);
+    if (edit === null) {
+      this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+    const copy = edit.shapes.at(-1);
+    if (copy !== undefined) {
+      // Reflected, not offset: a mirror puts the copy where the body's other
+      // side is, and negating the two off-axis turns keeps it facing the way
+      // its twin does rather than inside out.
+      copy.position = [-shape.position[0], shape.position[1], shape.position[2]];
+      copy.rotation = [
+        shape.rotation[0],
+        -shape.rotation[1],
+        -shape.rotation[2],
+        shape.rotation[3],
+      ];
+    }
+    this.commitShapes(edit, "mirror shape");
+    this.status = "Mirrored to the other side.";
+    return true;
+  }
+
   /** Removes the selected shape, leaving its neighbour selected. */
   deleteSelectedShape(): boolean {
     if (this.locked || this.selectedShapeId === null) {

@@ -998,6 +998,15 @@ function BuildPanel({
           className={PRESS_CLASS}
           style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
           disabled={state.locked || state.shapes.length === 0}
+          onClick={() => controller.mirrorSelectedShape()}
+        >
+          Mirror
+        </button>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
+          disabled={state.locked || state.shapes.length === 0}
           onClick={() => controller.deleteSelectedShape()}
         >
           Delete · Del
