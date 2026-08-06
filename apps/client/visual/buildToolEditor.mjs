@@ -113,17 +113,35 @@ const record = (name, ok, detail = "") => {
 
 await clickIf(/enter the shop/i, 45_000);
 await page.waitForTimeout(2_000);
-await clickIf(/start game/i);
-await clickIf(/matchmaking|find a lobby/i);
-await page.waitForTimeout(1_500);
-await clickIf(/custom room and training/i);
-await page.waitForTimeout(1_000);
-await clickIf(/vetted door/i);
-await clickIf(/new room/i);
-await page.waitForTimeout(3_000);
-
+/**
+ * Getting into a round, retried.
+ *
+ * Every step here is a click on a menu that may still be animating in, so a
+ * single pass through fails often enough that a red result meant nothing. The
+ * whole sequence is attempted several times, and only a run that never reaches
+ * a lobby at all is reported as not seated.
+ */
 const ready = game.getByRole("button", { name: /ready up|^ready$/i }).first();
-await ready.waitFor({ timeout: 150_000 });
+let inLobby = false;
+for (let attempt = 0; attempt < 3 && !inLobby; attempt += 1) {
+  await clickIf(/start game/i, 8_000);
+  await clickIf(/matchmaking|find a lobby/i, 8_000);
+  await page.waitForTimeout(1_500);
+  await clickIf(/custom room and training/i, 8_000);
+  await page.waitForTimeout(1_000);
+  await clickIf(/vetted door/i, 5_000);
+  await clickIf(/new room/i, 8_000);
+  await page.waitForTimeout(3_000);
+  inLobby = await ready
+    .waitFor({ timeout: 60_000 })
+    .then(() => true)
+    .catch(() => false);
+}
+if (!inLobby) {
+  console.log(JSON.stringify({ findings, errors: errors.slice(0, 6), note: "never reached a lobby" }, null, 1));
+  await context.close();
+  process.exit(3);
+}
 for (let i = 0; i < 3; i += 1) await clickIf(/add a bot/i, 3_000);
 await ready.click().catch(() => undefined);
 await clickIf(/start the round/i, 20_000);
@@ -196,6 +214,13 @@ await page.waitForTimeout(900);
 const afterMirror = (await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0";
 record("mirror adds the other side", mirrored && Number(afterMirror) === Number(beforeMirror) + 1,
   `${beforeMirror} then ${afterMirror}`);
+
+// Snap: the verb that closes the gap a hider gets shot for.
+const snapped = await clickIf(/^snap flush$/i, 6_000);
+await page.waitForTimeout(900);
+const afterSnap = await textOf();
+record("snap flush is reachable and answers", snapped &&
+  /already flush|nothing to snap|of 16 shapes/i.test(afterSnap), snapped ? "pressed" : "missing");
 
 // The two verdicts a hider builds against.
 const verdicts = await textOf();

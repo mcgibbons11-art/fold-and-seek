@@ -2628,8 +2628,19 @@ export class ForgeController {
       createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "sample form"),
       this.state,
     );
+    // And its finish, not only its outline. A jar-shaped cylinder in the
+    // wrong colour is still a thing that does not belong on that shelf, so
+    // copying the form without the surface only does half the job.
+    const swatchId = resolveSurfaceSwatch(hit.object);
+    const sample = swatchId === null ? ({ kind: "none" } as const) : traySwatchForSurface(swatchId);
+    const worn = sample.kind === "wear" ? sample.tray : null;
+    if (worn !== null) this.sampledSwatchId = worn.id;
+
     this.audio.play("material_sample");
-    this.status = `Copied that shape: a ${profileId} its size. Stretch and turn it from here.`;
+    this.status =
+      worn === null
+        ? `Copied that shape: a ${profileId} its size. Stretch and turn it from here.`
+        : `Copied that shape and its ${worn.label.toLowerCase()} finish. Stretch and turn it from here.`;
     this.refreshAll();
     this.emit();
     return true;
