@@ -8,7 +8,7 @@ import type {
 } from "./navData";
 import { WORLD_SCALE } from "./navData";
 import { focusBoundsFor } from "./objects";
-import { SHOP_PLACEMENTS, SOLID_PROP_VOLUMES, type PropPlacement } from "./placements";
+import { SHOP_PLACEMENTS, SOLID_PROP_COLLIDERS, type PropPlacement } from "./placements";
 import {
   ANNEX_SCREEN_NORTH,
   ANNEX_SCREEN_WEST,
@@ -721,7 +721,10 @@ export const OFFICE_DOOR_BLOCKER: AABB = aabb(
  */
 export const MIMIC_NAV_BLOCKERS: readonly AABB[] = [
   ...NAV_BLOCKERS,
-  ...SOLID_PROP_VOLUMES,
+  // The tighter collider, not the aiming box: a Mimic has to be able to press
+  // right up against the object it is imitating. Planting a root inside one is
+  // refused separately, by canOccupy against the full volume.
+  ...SOLID_PROP_COLLIDERS,
   OFFICE_DOOR_BLOCKER,
 ];
 

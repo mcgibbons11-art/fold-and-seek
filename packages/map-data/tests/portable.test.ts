@@ -9,6 +9,7 @@ import {
   NAV_DATA,
   PROP_FOCUS_BOUNDS,
   SHOP_PLACEMENTS,
+  SOLID_PROP_COLLIDERS,
   SOLID_PROP_VOLUMES,
   SpatialValidatorImpl,
   buildObjectRegistry,
@@ -139,5 +140,28 @@ describe("map-data answers the questions an authority asks", () => {
     expect(inside).toEqual({ ok: false, reason: "inside_blocked_geometry" });
     // Just beside the urn on the same floor is still a hiding place.
     expect(validator.canOccupy("mimic", [x + width / 2 + 0.1, y, z]).ok).toBe(true);
+  });
+});
+
+describe("solid props stop a body without holding it at arm's length", () => {
+  it("collides on a tighter box than it refuses occupancy on", () => {
+    expect(SOLID_PROP_COLLIDERS).toHaveLength(SOLID_PROP_VOLUMES.length);
+
+    for (const [index, collider] of SOLID_PROP_COLLIDERS.entries()) {
+      const volume = SOLID_PROP_VOLUMES[index];
+      if (volume === undefined) throw new Error("every collider has a volume");
+
+      // Strictly inside horizontally, so a Mimic can press up against the
+      // object it is imitating instead of stopping a step short of it.
+      expect(collider.min.x).toBeGreaterThan(volume.min.x);
+      expect(collider.max.x).toBeLessThan(volume.max.x);
+      expect(collider.min.z).toBeGreaterThan(volume.min.z);
+      expect(collider.max.z).toBeLessThan(volume.max.z);
+
+      // And exactly as tall: a prop is as tall as it looks, and a shorter
+      // collider would let a body stand through the top of it.
+      expect(collider.min.y).toBe(volume.min.y);
+      expect(collider.max.y).toBe(volume.max.y);
+    }
   });
 });

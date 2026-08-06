@@ -1010,6 +1010,15 @@ export class RoundSession {
       this.onPhaseEntered(phase, state);
     }
 
+    // Reporting that the map is here is a CONDITION, not an edge. A client
+    // whose round mounts after the phase already turned - which is exactly
+    // what happens to a player admitted moments before the host starts -
+    // never sees the change, so it never reported, and the round sat waiting
+    // out the loading timeout while every seat showed as not ready.
+    if (phase === MatchPhase.Loading && !state.self.ready) {
+      this.actions.ready(true);
+    }
+
     const desired = this.desiredMode(state);
     if (desired === this.mode) return;
 
@@ -1055,13 +1064,6 @@ export class RoundSession {
           return livePhase === MatchPhase.Forge || livePhase === MatchPhase.Locking || INSPECTION_PHASES.has(livePhase);
         },
       );
-    }
-    if (phase === MatchPhase.Loading) {
-
-      // Loading clears the lobby's ready flags and waits for everyone to say
-      // they have the map. This client already has it, so it says so rather
-      // than asking the player to press the same button a second time.
-      this.actions.ready(true);
     }
     if (phase === MatchPhase.Locking && this.forge !== null && !state.self.disguiseLocked) {
       // Whatever is on the workbench when the shutters come down is what the

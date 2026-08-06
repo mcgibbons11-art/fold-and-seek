@@ -3676,6 +3676,41 @@ const SOLID_PROP_FAMILIES: ReadonlySet<PropFamily> = new Set([
  * hops. They exist only so `canOccupy` can refuse a root planted inside the
  * meat of a solid object.
  */
+/**
+ * How much of a prop's focus box a body is actually stopped by.
+ *
+ * The focus box is an AIMING volume: it is deliberately generous so the
+ * reticle brackets a vase from a step away. Stopping a body at that boundary
+ * puts an invisible wall well outside the object, and a Mimic cannot get near
+ * enough to the thing it is pretending to be - which is the whole game. The
+ * collider is inset so a body can nestle right up against a prop, while
+ * `SOLID_PROP_VOLUMES` keeps the full box for occupancy, so nobody ends up
+ * standing INSIDE the bottle they walked up to.
+ */
+export const SOLID_PROP_COLLIDER_SCALE = 0.6;
+
+/**
+ * Movement colliders for the solid decor, tighter than the occupancy volumes.
+ *
+ * Height is untouched: a prop is as tall as it looks, and shrinking that would
+ * let a body stand through the top of it. Only the horizontal extents pull in,
+ * because that is where a Mimic needs to get close.
+ */
+export const SOLID_PROP_COLLIDERS: readonly AABB[] = SHOP_PLACEMENTS.filter((placement) =>
+  SOLID_PROP_FAMILIES.has(placement.family),
+).map((placement) => {
+  const [x, y, z] = placement.position;
+  const [width, height, depth] = placement.focus;
+  const cos = Math.abs(Math.cos(placement.rotationY));
+  const sin = Math.abs(Math.sin(placement.rotationY));
+  const extentX = ((width * cos + depth * sin) / 2) * SOLID_PROP_COLLIDER_SCALE;
+  const extentZ = ((width * sin + depth * cos) / 2) * SOLID_PROP_COLLIDER_SCALE;
+  return {
+    min: { x: x - extentX, y, z: z - extentZ },
+    max: { x: x + extentX, y: y + height, z: z + extentZ },
+  };
+});
+
 export const SOLID_PROP_VOLUMES: readonly AABB[] = SHOP_PLACEMENTS.filter((placement) =>
   SOLID_PROP_FAMILIES.has(placement.family),
 ).map((placement) => {
