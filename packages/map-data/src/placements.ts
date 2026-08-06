@@ -3682,12 +3682,17 @@ const SOLID_PROP_FAMILIES: ReadonlySet<PropFamily> = new Set([
  * The focus box is an AIMING volume: it is deliberately generous so the
  * reticle brackets a vase from a step away. Stopping a body at that boundary
  * puts an invisible wall well outside the object, and a Mimic cannot get near
- * enough to the thing it is pretending to be - which is the whole game. The
- * collider is inset so a body can nestle right up against a prop, while
- * `SOLID_PROP_VOLUMES` keeps the full box for occupancy, so nobody ends up
- * standing INSIDE the bottle they walked up to.
+ * enough to the thing it is pretending to be - which is the whole game.
+ *
+ * So this is small on purpose. A Mimic should be able to get all but inside a
+ * prop, and what actually stops it ending up in there is `canOccupy` against
+ * the full `SOLID_PROP_VOLUMES` box, checked on both authorities. This value
+ * only keeps a body from passing visibly THROUGH the middle of something; it
+ * is not the thing enforcing the rule, so it can afford to be generous to the
+ * player. One knob: raise it if props start being walked through, lower it if
+ * they feel like force fields.
  */
-export const SOLID_PROP_COLLIDER_SCALE = 0.6;
+export const SOLID_PROP_COLLIDER_SCALE = 0.25;
 
 /**
  * Movement colliders for the solid decor, tighter than the occupancy volumes.

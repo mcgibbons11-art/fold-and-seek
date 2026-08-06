@@ -116,6 +116,49 @@ describe("launching a room into its own channel", () => {
     second.dispose();
   });
 
+  it("leaves a simultaneous second request standing when the first is accepted", async () => {
+    const host = peer(relay, "a");
+    await host.connect();
+    await host.joinSession(CHANNEL, "Ada");
+    host.createRoom("The Attic");
+    await elapse(200);
+
+    const pending: string[][] = [];
+    host.onRoomRequests((requests) => pending.push(requests.map((r) => r.id)));
+
+    // Two players ask in the same breath, which is the ordinary case when a
+    // room is advertised and several people are watching the browser.
+    const first = peer(relay, "b");
+    const second = peer(relay, "c");
+    await first.connect();
+    await second.connect();
+    await first.joinSession(CHANNEL, "Bex");
+    await second.joinSession(CHANNEL, "Cass");
+    const code = host.getRoomCode() ?? "";
+    first.requestRoom(code);
+    second.requestRoom(code);
+    await elapse(200);
+    expect(pending.at(-1)).toEqual(expect.arrayContaining(["b", "c"]));
+
+    const declined: string[] = [];
+    second.onRoomDecision((decision) => {
+      if (!decision.accepted) declined.push(decision.reason);
+    });
+
+    expect(host.acceptRoomRequest("b").ok).toBe(true);
+    await elapse(200);
+
+    // Accepting one used to decline the rest, so the second player was told
+    // no and had to notice and ask again.
+    expect(declined).toEqual([]);
+    expect(pending.at(-1)).toContain("c");
+    expect(host.acceptRoomRequest("c").ok).toBe(true);
+
+    host.dispose();
+    first.dispose();
+    second.dispose();
+  });
+
   it("carries an accepted guest in, though it never entered the room", async () => {
     const host = peer(relay, "a");
     await host.connect();

@@ -794,11 +794,13 @@ export class PortalsNetAdapter implements NetworkAdapter {
     }
 
     this.answerRoomRequest(request, true, "accepted");
-    // One accepted challenger completes this matchmaking lobby. Explicitly
-    // decline the rest so nobody waits out a dead five-minute timer.
-    for (const pending of [...this.pendingRoomRequests.values()]) {
-      this.answerRoomRequest(pending, false, "declined");
-    }
+    // Everyone else stays waiting. This used to decline the rest, from when a
+    // room was one host and one challenger and an acceptance ended the
+    // matchmaking; a party of six fills one player at a time, and turning the
+    // others away meant two people who asked together could never both get in
+    // - the second had to notice and ask again. They keep their own five
+    // minute timer, and a full room turns away what it cannot seat on the
+    // request itself.
     return { ok: true, code: request.roomCode };
   }
 
