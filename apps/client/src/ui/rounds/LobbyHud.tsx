@@ -48,6 +48,8 @@ export interface LobbyHudProps {
   readonly roomCode: string;
   readonly onReady: (ready: boolean) => void;
   readonly onStart: () => void;
+  /** Moves the settled party into the room's own channel. Portals only. */
+  readonly onLaunch?: () => void;
   readonly onCopyRoomCode?: () => void;
   /** Present in a live round; omitted by small isolated HUD fixtures. */
   readonly settings?: MatchSettings;
@@ -190,6 +192,7 @@ export function LobbyHud({
   roomCode,
   onReady,
   onStart,
+  onLaunch,
   onCopyRoomCode,
   settings,
   onSettingsChange,
@@ -347,6 +350,16 @@ export function LobbyHud({
             >
               {displayedReady ? "Ready" : "Ready up"}
             </button>
+            {state.self.isHost && onLaunch !== undefined ? (
+              <button
+                type="button"
+                className={PRESS_CLASS}
+                style={buttonStyle}
+                onClick={onLaunch}
+              >
+                Move everyone in
+              </button>
+            ) : null}
             <button
               type="button"
               className={PRESS_CLASS}

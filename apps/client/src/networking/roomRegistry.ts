@@ -414,3 +414,17 @@ export function sanitizeRoomName(name: string, fallback: string): string {
   const trimmed = name.trim().replace(/\s+/g, " ").slice(0, ROOM_NAME_MAX_LENGTH);
   return trimmed.length > 0 ? trimmed : fallback.slice(0, ROOM_NAME_MAX_LENGTH);
 }
+
+/**
+ * The channel a room moves into when its host launches it.
+ *
+ * Portals accepts letters, numbers, colons, underscores and hyphens, and the
+ * name must start with a letter or number, so the prefix carries that
+ * requirement rather than the room code, which players read aloud and which
+ * may well begin with a digit. Returns null for a code that cannot make a
+ * legal name, so a room is never sent somewhere the relay will refuse.
+ */
+export function roomChannelName(code: string): string | null {
+  const channel = `room:${code}`;
+  return /^[A-Za-z0-9][A-Za-z0-9:_-]{0,63}$/.test(channel) ? channel : null;
+}

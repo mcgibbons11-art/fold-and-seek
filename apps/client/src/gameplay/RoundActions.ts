@@ -48,6 +48,25 @@ export class RoundActions {
     return this.send("startMatch", { type: "start_match" });
   }
 
+  /**
+   * Moves the settled room into a channel of its own. Host only.
+   *
+   * Players gather in the shared pre-match room and nobody moves on being
+   * admitted, so the host is the one who decides the room is complete. Only
+   * the Portals transport has channels to move between; everywhere else the
+   * party is already alone together and there is nothing to do.
+   */
+  launchRoom(): ActionOutcome {
+    const state = this.director.getState();
+    if (!state.self.isHost) return refused("not_host");
+    if (state.phase !== MatchPhase.Lobby) return refused("wrong_phase");
+    const adapter = this.adapter as { launchRoom?: () => { ok: boolean } };
+    // Only the Portals transport has channels to move between. Everywhere
+    // else the party is already alone together.
+    if (adapter.launchRoom === undefined) return refused("unsupported");
+    return adapter.launchRoom().ok ? SENT : refused("not_host");
+  }
+
   /** Lobby-only room options. The authority repeats both checks. */
   setSettings(settings: MatchSettingsPatch): ActionOutcome {
     const state = this.director.getState();

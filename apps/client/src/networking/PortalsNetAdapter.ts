@@ -98,6 +98,7 @@ import {
 import {
   DEFAULT_ROOM_SLOT,
   ROOM_HEARTBEAT_MS,
+  roomChannelName,
   ROOM_SLOTS,
   RoomAdSchema,
   RoomDirectory,
@@ -368,6 +369,8 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private knownSeatIds: ReadonlySet<string> = new Set();
   /** The name to play under, kept from the join so `enterRoom` can announce it. */
   private displayName = "";
+  /** The channel this client is moving to, so a repeated launch is ignored. */
+  private launchingTo: string | null = null;
   private readonly directory = new RoomDirectory();
   private readonly directorySignal = new Signal<readonly RoomListing[]>();
   private readonly roomRequestsSignal = new Signal<readonly PendingRoomJoinRequest[]>();
@@ -665,6 +668,54 @@ export class PortalsNetAdapter implements NetworkAdapter {
 
   onRoomDecision(listener: (decision: RoomJoinDecision) => void): Unsubscribe {
     return this.roomDecisionSignal.subscribe(listener);
+  }
+
+  /**
+   * Moves the whole party out of the pre-match room and into a channel of the
+   * room's own. Host only.
+   *
+   * Everyone gathers in the shared channel first and nobody moves on being
+   * admitted, because a room that scattered its players the moment each was
+   * accepted would never let a host see who turned up. The host decides when
+   * the room is settled and presses the button; this is that press.
+   *
+   * The destination matters beyond tidiness: Portals runs one server script
+   * per channel, so a room with a channel of its own gets an authoritative
+   * referee for that match alone, and the session's whole state-key budget
+   * with it.
+   */
+  launchRoom(): { ok: true; channel: string } | { ok: false; reason: string } {
+    if (this.roomCode === null) return { ok: false, reason: "not_in_room" };
+    if (!this.isAuthority()) return { ok: false, reason: "not_host" };
+    const channel = roomChannelName(this.roomCode);
+    if (channel === null) return { ok: false, reason: "bad_room_code" };
+
+    // Told first, then followed. The sender never receives its own broadcast,
+    // so leaving before announcing would strand everyone still in the lobby.
+    this.rawSend({ v: PORTALS_PROTOCOL_VERSION, t: "launch", r: this.roomCode, channel });
+    void this.followLaunch(channel);
+    return { ok: true, channel };
+  }
+
+  /**
+   * Follows the host into the room's channel.
+   *
+   * The SDK holds one session at a time, so this is a leave and a fresh join
+   * rather than anything simultaneous, and it is guarded because a launch is
+   * broadcast and may arrive more than once.
+   */
+  private async followLaunch(channel: string): Promise<void> {
+    if (this.launchingTo !== null) return;
+    this.launchingTo = channel;
+    const name = this.displayName;
+    try {
+      await this.disconnect();
+      await this.join(channel, name);
+    } catch (error) {
+      console.warn("[portals] could not follow the room to its own channel", error);
+    } finally {
+      this.launchingTo = null;
+    }
   }
 
   /** Asks a room host to admit this browser; no seat is taken yet. */
@@ -1392,6 +1443,17 @@ export class PortalsNetAdapter implements NetworkAdapter {
       this.directory.observe(slot.adKey, parsed.data, this.clock());
       this.checkAdOwnership();
       this.emitDirectory();
+      return;
+    }
+
+    if (envelope.t === "launch") {
+      // Only from the room this client is actually sitting in, and only from
+      // its host: a launch moves everyone off this channel, so it is the one
+      // message a stranger must never be able to send.
+      if (envelope.r !== this.roomCode) return;
+      const senderSeat = this.connectionSeats.get(fromId);
+      if (senderSeat === undefined || senderSeat !== this.authoritySeatId) return;
+      void this.followLaunch(envelope.channel);
       return;
     }
 

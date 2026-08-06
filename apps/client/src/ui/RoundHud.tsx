@@ -119,6 +119,10 @@ export function RoundHud({
 
   const onReady = useCallback((ready: boolean) => session.actions.ready(ready), [session]);
   const onStart = useCallback(() => session.actions.startMatch(), [session]);
+  // Offered only where there is somewhere to move to: the Portals transport
+  // gathers a room in a shared channel and gives the match a channel of its
+  // own, and nothing else has channels at all.
+  const onLaunch = useCallback(() => session.actions.launchRoom(), [session]);
   const onSettings = useCallback(
     (settings: MatchSettingsPatch) => session.actions.setSettings(settings),
     [session],
@@ -238,6 +242,7 @@ export function RoundHud({
           ),
         onReady,
         onStart,
+        onLaunch,
         roomCode: session.roomCode,
         onCopyRoomCode,
         settings: session.matchSettings,
@@ -276,6 +281,7 @@ interface PhaseHandlers {
   readonly forgeTools: ReactElement | null;
   readonly onReady: (ready: boolean) => void;
   readonly onStart: () => void;
+  readonly onLaunch: () => void;
   readonly roomCode: string;
   readonly onCopyRoomCode: () => void;
   readonly settings: MatchSettings;
@@ -297,6 +303,7 @@ function phaseHud(state: RoundViewState, handlers: PhaseHandlers): ReactElement 
           onCopyRoomCode={handlers.roomCode === "" ? undefined : handlers.onCopyRoomCode}
           onReady={handlers.onReady}
           onStart={handlers.onStart}
+          onLaunch={handlers.onLaunch}
           settings={handlers.settings}
           onSettingsChange={handlers.onSettings}
           onAddBot={handlers.onAddBot}

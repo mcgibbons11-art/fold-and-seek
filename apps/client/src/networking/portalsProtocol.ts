@@ -364,6 +364,27 @@ export const NetEnvelopeSchema = z.discriminatedUnion("t", [
     r: roomCode,
     to: connectionId,
   }),
+  /**
+   * The host moving the whole party out of the shared channel.
+   *
+   * Everyone gathers in the pre-match room first and nobody moves on being
+   * admitted; the host decides when the room is settled and presses the
+   * button, and this is that press. The destination is a channel of the
+   * room's own, where Portals runs a server script for it alone - one
+   * session, one authority, one match.
+   */
+  z.object({
+    v: version,
+    t: z.literal("launch"),
+    r: roomCode,
+    channel: z
+      .string()
+      .min(1)
+      .max(64)
+      // Portals' own rule for a channel name, checked here so a room cannot be
+      // sent somewhere the relay will refuse to open.
+      .regex(/^[A-Za-z0-9][A-Za-z0-9:_-]*$/),
+  }),
   /** The host's addressed answer; `to` is a relay connection id pre-seat. */
   z.object({
     v: version,
