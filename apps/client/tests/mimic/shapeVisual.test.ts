@@ -50,6 +50,28 @@ describe("shapes on a disguise", () => {
     expect(Number.isFinite(bare.min.x)).toBe(true);
   });
 
+  it("counts a shape inside the body's measured bounds, so shooting one hits its owner", () => {
+    // The Inspector shoots what the disguise occupies, and that box is taken
+    // from the visual root. A shape that stood outside it would be a piece of
+    // the player you could put a warrant through with no effect - or worse,
+    // a decoy that eats the shot.
+    const visual = new MimicVisual();
+    const state = createDefaultDisguiseState();
+    const far = createShape("shape_far", "cube", "pelvis", "body");
+    far.position = [0.4, 0, 0];
+    state.shapes.push(far);
+    const pose = createPoseState();
+    applyDisguiseStateToPose(state, pose);
+    visual.applyShapes(state.shapes);
+    visual.applyPose(pose);
+
+    const withShape = new THREE.Box3().setFromObject(visual.root);
+    const shapeMesh = visual.shapeMeshes[0];
+    expect(shapeMesh?.parent).not.toBeNull();
+    const shapeBox = new THREE.Box3().setFromObject(shapeMesh as THREE.Object3D);
+    expect(withShape.containsBox(shapeBox)).toBe(true);
+  });
+
   it("detaches a shape again when the disguise drops it", () => {
     const visual = posed(2);
     visual.applyShapes([]);

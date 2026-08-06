@@ -2040,7 +2040,15 @@ export class ForgeController {
    * at rather than at an origin they then have to hunt for.
    */
   addShape(profileId: ShapeProfileId, bone?: BoneName): boolean {
-    if (this.locked) return false;
+    if (this.locked) {
+      // Said out loud. A press that does nothing and explains nothing is how
+      // this tool looked broken in play: the panel drew, the button took the
+      // click, and the disguise stayed empty with no reason given.
+      this.status = "The disguise is locked. Unlock it to keep building.";
+      this.audio.play("ui_deny");
+      this.refreshAll();
+      return false;
+    }
     const edit = addShapeToList(this.state.shapes, profileId, bone ?? this.shapeBone(), "body");
     if (edit === null) {
       this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
@@ -2057,7 +2065,14 @@ export class ForgeController {
    * barrel bands, a pot's rim, a row of legs - so it is worth a key of its own.
    */
   duplicateSelectedShape(): boolean {
-    if (this.locked || this.selectedShapeId === null) return false;
+    if (this.locked || this.selectedShapeId === null) {
+      this.status = this.locked
+        ? "The disguise is locked. Unlock it to keep building."
+        : "Select a shape first, in the room or in the list.";
+      this.audio.play("ui_deny");
+      this.refreshAll();
+      return false;
+    }
     const edit = duplicateShapeById(this.state.shapes, this.selectedShapeId);
     if (edit === null) {
       this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
@@ -2071,7 +2086,14 @@ export class ForgeController {
 
   /** Removes the selected shape, leaving its neighbour selected. */
   deleteSelectedShape(): boolean {
-    if (this.locked || this.selectedShapeId === null) return false;
+    if (this.locked || this.selectedShapeId === null) {
+      this.status = this.locked
+        ? "The disguise is locked. Unlock it to keep building."
+        : "Select a shape first, in the room or in the list.";
+      this.audio.play("ui_deny");
+      this.refreshAll();
+      return false;
+    }
     const edit = removeShapeById(this.state.shapes, this.selectedShapeId);
     if (edit === null) return false;
     this.commitShapes(edit, "delete shape");
@@ -4989,7 +5011,7 @@ function forgeKey(event: KeyboardEvent): string {
 const TOOL_HINTS: Readonly<Record<ForgeToolMode, string>> = {
   pose: "Drag a handle to pose. Drag open space to look around.",
   shape: "Click a body part, then stretch it with the sliders.",
-  panels: "Click a brass stud to fold a panel out, then shape it.",
+  panels: "Add cubes and cylinders, then drag the arrows to build the object you want to be.",
   material: "Point at the room and press F to sample, then click a part to paint it.",
   // How to paint is on the paint panel, once. This strip carries the thing the
   // panel does not: that the camera and the brush share the left button, so a

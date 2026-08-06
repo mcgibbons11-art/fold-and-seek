@@ -220,7 +220,7 @@ const TOOL_KEYS: Readonly<Record<ForgeToolMode, string>> = {
 const TOOL_LABELS: Readonly<Record<ForgeToolMode, string>> = {
   pose: "Pose",
   shape: "Shape",
-  panels: "Panels",
+  panels: "Build",
   material: "Material",
   paint: "Paint",
 };

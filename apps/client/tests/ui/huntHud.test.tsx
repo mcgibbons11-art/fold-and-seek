@@ -572,7 +572,7 @@ describe("hunt HUD grammar", () => {
     const dock = container.querySelector('[data-hider-forge-dock="persistent"]');
     const chips = [...(dock?.querySelectorAll("button") ?? [])];
     expect(chips.length).toBeGreaterThan(0);
-    for (const label of ["Pose", "Shape", "Panels", "Material", "Paint", "Mirror", "Taunt", "Missed spots"]) {
+    for (const label of ["Pose", "Shape", "Build", "Material", "Paint", "Mirror", "Taunt", "Missed spots"]) {
       const matches = chips.filter((button) => button.textContent?.includes(label)).length;
       expect(matches, `${label} in the dock`).toBe(1);
     }
