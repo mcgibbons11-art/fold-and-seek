@@ -13,6 +13,10 @@ import {
 import {
   baseSeatIdOf,
   DEFAULT_MATCH_SETTINGS,
+  PrivateSimEventSchema,
+  SERVER_HELLO_KEY,
+  SERVER_PROTOCOL_VERSION,
+  SimEventSchema,
   DERIVED_SEAT_SEPARATOR,
   derivedSeatId,
   encodePaintLayer,
@@ -28,6 +32,15 @@ import {
   encodePaintSyncUpdate,
   type PaintRevisionState,
 } from "../paint";
+import {
+  isRefereeKey,
+  readRefereeHello,
+  readRefereeMessage,
+  readRefereeState,
+  REFEREE_SILENCE_MS,
+  type RefereeMessage,
+} from "./refereeLink";
+import { parsePrivateState, parsePublicState } from "./stateSchemas";
 import {
   BotSeats,
   isBotSeat,
@@ -302,6 +315,17 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private selfConnectionId: string | null = null;
   /** Stable identity the simulation knows this client by. */
   private selfSeatId: string | null = null;
+  /**
+   * The authoritative server script, when this session has one.
+   *
+   * Non-null means no client is authoritative: commands go to the referee and
+   * its verdicts come back. Null is not a failure - a Portals session runs
+   * perfectly well without a server, and the game falls back to electing a
+   * host among the players, which is what the platform asks games to do.
+   */
+  private referee: { readonly epoch: number; heardAtMs: number } | null = null;
+  /** The seat the referee says this connection holds, once it has said so. */
+  private refereeSeatId: string | null = null;
   private authoritySeatId: string | null = null;
   /** Monotonic generation used to fence traffic from a superseded host. */
   private authorityTerm = 0;
@@ -1058,6 +1082,20 @@ export class PortalsNetAdapter implements NetworkAdapter {
       console.warn("[portals] command while not connected, ignoring", command.type);
       return;
     }
+    // The referee holds the only simulation while it is running, so a command
+    // goes to it rather than to any peer. The eye rides along with an
+    // accusation so the shot is judged from where it was actually taken.
+    if (this.referee !== null) {
+      this.rawSend({
+        v: SERVER_PROTOCOL_VERSION,
+        t: "cmd",
+        cmd: command,
+        ...(command.type === "accuse" && this.eyeReported && this.pendingEye !== null
+          ? { eye: this.pendingEye }
+          : {}),
+      } as unknown as NetEnvelope);
+      return;
+    }
     if (this.isAuthority()) {
       this.applyCommandFrom(this.selfSeatId, command);
       return;
@@ -1288,6 +1326,17 @@ export class PortalsNetAdapter implements NetworkAdapter {
     const bytes = jsonByteLength(data);
     if (bytes > MAX_PAYLOAD_BYTES) {
       console.warn(`[portals] dropped ${bytes} byte message from ${fromId}`);
+      return;
+    }
+
+    // A verdict from the referee, which speaks a different wire to the peers:
+    // the authority is not a seat, so a message claiming to be it is only
+    // believed when its sender is nobody in the roster.
+    const referee = readRefereeMessage(data, fromId, (id) =>
+      this.players.some((player) => player.id === id),
+    );
+    if (referee !== null) {
+      this.applyReferee(referee);
       return;
     }
 
@@ -1884,6 +1933,13 @@ export class PortalsNetAdapter implements NetworkAdapter {
   }
 
   private readonly handleState = (key: string, value: unknown): void => {
+    // Keys the referee owns are read before anything else and never treated as
+    // room traffic: a client cannot write them, so their arrival is the one
+    // trustworthy signal that an authoritative server is running this session.
+    if (isRefereeKey(key)) {
+      this.observeReferee(key, value);
+      return;
+    }
     // The registry is read whatever room this client is in, and whether or not
     // it is in one at all: it is how a browser learns that a room opened, filled
     // up, started its round or went quiet.
@@ -1987,7 +2043,134 @@ export class PortalsNetAdapter implements NetworkAdapter {
     return [...seats];
   }
 
+  /**
+   * Notices the referee, from a key only the referee can write.
+   *
+   * Presence is what gates the cutover, so it is taken from the protected key
+   * range rather than inferred from traffic: a session either has an
+   * authoritative server or it does not.
+   */
+  private observeReferee(key: string, value: unknown): void {
+    if (key === SERVER_HELLO_KEY) {
+      const hello = readRefereeHello(value);
+      if (hello === null) {
+        // Either the key was cleared or it announces a protocol this build
+        // cannot read. Both mean the same thing: play without a referee.
+        if (this.referee !== null) this.loseReferee();
+        return;
+      }
+      const arrived = this.referee === null || this.referee.epoch !== hello.epoch;
+      this.referee = { epoch: hello.epoch, heardAtMs: this.clock() };
+      if (arrived) {
+        // A referee that just appeared, or restarted, holds the only true
+        // state. Stand down from any local authority and ask for it.
+        this.resolveAuthority();
+        this.requestRefereeSync();
+      }
+      return;
+    }
+
+    if (this.referee !== null) this.referee.heardAtMs = this.clock();
+    const state = readRefereeState(this.net?.getState() ?? {});
+    if (state === null) return;
+    const publicState = parsePublicState(state);
+    if (publicState === null) {
+      console.warn("[portals] the referee published a state this build cannot read");
+      return;
+    }
+    this.setSync(publicState, this.sync.privateState);
+  }
+
+  /** Asks the referee for the room's state and this connection's own slice. */
+  private requestRefereeSync(): void {
+    this.rawSend({ v: SERVER_PROTOCOL_VERSION, t: "resync" } as unknown as NetEnvelope);
+  }
+
+  /**
+   * Gives up on a referee that has gone quiet.
+   *
+   * A crashed or over-budget server script does not end the session and
+   * disconnects nobody, so silence is a state the game has to survive rather
+   * than an error. Dropping the referee re-enters host election, and the
+   * round carries on among the players.
+   */
+  private loseReferee(): void {
+    if (this.referee === null) return;
+    this.referee = null;
+    this.refereeSeatId = null;
+    console.warn("[portals] the referee went quiet; falling back to an elected host");
+    this.resolveAuthority();
+  }
+
+  /**
+   * Gives up on a referee that has stopped publishing.
+   *
+   * The server script publishes state on its own clock, so silence past a few
+   * of its beats means it has crashed or run out of budget. Portals keeps the
+   * session alive either way, so the game must notice and carry on rather than
+   * wait forever on an authority that is not coming back.
+   */
+  private checkRefereeSilence(): void {
+    if (this.referee === null) return;
+    if (this.clock() - this.referee.heardAtMs < REFEREE_SILENCE_MS) return;
+    this.loseReferee();
+  }
+
+  /** True while an authoritative server is running this session. */
+  hasReferee(): boolean {
+    return this.referee !== null;
+  }
+
+  private applyReferee(message: RefereeMessage): void {
+    if (this.referee !== null) this.referee.heardAtMs = this.clock();
+
+    if (message.kind === "sync") {
+      // Addressed by connection, because it is what tells this client which
+      // seat it holds; everything after it is addressed by that seat.
+      if (this.selfConnectionId !== null && message.to !== this.selfConnectionId) return;
+      this.refereeSeatId = message.seat;
+      this.selfSeatId = message.seat;
+      this.setSync(
+        parsePublicState(message.publicState) ?? this.sync.publicState,
+        parsePrivateState(message.privateState),
+      );
+      this.emitRoster();
+      return;
+    }
+
+    if (message.kind === "rejected") {
+      if (message.to !== this.refereeSeatId) return;
+      this.rejectionSignal.emit({ type: "command", reason: message.reason });
+      return;
+    }
+
+    for (const raw of message.public) {
+      const parsed = SimEventSchema.safeParse(raw);
+      if (parsed.success) this.eventSignal.emit(parsed.data as SimEvent);
+    }
+    for (const [seat, events] of message.private) {
+      // Private batches are broadcast with the seat they belong to, because
+      // the relay has no addressed send. Another seat's batch is not this
+      // client's to read.
+      if (seat !== this.refereeSeatId) continue;
+      for (const raw of events) {
+        const parsed = PrivateSimEventSchema.safeParse(raw);
+        if (parsed.success) this.privateSignal.emit(parsed.data as PrivateSimEvent);
+      }
+    }
+  }
+
   private resolveAuthority(): void {
+    // A referee outranks every election: while an authoritative server is
+    // running this session, no client holds the simulation.
+    if (this.referee !== null) {
+      if (this.authoritySeatId !== null || this.sim !== null) {
+        this.authoritySeatId = null;
+        this.releaseAuthority();
+        this.setStatus(this.connection.status);
+      }
+      return;
+    }
     if (this.roomCode === null) {
       // Nobody is authoritative over a client that is only browsing.
       if (this.authoritySeatId === null) return;
@@ -3094,6 +3277,7 @@ export class PortalsNetAdapter implements NetworkAdapter {
   private startTimers(): void {
     if (this.flushTimer === null) {
       this.flushTimer = setInterval(() => {
+        this.checkRefereeSilence();
         if (this.isAuthority()) this.tick();
         else this.flush();
       }, FLUSH_INTERVAL_MS);
