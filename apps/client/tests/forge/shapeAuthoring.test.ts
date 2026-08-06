@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   addShape,
+  fitScore,
   duplicateShapeById,
   nextShapeId,
   removeShapeById,
@@ -77,5 +78,32 @@ describe("building a disguise out of primitives", () => {
     const labels = [...shapeLabels(shapes).values()];
     // "Cylinder 1" says what it is and which one; "Shape 3" says neither.
     expect(labels).toEqual(["Cube 1", "Cube 2", "Cylinder 1"]);
+  });
+});
+
+describe("how much of the body a disguise actually hides", () => {
+  const box = { min: { x: -1, y: -1, z: -1 }, max: { x: 1, y: 1, z: 1 } };
+  const inside = { x: 0, y: 0, z: 0 };
+  const outside = { x: 5, y: 0, z: 0 };
+
+  it("scores nothing when nothing has been built", () => {
+    // A body with no shapes around it is a creature standing in a room, which
+    // is the worst disguise there is rather than a neutral one.
+    expect(fitScore([inside], [])).toBe(0);
+  });
+
+  it("scores every part that is inside something built", () => {
+    expect(fitScore([inside, inside], [box])).toBe(1);
+  });
+
+  it("counts what is still sticking out", () => {
+    // The number a player acts on: half of them is showing.
+    expect(fitScore([inside, outside], [box])).toBeCloseTo(0.5, 6);
+  });
+
+  it("counts a part once however many shapes cover it", () => {
+    // Stacking shapes on one limb must not read as hiding the whole body,
+    // or the cheapest way to a perfect score is a pile on one arm.
+    expect(fitScore([inside, outside], [box, box, box])).toBeCloseTo(0.5, 6);
   });
 });

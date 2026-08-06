@@ -93,3 +93,52 @@ export function removeShapeById(
   const neighbour = next[Math.min(index, next.length - 1)];
   return { shapes: next, selectedId: neighbour?.id ?? "" };
 }
+
+/** A point in world space, which is all the fit test needs of a body part. */
+export interface FitPoint {
+  readonly x: number;
+  readonly y: number;
+  readonly z: number;
+}
+
+/** A shape's world box, as the renderer places it. */
+export interface FitBox {
+  readonly min: FitPoint;
+  readonly max: FitPoint;
+}
+
+/**
+ * How much of the body is hidden inside what the player built.
+ *
+ * This is the rule that keeps folding central. A disguise is not the shapes
+ * alone: it is the shapes WITH the body tucked inside them, and a creature
+ * standing beside a beautifully built barrel is still a creature. Scoring the
+ * tuck makes the fold worth doing rather than decorative, and gives a player
+ * something to chase while they work.
+ *
+ * Deliberately a fraction of body parts rather than a volume overlap. It is
+ * cheap enough to run every frame, and it answers the question a player is
+ * actually asking - "is any of me still sticking out?" - in the units they
+ * can act on, which is limbs.
+ */
+export function fitScore(parts: readonly FitPoint[], boxes: readonly FitBox[]): number {
+  if (parts.length === 0) return 0;
+  if (boxes.length === 0) return 0;
+  let inside = 0;
+  for (const part of parts) {
+    for (const box of boxes) {
+      if (
+        part.x >= box.min.x &&
+        part.x <= box.max.x &&
+        part.y >= box.min.y &&
+        part.y <= box.max.y &&
+        part.z >= box.min.z &&
+        part.z <= box.max.z
+      ) {
+        inside += 1;
+        break;
+      }
+    }
+  }
+  return inside / parts.length;
+}

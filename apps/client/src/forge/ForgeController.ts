@@ -44,6 +44,7 @@ import type { BoneName } from "../mimic/rig";
 import {
   addShape as addShapeToList,
   duplicateShapeById,
+  fitScore,
   removeShapeById,
   shapeLabels,
   type ShapeEdit,
@@ -274,6 +275,14 @@ export interface ForgeHudState {
    * is the ordinary case once a disguise reads as an object at all.
    */
   readonly shapes: readonly ForgeShapeRow[];
+  /**
+   * How much of the body the built shapes hide, 0 to 1.
+   *
+   * Shown while building because a disguise is the shapes WITH their owner
+   * tucked inside: a creature standing beside a beautiful barrel is still a
+   * creature, and this is what tells a player which one they have made.
+   */
+  readonly fit: number;
   readonly sampledSwatchId: string | null;
   /** True while F has armed the material dropper and a click will sample. */
   readonly materialDropperArmed: boolean;
@@ -1708,6 +1717,7 @@ export class ForgeController {
               panel: panelState === null ? null : clonePanelState(panelState),
             },
       shapes: this.shapeList(),
+      fit: this.fitScore(),
       sampledSwatchId: this.sampledSwatchId,
       materialDropperArmed: this.materialDropperArmed,
       eyeSwatchId: assignmentFor(this.state.materials, EYE_SLOT_ID),
@@ -2219,6 +2229,27 @@ export class ForgeController {
     this.refreshAll();
     this.emit();
     return true;
+  }
+
+  /**
+   * How much of the body the built silhouette actually hides, 0 to 1.
+   *
+   * Measured from where the renderer puts things rather than from the stored
+   * transforms, so it answers what the room can see rather than what the data
+   * intends.
+   */
+  fitScore(): number {
+    if (this.state.shapes.length === 0) return 0;
+    const boxes: { min: THREE.Vector3; max: THREE.Vector3 }[] = [];
+    for (const mesh of this.mimic.shapeMeshes) {
+      if (mesh.parent === null) continue;
+      const box = new THREE.Box3().setFromObject(mesh);
+      boxes.push({ min: box.min.clone(), max: box.max.clone() });
+    }
+    const parts = SEGMENT_BONES.map((bone) => this.pose.worldPositions[boneIndex(bone)]).filter(
+      (point): point is NonNullable<typeof point> => point !== undefined,
+    );
+    return fitScore(parts, boxes);
   }
 
   /** The shapes a disguise carries, with the names the object panel draws. */

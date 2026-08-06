@@ -929,6 +929,16 @@ function BuildPanel({
 
       {state.shapes.length === 0 ? null : (
         <>
+          <div style={labelStyle}>
+            {`Body hidden · ${String(Math.round(state.fit * 100))}%`}
+          </div>
+          <div style={{ ...labelStyle, opacity: 0.6, textTransform: "none" }}>
+            {state.fit >= 0.85
+              ? "Tucked away. Nothing of you reads as a creature from here."
+              : state.fit >= 0.5
+                ? "Half of you is still showing. Fold tighter, or build wider."
+                : "You are standing beside your disguise rather than inside it."}
+          </div>
           <div style={labelStyle}>Stretch it</div>
           <div style={{ ...labelStyle, opacity: 0.6, textTransform: "none" }}>
             Drag an arrow to move · hold Shift to turn freely

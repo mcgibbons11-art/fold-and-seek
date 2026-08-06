@@ -131,11 +131,23 @@ await page.waitForTimeout(20_000);
 await clickIf(/^skip$/i, 8_000);
 await page.waitForTimeout(12_000);
 
-// Into the build tool.
-const opened = await clickIf(/expand forge tools/i, 5_000);
-record("forge tools reachable", true, opened ? "expanded" : "already open");
-await page.keyboard.press("3");
-await page.waitForTimeout(1_200);
+// Into the build tool. Waiting for the tool rail to actually exist before
+// judging anything: a run that never seated reported every check as failed,
+// which made the audit's red meaningless. Now it says so instead.
+await clickIf(/expand forge tools/i, 5_000);
+let reachedForge = false;
+for (let attempt = 0; attempt < 12 && !reachedForge; attempt += 1) {
+  await page.keyboard.press("3");
+  await page.waitForTimeout(2_500);
+  reachedForge = /add a shape/i.test(await textOf());
+}
+record("forge tools reachable", reachedForge, reachedForge ? "build tool open" : "never seated");
+if (!reachedForge) {
+  console.log(JSON.stringify({ findings, errors: errors.slice(0, 6), note: "did not reach a round" }, null, 1));
+  await context.close();
+  process.exit(3);
+}
+await page.waitForTimeout(600);
 
 const before = await textOf();
 record("build panel shows its adders", /add a shape/i.test(before), "");
