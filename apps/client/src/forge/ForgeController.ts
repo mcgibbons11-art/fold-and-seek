@@ -2301,6 +2301,15 @@ export class ForgeController {
     this.commitEdits();
     const previousArrangement = STARTER_ARRANGEMENT_IDS[this.arrangementIndex];
     if (previousArrangement !== undefined) this.arrangementUndoIds.push(previousArrangement);
+    // The wall is found from the body as it currently stands, BEFORE the
+    // arrangement's authored pose replaces it. An arrangement keeps the root
+    // position but resets the rotation, which swings the pelvis somewhere else
+    // entirely - and once a body is already mounted flush against plaster,
+    // that swing puts the pelvis through it. Searching from there finds the
+    // wall's far face and mounts the body outside the room, where it has no
+    // floor and falls. Sampling first makes re-applying an arrangement
+    // idempotent: the same wall, from the same standing position, every time.
+    const wall = ARRANGEMENT_CONTACTS[id]?.approach === "wall" ? this.findNearestWall() : null;
     const next = createStarterArrangement(id);
     next.root.position = [...this.state.root.position];
     next.materials = this.state.materials.map((entry) => ({ ...entry }));
@@ -2316,7 +2325,7 @@ export class ForgeController {
 
     // Arrangements that describe a relationship to a surface only mean anything
     // once they are actually against one (§7.15, §24.7).
-    this.autoAnchorArrangement(id);
+    this.autoAnchorArrangement(id, wall);
     this.solveAndRefresh();
     this.frameMimic();
     this.emit();
@@ -2633,7 +2642,11 @@ export class ForgeController {
    * The move only has to land inside probe range: the anchor pass in
    * `solveAndRefresh` closes the last centimetres itself.
    */
-  private autoAnchorArrangement(id: StarterArrangementId): void {
+  private autoAnchorArrangement(
+    id: StarterArrangementId,
+    /** The wall sampled before the arrangement moved the body; see the caller. */
+    wall: { point: THREE.Vector3; normal: THREE.Vector3 } | null = null,
+  ): void {
     const plan = ARRANGEMENT_CONTACTS[id];
     if (plan === undefined) {
       return;
@@ -2641,7 +2654,6 @@ export class ForgeController {
 
     let surfaceNormal: THREE.Vector3 | null = null;
     if (plan.approach === "wall") {
-      const wall = this.findNearestWall();
       if (wall === null) {
         this.status = `${starterArrangementLabel(id)} needs a wall. Drag the Mimic closer to one.`;
         return;
@@ -2758,13 +2770,23 @@ export class ForgeController {
         continue;
       }
       bestDistance = hit.distance;
-      best = {
-        point: hit.point.clone(),
-        normal: normal
-          .clone()
-          .applyQuaternion(hit.object.getWorldQuaternion(this.scratchQuaternion))
-          .normalize(),
-      };
+      const facing = normal
+        .clone()
+        .applyQuaternion(hit.object.getWorldQuaternion(this.scratchQuaternion))
+        .normalize();
+      // Three reports the face's own normal, and a wall struck from inside the
+      // room reports the one pointing OUT of it: nothing flips it for a
+      // backface hit. Every caller then reads the normal as "which way is the
+      // room", and mounting a body at `point + normal * standoff` puts it
+      // through the plaster, where it has no floor and falls. Pressing the
+      // arrangement again searches from out there and marches it further.
+      //
+      // So the normal is turned to face whoever asked for the wall. That is
+      // what the callers have always assumed it meant.
+      if (facing.dot(this.scratchVector) - facing.dot(hit.point) < 0) {
+        facing.negate();
+      }
+      best = { point: hit.point.clone(), normal: facing };
     }
     this.raycaster.near = 0;
     this.raycaster.far = Infinity;
