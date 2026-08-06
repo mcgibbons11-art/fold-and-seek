@@ -199,6 +199,31 @@ Facts this harness settled:
   gitignored, and the Vite plugin is `apply: "serve"` so a build cannot carry
   a token however the environment is set.
 
+### Matchmaking under a referee: one session is one match
+
+The two-room cap in `roomRegistry.ts` exists because client-published pose and
+paint books spend about forty of a session's sixty-four state keys. Routing
+both through the referee frees that budget outright - a refereed client writes
+neither range - so the obvious next move is to raise the cap.
+
+It cannot be raised. The authority runs ONE `MatchSimulation` per session, and
+Portals runs one server per channel, so a refereed session holds exactly one
+match. Logical rooms and the referee are mutually exclusive designs: several
+matches sharing one channel would share one simulation, which is incoherent.
+
+Real matchmaking therefore means a channel per room, and that has a blocker of
+its own, unchanged by any of this work: the SDK holds ONE session at a time, so
+a client can switch channels but cannot sit in a room's channel and a directory
+channel at once. Once a party moves into `room:<code>` nobody is left in the
+directory to advertise it, and an idle channel terminates after about five
+minutes and loses its state.
+
+The design that works, not yet built: browsing and the lobby stay in the shared
+channel, which is cheap because no poses or paint exist yet, and the whole
+party switches to `room:<code>` at match start, where the round gets its own
+server and its own full key budget. Join-by-code needs no directory at all and
+would work today.
+
 ### Still unverified (do not treat as settled)
 
 - Whether a full six-player round stays inside the ~50 ms CPU budget per
