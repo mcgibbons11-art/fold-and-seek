@@ -14,6 +14,7 @@ import {
   INSPECTOR_RADIUS_M,
   INSPECTOR_STEP_HEIGHT_M,
   MIMIC_NAV_BLOCKERS,
+  readsAs,
   SHELL_BLOCKERS,
   SOLID_PROP_COLLIDERS,
   SOLID_PROP_VOLUMES,
@@ -210,5 +211,28 @@ describe("a body that ends up inside something", () => {
   it("blocks on a different object even while escaping one", () => {
     const other = { min: { x: 2, y: 0, z: -1 }, max: { x: 4, y: 2, z: 1 } };
     expect(blocksCapsule([box, other], 3, 0, 0, ...capsule, inside)).toBe(true);
+  });
+});
+
+describe("what a built silhouette reads as", () => {
+  it("says nothing about a shape with no size", () => {
+    expect(readsAs(0, 0, 0)).toBeNull();
+  });
+
+  it("names something from this room, with a closeness to show", () => {
+    const tall = readsAs(0.2, 0.6, 0.2);
+    expect(tall).not.toBeNull();
+    expect(tall?.closeness).toBeGreaterThan(0);
+    expect(tall?.closeness).toBeLessThanOrEqual(1);
+  });
+
+  it("judges proportion rather than size, so scale is a separate problem", () => {
+    // A barrel is a barrel whether it is knee high or shoulder high; a hider
+    // who built the right shape at the wrong size has a different fix to make
+    // than one who built a plank.
+    const small = readsAs(0.1, 0.3, 0.1);
+    const large = readsAs(1, 3, 1);
+    expect(small?.family).toBe(large?.family);
+    expect(small?.closeness).toBeCloseTo(large?.closeness ?? 0, 6);
   });
 });

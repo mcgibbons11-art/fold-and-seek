@@ -3730,3 +3730,45 @@ export const SOLID_PROP_VOLUMES: readonly AABB[] = SHOP_PLACEMENTS.filter((place
     max: { x: x + extentX, y: y + height, z: z + extentZ },
   };
 });
+
+/**
+ * What a built silhouette most resembles, by its proportions.
+ *
+ * A hider's real question is "does this read as something in this room?", and
+ * until now the only answer was their own eye at toy scale. This compares the
+ * shape they have built against the proportions of the room's own props and
+ * names the nearest one.
+ *
+ * Proportions rather than size, deliberately: a barrel is a barrel whether it
+ * is knee high or shoulder high, and a hider who has built a convincing barrel
+ * at the wrong scale has a different problem from one who has built a plank.
+ */
+export function readsAs(
+  width: number,
+  height: number,
+  depth: number,
+): { readonly family: PropFamily; readonly closeness: number } | null {
+  const longest = Math.max(width, height, depth);
+  if (!Number.isFinite(longest) || longest <= 0) return null;
+  const shape = [width / longest, height / longest, depth / longest];
+
+  let best: { family: PropFamily; closeness: number } | null = null;
+  for (const placement of SHOP_PLACEMENTS) {
+    const [fw, fh, fd] = placement.focus;
+    const propLongest = Math.max(fw, fh, fd);
+    if (propLongest <= 0) continue;
+    const other = [fw / propLongest, fh / propLongest, fd / propLongest];
+    // Distance between the two normalised shapes, turned into a 0..1 closeness
+    // so the caller can show it as a percentage without knowing the metric.
+    const distance = Math.hypot(
+      (shape[0] ?? 0) - (other[0] ?? 0),
+      (shape[1] ?? 0) - (other[1] ?? 0),
+      (shape[2] ?? 0) - (other[2] ?? 0),
+    );
+    const closeness = Math.max(0, 1 - distance);
+    if (best === null || closeness > best.closeness) {
+      best = { family: placement.family, closeness };
+    }
+  }
+  return best;
+}

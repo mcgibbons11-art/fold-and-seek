@@ -929,6 +929,11 @@ function BuildPanel({
 
       {state.shapes.length === 0 ? null : (
         <>
+          {state.readsAs === null ? null : (
+            <div style={{ ...labelStyle, color: BRASS_LIT }}>
+              {`Reads as a ${state.readsAs.family} · ${String(Math.round(state.readsAs.closeness * 100))}%`}
+            </div>
+          )}
           <div style={labelStyle}>
             {`Body hidden · ${String(Math.round(state.fit * 100))}%`}
           </div>

@@ -40,6 +40,7 @@ import {
   type PanelState,
 } from "../mimic/panels";
 import { MAX_SHAPES, type ShapeProfileId } from "@foldseek/shared";
+import { readsAs } from "@foldseek/map-data";
 import type { BoneName } from "../mimic/rig";
 import {
   addShape as addShapeToList,
@@ -283,6 +284,12 @@ export interface ForgeHudState {
    * creature, and this is what tells a player which one they have made.
    */
   readonly fit: number;
+  /**
+   * What the outline resembles in this room, and how closely. Null until
+   * something is built. This is the answer a hider could only guess at before:
+   * "does this read as something that belongs here?"
+   */
+  readonly readsAs: { readonly family: string; readonly closeness: number } | null;
   readonly sampledSwatchId: string | null;
   /** True while F has armed the material dropper and a click will sample. */
   readonly materialDropperArmed: boolean;
@@ -1718,6 +1725,7 @@ export class ForgeController {
             },
       shapes: this.shapeList(),
       fit: this.fitScore(),
+      readsAs: this.readsAs(),
       sampledSwatchId: this.sampledSwatchId,
       materialDropperArmed: this.materialDropperArmed,
       eyeSwatchId: assignmentFor(this.state.materials, EYE_SLOT_ID),
@@ -2250,6 +2258,22 @@ export class ForgeController {
       (point): point is NonNullable<typeof point> => point !== undefined,
     );
     return fitScore(parts, boxes);
+  }
+
+  /**
+   * What the built silhouette most resembles in this room.
+   *
+   * Measured across every shape at once, because the room reads the whole
+   * outline rather than its parts: three cylinders that individually resemble
+   * nothing can together be a barrel.
+   */
+  readsAs(): { readonly family: string; readonly closeness: number } | null {
+    const drawn = this.mimic.shapeMeshes.filter((mesh) => mesh.parent !== null);
+    if (drawn.length === 0) return null;
+    const bounds = new THREE.Box3();
+    for (const mesh of drawn) bounds.union(new THREE.Box3().setFromObject(mesh));
+    const size = bounds.getSize(new THREE.Vector3());
+    return readsAs(size.x, size.y, size.z);
   }
 
   /** The shapes a disguise carries, with the names the object panel draws. */
