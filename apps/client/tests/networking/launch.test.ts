@@ -74,6 +74,48 @@ describe("launching a room into its own channel", () => {
     guest.dispose();
   });
 
+  it("keeps taking join requests after accepting one, so a party can fill up", async () => {
+    const host = peer(relay, "a");
+    await host.connect();
+    // joinSession leaves this client browsing; join() would quick-join or
+    // create a room for it, which is not the state a host opens a room from.
+    await host.joinSession(CHANNEL, "Ada");
+    const created = host.createRoom("The Attic");
+    expect(created.ok).toBe(true);
+    await elapse(200);
+
+    const pending: string[][] = [];
+    host.onRoomRequests((requests) => pending.push(requests.map((r) => r.id)));
+
+    const first = peer(relay, "b");
+    await first.connect();
+    await first.joinSession(CHANNEL, "Bex");
+    first.requestRoom(host.getRoomCode() ?? "");
+    await elapse(200);
+    expect(pending.at(-1)).toContain("b");
+
+    const accepted = host.acceptRoomRequest("b");
+    expect(accepted.ok).toBe(true);
+    await elapse(200);
+
+    // The whole point: accepting moved nobody, so the host is still in the
+    // shared lobby and a later request still reaches it. This used to be
+    // impossible - the host left on the first acceptance and never saw
+    // another request, so a room could only ever admit one player.
+    const second = peer(relay, "c");
+    await second.connect();
+    await second.joinSession(CHANNEL, "Cass");
+    second.requestRoom(host.getRoomCode() ?? "");
+    await elapse(200);
+
+    expect(pending.at(-1)).toContain("c");
+    expect(host.acceptRoomRequest("c").ok).toBe(true);
+
+    host.dispose();
+    first.dispose();
+    second.dispose();
+  });
+
   it("refuses to launch a room from a client that is not its host", async () => {
     const host = peer(relay, "a");
     await host.connect();

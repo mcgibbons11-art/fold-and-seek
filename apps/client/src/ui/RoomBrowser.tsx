@@ -173,6 +173,12 @@ export interface RoomBrowserProps {
   readonly onCancelRequest?: () => void;
   /** Retires this client's advertised room and declines any waiting guests. */
   readonly onCancelHostedRoom?: () => void;
+  /**
+   * Carries the whole party out of this shared lobby and into the room's own
+   * pre-game lobby. Host only, and deliberately manual: accepting a player
+   * moves nobody, so the host gathers everyone first and travels once.
+   */
+  readonly onStartLobby?: () => void;
   /** Returns to the main menu and closes any room/request owned by this client. */
   readonly onBack?: () => void;
 }
@@ -195,6 +201,7 @@ export function RoomBrowser({
   onDeclineRequest,
   onCancelRequest,
   onCancelHostedRoom,
+  onStartLobby,
   onBack,
 }: RoomBrowserProps): ReactElement {
   const [name, setName] = useState("");
@@ -547,13 +554,23 @@ export function RoomBrowser({
                         </div>
                       ))
                     )}
+                    {onStartLobby === undefined ? null : (
+                      <button
+                        type="button"
+                        className={PRESS_CLASS}
+                        style={{ ...primaryButtonStyle, width: "100%", marginTop: 14 }}
+                        onClick={onStartLobby}
+                      >
+                        Start lobby
+                      </button>
+                    )}
                     <button
                       type="button"
                       className={PRESS_CLASS}
                       style={{
                         ...smallButtonStyle,
                         width: "100%",
-                        marginTop: 14,
+                        marginTop: 10,
                         borderColor: "rgba(205, 93, 72, 0.7)",
                         color: "#ffd4ca",
                       }}

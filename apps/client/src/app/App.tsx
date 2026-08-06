@@ -786,11 +786,12 @@ export function App(): ReactElement {
     const stopDecision = lobby.adapter.onRoomDecision((decision) => {
       refresh();
       if (decision.accepted) {
-        const enterAcceptedRoom = (): void => {
-          onEnterRoom((opened) => opened.adapter.enterRoom(decision.roomCode));
-        };
-        lastRoomActionRef.current = enterAcceptedRoom;
-        enterAcceptedRoom();
+        // Accepted, and staying put. Entering the room here is what used to
+        // pull both sides out of the shared lobby, and a host that has left it
+        // never sees the requests of anyone who asks afterwards, so a room
+        // could only ever admit one player. Everyone waits together until the
+        // host presses the button, which is what carries the whole party in.
+        setRoundError(null);
         return;
       }
       const copy = {
@@ -1092,10 +1093,22 @@ export function App(): ReactElement {
               setRoundError(ROOM_FAILURE_COPY[result.reason]);
               return;
             }
-            lastRoomActionRef.current = () => {
-              onEnterRoom((opened) => opened.adapter.enterRoom(result.code));
-            };
-            onEnterRoom(() => result);
+            // Accepting seats a player; it does not move anybody. The host
+            // stays in the shared lobby so later requests still reach it - a
+            // host that leaves never sees them, which is why a room could
+            // only ever admit one player - and carries the whole party in
+            // with "Start lobby" once it is full.
+            setRoundError(null);
+          },
+          onStartLobby: () => {
+            const result = lobby.adapter.launchRoom();
+            if (!result.ok) {
+              setRoundError("Only the host can move the party in.");
+              return;
+            }
+            // The party travels to the room's own channel, where the round
+            // will run; this client follows its own announcement.
+            onEnterRoom(() => ({ ok: true, code: lobby.adapter.getRoomCode() ?? "" }));
           },
           onDeclineRequest: (connectionId) => {
             lobby.adapter.declineRoomRequest(connectionId);

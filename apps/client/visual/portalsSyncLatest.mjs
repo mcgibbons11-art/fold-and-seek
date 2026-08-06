@@ -17,7 +17,7 @@ const context = await chromium.launchPersistentContext(profile, {
   args: ["--profile-directory=Default"],
 });
 const page = context.pages()[0] ?? (await context.newPage());
-await page.goto("https://portals.to/my-games/web/g69147a46cb26443db7723cd0", {
+await page.goto("https://portals.to/my-games/web/gde550c363c6e3710963a93df", {
   waitUntil: "domcontentloaded",
   timeout: 60_000,
 });
