@@ -926,7 +926,7 @@ function BuildPanel({
           disabled={state.locked || state.shapes.length === 0}
           onClick={() => controller.duplicateSelectedShape()}
         >
-          Duplicate · D
+          Duplicate · Ctrl+D
         </button>
         <button
           type="button"

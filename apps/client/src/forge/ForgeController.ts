@@ -4263,6 +4263,12 @@ export class ForgeController {
       } else if (key === "y") {
         event.preventDefault();
         this.redo();
+      } else if (key === "d" && this.toolsActive) {
+        // Duplicate lives here rather than in the plain switch below because
+        // bare D strafes: WASD walks the body, so a build key on D would never
+        // have been reached. Ctrl+D is the editor convention anyway.
+        event.preventDefault();
+        this.duplicateSelectedShape();
       }
       return;
     }
@@ -4330,12 +4336,7 @@ export class ForgeController {
       case "v":
         this.setSilhouette(!this.silhouette);
         break;
-      case "d":
-        // Next to the movement keys and next to nothing else, because it is
-        // the verb a player presses most while building: a barrel's bands, a
-        // pot's rim and a row of legs are all one shape copied.
-        if (this.toolsActive) this.duplicateSelectedShape();
-        break;
+
       case "delete":
       case "backspace":
         // Both, because half of players reach for one and half the other, and

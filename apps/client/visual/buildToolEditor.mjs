@@ -151,7 +151,6 @@ const addedCylinder = await clickIf(/^cylinder$/i, 6_000);
 await page.waitForTimeout(900);
 const afterAdd = await textOf();
 console.log("PANEL AFTER ADD:", panelText(afterAdd), "| clicked:", addedCube, addedCylinder);
-console.log("STATUS:", (await status()).join(" ~ "));
 record("adding shapes works", addedCube && addedCylinder && /2 of 16 shapes/i.test(afterAdd),
   (afterAdd.match(/\d+ of 16 shapes/i) ?? ["no count"])[0]);
 

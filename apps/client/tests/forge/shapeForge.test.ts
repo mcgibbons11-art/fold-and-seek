@@ -117,13 +117,13 @@ beforeEach(() => {
 const windowKeys: ((event: unknown) => void)[] = [];
 
 /** One key press, down the path the browser would use. */
-function press(key: string): void {
+function press(key: string, options: { ctrlKey?: boolean } = {}): void {
   for (const handler of windowKeys) {
     handler({
       key,
       code: key,
       repeat: false,
-      ctrlKey: false,
+      ctrlKey: options.ctrlKey ?? false,
       metaKey: false,
       shiftKey: false,
       altKey: false,
@@ -180,7 +180,7 @@ describe("building a disguise in the Forge", () => {
     const forge = controller();
     forge.addShape("cube");
 
-    press("d");
+    press("d", { ctrlKey: true });
     expect(forge.disguise.shapes).toHaveLength(2);
 
     press("Delete");
