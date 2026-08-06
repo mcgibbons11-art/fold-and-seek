@@ -357,7 +357,7 @@ export function LobbyHud({
                 style={buttonStyle}
                 onClick={onLaunch}
               >
-                Move everyone in
+                Start lobby
               </button>
             ) : null}
             <button
