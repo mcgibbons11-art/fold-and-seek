@@ -6,6 +6,7 @@ import {
   type StarterArrangementId,
 } from "../mimic/disguiseState";
 import { PANEL_PROFILE_IDS, type PanelProfileId } from "../mimic/panels";
+import { MAX_SHAPES, SHAPE_PROFILE_IDS } from "@foldseek/shared";
 import { SEGMENT_PROFILE_IDS, type SegmentProfileId } from "../mimic/segmentForm";
 import {
   swatchById,
@@ -845,7 +846,7 @@ function ContextPanel({ controller, state, onCommit }: ContextPanelProps): React
     return <ShapePanel controller={controller} state={state} onCommit={onCommit} />;
   }
   if (state.mode === "panels") {
-    return <PanelPanel controller={controller} state={state} onCommit={onCommit} />;
+    return <BuildPanel controller={controller} state={state} />;
   }
   if (state.mode === "material") {
     return <MaterialPanel controller={controller} state={state} />;
@@ -854,6 +855,91 @@ function ContextPanel({ controller, state, onCommit }: ContextPanelProps): React
     return null;
   }
   return <ArrangementPanel controller={controller} state={state} />;
+}
+
+/**
+ * Building a disguise out of primitives.
+ *
+ * Two halves, in the order a player uses them: what to add, then what has been
+ * added. The list matters more than it looks - once a disguise reads as an
+ * object at all, most of its shapes are buried inside the form and cannot be
+ * clicked in the world, so the list is the only way back to them.
+ */
+function BuildPanel({
+  controller,
+  state,
+}: {
+  readonly controller: ForgeController;
+  readonly state: ForgeHudState;
+}): ReactElement {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={labelStyle}>Add a shape</div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {SHAPE_PROFILE_IDS.map((profileId) => (
+          <button
+            key={profileId}
+            type="button"
+            className={PRESS_CLASS}
+            style={buttonStyle}
+            disabled={state.locked}
+            onClick={() => controller.addShape(profileId)}
+          >
+            {profileId}
+          </button>
+        ))}
+      </div>
+
+      <div style={labelStyle}>
+        {state.shapes.length === 0
+          ? "Nothing built yet"
+          : `${String(state.shapes.length)} of ${String(MAX_SHAPES)} shapes`}
+      </div>
+      {state.shapes.length === 0 ? (
+        // Said once, plainly, rather than left as an empty box the player has
+        // to interpret.
+        <div style={{ ...labelStyle, opacity: 0.65, textTransform: "none" }}>
+          Add cylinders and cubes until the outline reads as something in the room,
+          then fold yourself inside it.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 168, overflowY: "auto" }}>
+          {state.shapes.map((shape) => (
+            <button
+              key={shape.id}
+              type="button"
+              className={PRESS_CLASS}
+              style={shape.selected ? { ...buttonStyle, marginBottom: 0, borderColor: BRASS_LIT } : { ...buttonStyle, marginBottom: 0 }}
+              onClick={() => controller.selectShape(shape.id)}
+            >
+              {shape.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
+          disabled={state.locked || state.shapes.length === 0}
+          onClick={() => controller.duplicateSelectedShape()}
+        >
+          Duplicate · D
+        </button>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
+          disabled={state.locked || state.shapes.length === 0}
+          onClick={() => controller.deleteSelectedShape()}
+        >
+          Delete · Del
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function ArrangementPanel({

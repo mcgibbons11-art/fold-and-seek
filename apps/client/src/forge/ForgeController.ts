@@ -245,6 +245,13 @@ export interface ForgePanelSelection {
   readonly panel: PanelState | null;
 }
 
+export interface ForgeShapeRow {
+  readonly id: string;
+  /** "Cylinder 2": what it is and which one, which is what a player scans for. */
+  readonly label: string;
+  readonly selected: boolean;
+}
+
 export interface ForgeHudState {
   readonly mode: ForgeToolMode;
   /** Null while the Forge dock is collapsed and no tool owns the pointer. */
@@ -258,6 +265,15 @@ export interface ForgeHudState {
   /** How many parts the resize gizmo is driving (shift-click multi-select). */
   readonly selectedCount: number;
   readonly panel: ForgePanelSelection | null;
+  /**
+   * The shapes this disguise is built from, named and in build order, with
+   * whichever one the gizmo is driving marked.
+   *
+   * The list is what a player reads to find a shape they placed a minute ago
+   * and cannot now see, because it is buried inside the form they built - which
+   * is the ordinary case once a disguise reads as an object at all.
+   */
+  readonly shapes: readonly ForgeShapeRow[];
   readonly sampledSwatchId: string | null;
   /** True while F has armed the material dropper and a click will sample. */
   readonly materialDropperArmed: boolean;
@@ -1668,6 +1684,7 @@ export class ForgeController {
               socketId: this.selectedSocket,
               panel: panelState === null ? null : clonePanelState(panelState),
             },
+      shapes: this.shapeList(),
       sampledSwatchId: this.sampledSwatchId,
       materialDropperArmed: this.materialDropperArmed,
       eyeSwatchId: assignmentFor(this.state.materials, EYE_SLOT_ID),
@@ -2059,7 +2076,7 @@ export class ForgeController {
   }
 
   /** The shapes a disguise carries, with the names the object panel draws. */
-  shapeList(): readonly { readonly id: string; readonly label: string; readonly selected: boolean }[] {
+  shapeList(): readonly ForgeShapeRow[] {
     const labels = shapeLabels(this.state.shapes);
     return this.state.shapes.map((shape) => ({
       id: shape.id,
