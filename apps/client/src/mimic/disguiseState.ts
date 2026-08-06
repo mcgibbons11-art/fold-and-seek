@@ -19,6 +19,8 @@ import {
   validatePanels,
   type PanelState,
 } from "./panels";
+import { cloneShapeState, validateShapes, type ShapeState } from "./shapes";
+import { SHAPE_PROFILE_IDS } from "@foldseek/shared";
 import {
   cloneSegmentForm,
   createDefaultSegmentForm,
@@ -85,6 +87,7 @@ export interface DisguiseState {
   joints: JointState[];
   segments: SegmentSlotState[];
   panels: PanelState[];
+  shapes: ShapeState[];
   anchors: AnchorState[];
   materials: MaterialAssignment[];
   revision: number;
@@ -111,6 +114,7 @@ export function createDefaultDisguiseState(): DisguiseState {
     })),
     segments: SEGMENT_BONES.map((bone) => ({ bone, form: createDefaultSegmentForm(bone) })),
     panels: [],
+    shapes: [],
     anchors: [],
     materials: [{ slotId: "body", swatchId: DEFAULT_BODY_SWATCH_ID }],
     revision: 0,
@@ -133,6 +137,7 @@ export function cloneDisguiseState(state: DisguiseState): DisguiseState {
       form: cloneSegmentForm(segment.form),
     })),
     panels: state.panels.map(clonePanelState),
+    shapes: state.shapes.map(cloneShapeState),
     anchors: state.anchors.map((anchor) => ({
       id: anchor.id,
       bone: anchor.bone,
@@ -235,6 +240,7 @@ export function validateDisguiseState(state: DisguiseState): string[] {
   }
 
   errors.push(...validatePanels(state.panels));
+  errors.push(...validateShapes(state.shapes));
 
   for (let i = 0; i < state.anchors.length; i++) {
     const anchor = state.anchors[i]!;
@@ -349,6 +355,27 @@ function readSegmentForm(value: unknown, path: string): SegmentFormState {
   };
 }
 
+function readShape(value: unknown, path: string): ShapeState {
+  const record = readRecord(value, path);
+  const profileId = readString(record["profileId"], `${path}.profileId`);
+  if (!(SHAPE_PROFILE_IDS as readonly string[]).includes(profileId)) {
+    fail(`${path}.profileId`, "a known shape profile");
+  }
+  const bone = readString(record["bone"], `${path}.bone`);
+  if (!(BONE_NAMES as readonly string[]).includes(bone)) {
+    fail(`${path}.bone`, "a bone the shape can ride");
+  }
+  return {
+    id: readString(record["id"], `${path}.id`),
+    profileId: profileId as ShapeState["profileId"],
+    bone: bone as ShapeState["bone"],
+    position: readVec3(record["position"], `${path}.position`),
+    rotation: readQuaternion(record["rotation"], `${path}.rotation`),
+    scale: readVec3(record["scale"], `${path}.scale`),
+    materialSlotId: readString(record["materialSlotId"], `${path}.materialSlotId`),
+  };
+}
+
 function readPanel(value: unknown, path: string): PanelState {
   const record = readRecord(value, path);
   const socketId = readString(record["socketId"], `${path}.socketId`);
@@ -460,6 +487,13 @@ export function deserializeDisguiseState(input: unknown): DisguiseState {
     panels: readArray(record["panels"], "disguise.panels").map((entry, i) =>
       readPanel(entry, `disguise.panels[${i}]`),
     ),
+    // Absent in anything authored before shapes existed, which stays readable
+    // for as long as the changeover takes.
+    shapes: record["shapes"] === undefined
+      ? []
+      : readArray(record["shapes"], "disguise.shapes").map((entry, i) =>
+          readShape(entry, `disguise.shapes[${i}]`),
+        ),
     anchors: readArray(record["anchors"], "disguise.anchors").map((entry, i) =>
       readAnchor(entry, `disguise.anchors[${i}]`),
     ),

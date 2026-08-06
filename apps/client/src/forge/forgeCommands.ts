@@ -3,6 +3,7 @@ import type { PaintStrokeWire } from "@foldseek/shared";
 import type { AnchorState, DisguiseState, MaterialAssignment } from "../mimic/disguiseState";
 import type { PaintStrokeBatch } from "../paint/PaintLayer";
 import { clonePanelState, type PanelState } from "../mimic/panels";
+import { cloneShapeState } from "../mimic/shapes";
 import { SEGMENT_BONES } from "../mimic/rig";
 import { cloneSegmentForm, type SegmentFormState } from "../mimic/segmentForm";
 
@@ -381,6 +382,7 @@ function structuredCloneState(state: DisguiseState): DisguiseState {
       form: cloneSegmentForm(segment.form),
     })),
     panels: state.panels.map(clonePanelState),
+    shapes: state.shapes.map(cloneShapeState),
     anchors: state.anchors.map((anchor) => ({ ...anchor, uv: [...anchor.uv], localRotation: [...anchor.localRotation] })),
     materials: state.materials.map((material) => ({ ...material })),
   };
@@ -392,6 +394,7 @@ function overwriteState(target: DisguiseState, source: DisguiseState): void {
   target.joints = copy.joints;
   target.segments = copy.segments;
   target.panels = copy.panels;
+  target.shapes = copy.shapes;
   target.anchors = copy.anchors;
   target.materials = copy.materials;
 }

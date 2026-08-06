@@ -48,12 +48,30 @@ export function toDisguiseWire(state: DisguiseState): DisguiseWire {
       slotId: material.slotId,
       swatchId: material.swatchId,
     })),
+    shapes: state.shapes.map((shape) => ({
+      id: shape.id,
+      profileId: shape.profileId,
+      bone: shape.bone,
+      position: [...shape.position] as [number, number, number],
+      rotation: [...shape.rotation] as [number, number, number, number],
+      scale: [...shape.scale] as [number, number, number],
+      materialSlotId: shape.materialSlotId,
+    })),
     revision: state.revision,
   };
 }
 
 export function fromDisguiseWire(pose: DisguiseWire): DisguiseState {
   return {
+    shapes: (pose.shapes ?? []).map((shape) => ({
+      id: shape.id,
+      profileId: shape.profileId,
+      bone: shape.bone,
+      position: [...shape.position],
+      rotation: [...shape.rotation],
+      scale: [...shape.scale],
+      materialSlotId: shape.materialSlotId,
+    })),
     version: pose.version,
     rigVersion: pose.rigVersion,
     mapId: pose.mapId,
