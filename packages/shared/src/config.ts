@@ -330,6 +330,33 @@ export const SEGMENT_PROFILE_IDS = [
 
 export type SegmentProfileId = (typeof SEGMENT_PROFILE_IDS)[number];
 
+/**
+ * The primitives a disguise is built from.
+ *
+ * These replace the hinged panels. A panel was a flap on a socket, described by
+ * an angle, so every one of them radiated out of a joint and read as a limb -
+ * which is the opposite of what a hider wants. A shape is a solid placed in the
+ * body's own frame with a full transform, so a jar is two cylinders and a rim
+ * rather than six flaps, and the silhouette reads as a made object.
+ *
+ * The body is still the point: a shape is attached to a bone and travels with
+ * it, and a disguise is judged on the body folding to fit INSIDE the silhouette
+ * it builds. Folding stays the game; this is what the fold is dressed in.
+ */
+export const SHAPE_PROFILE_IDS = ["cube", "cylinder", "wedge", "sphere", "plane"] as const;
+
+export type ShapeProfileId = (typeof SHAPE_PROFILE_IDS)[number];
+
+/**
+ * Shapes one disguise may carry.
+ *
+ * Bounded by the wire before taste: a pose is encoded into
+ * `LIMITS.encodedPoseLength` and travels inside an 8 KB relay message, and the
+ * room draws six of these at once. Sixteen is enough for the shop's props -
+ * measured against its pots, barrels and crates - without either ceiling.
+ */
+export const MAX_SHAPES = 16;
+
 export const PANEL_MIN_HINGE_DEG = -180;
 export const PANEL_MAX_HINGE_DEG = 180;
 

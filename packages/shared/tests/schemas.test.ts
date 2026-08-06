@@ -5,6 +5,7 @@ import {
   ForgeCommandSchema,
   LIMITS,
   MAX_PANELS,
+  MAX_SHAPES,
   MatchCommandSchema,
   MatchPhase,
   MatchSettingsPatchSchema,
@@ -463,5 +464,47 @@ describe("event and transport schemas", () => {
     ).toBe(false);
     expect(CameraSampleSchema.safeParse({ yaw: 10, pitch: 0, at: 1 }).success).toBe(false);
     expect(CameraSampleSchema.safeParse({ yaw: 1, pitch: 0, at: 1 }).success).toBe(true);
+  });
+});
+
+describe("shapes, the primitives a disguise is built from", () => {
+  const shape = {
+    id: "shape_0001",
+    profileId: "cylinder" as const,
+    bone: RIG_BONE_NAMES[0],
+    position: [0, 0.1, 0] as [number, number, number],
+    rotation: [0, 0, 0, 1] as [number, number, number, number],
+    scale: [0.4, 0.6, 0.4] as [number, number, number],
+    materialSlotId: "slot_body",
+  };
+
+  it("accepts a pose that carries none, so an older build still validates", () => {
+    // The changeover keeps both for exactly as long as it takes; a pose
+    // authored before shapes existed must not be refused in the meantime.
+    const pose = createReferenceDisguiseWire(1);
+    expect(DisguiseWireSchema.safeParse(pose).success).toBe(true);
+  });
+
+  it("carries a primitive with a full transform rather than a hinge angle", () => {
+    const pose = { ...createReferenceDisguiseWire(1), shapes: [shape] };
+    const parsed = DisguiseWireSchema.safeParse(pose);
+    expect(parsed.success).toBe(true);
+  });
+
+  it("refuses more shapes than the wire and the room can carry", () => {
+    const many = Array.from({ length: MAX_SHAPES + 1 }, (_, index) => ({
+      ...shape,
+      id: `shape_${String(index).padStart(4, "0")}`,
+    }));
+    const pose = { ...createReferenceDisguiseWire(1), shapes: many };
+    expect(DisguiseWireSchema.safeParse(pose).success).toBe(false);
+  });
+
+  it("refuses a shape attached to nothing, because a disguise travels with its body", () => {
+    const pose = {
+      ...createReferenceDisguiseWire(1),
+      shapes: [{ ...shape, bone: "not_a_bone" }],
+    };
+    expect(DisguiseWireSchema.safeParse(pose).success).toBe(false);
   });
 });

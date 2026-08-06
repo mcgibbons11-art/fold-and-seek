@@ -5,6 +5,7 @@ import {
   INNOCENT_REACTION_IDS,
   MAX_PANELS,
   MAX_SEEKER_COUNT,
+  MAX_SHAPES,
   PANEL_MAX_HINGE_DEG,
   PANEL_MIN_HINGE_DEG,
   PANEL_PROFILE_IDS,
@@ -14,6 +15,7 @@ import {
   RIG_CONTRACT_VERSION,
   RIG_SEGMENT_BONES,
   SEGMENT_PROFILE_IDS,
+  SHAPE_PROFILE_IDS,
   STARTER_ARRANGEMENT_IDS,
   TAUNT_IDS,
 } from "./config";
@@ -291,6 +293,26 @@ const panelState = z.strictObject({
   materialSlotId: id,
 });
 
+/**
+ * One primitive in a disguise: what it is, which bone carries it, and where it
+ * sits in that bone's frame.
+ *
+ * `rotation` and `scale` are what a gizmo drives, and between them they say
+ * everything the old `hingeAngle`, `width` and `height` did, more legibly and
+ * without pinning the shape to a socket.
+ */
+const shapeInstance = z.strictObject({
+  /** Stable across edits, so an object list and Duplicate have something to name. */
+  id,
+  profileId: z.enum(SHAPE_PROFILE_IDS),
+  /** Attached, so the construction travels with the body rather than shearing off it. */
+  bone: z.enum(RIG_BONE_NAMES),
+  position: Vec3Schema,
+  rotation: QuaternionSchema,
+  scale: Vec3Schema,
+  materialSlotId: id,
+});
+
 const anchorState = z.strictObject({
   id,
   bone: z.enum(RIG_BONE_NAMES),
@@ -317,6 +339,12 @@ export const DisguiseWireSchema = z
     joints: z.array(jointRotation).length(RIG_BONE_NAMES.length),
     segments: z.array(segmentSlot).length(RIG_SEGMENT_BONES.length),
     panels: z.array(panelState).max(MAX_PANELS),
+    /**
+     * Optional while the Forge migrates off panels. A pose authored by an older
+     * build carries none and still validates, so the two can coexist for
+     * exactly as long as the changeover takes and no longer.
+     */
+    shapes: z.array(shapeInstance).max(MAX_SHAPES).optional(),
     anchors: z.array(anchorState).max(LIMITS.maxAnchors),
     materials: z.array(materialAssignment).max(LIMITS.maxMaterialAssignments),
     revision,
