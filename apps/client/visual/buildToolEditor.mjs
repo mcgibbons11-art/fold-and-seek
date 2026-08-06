@@ -167,6 +167,16 @@ const afterDel = await textOf();
 record("Delete removes", /2 of 16 shapes/i.test(afterDel),
   (afterDel.match(/\d+ of 16 shapes/i) ?? ["no count"])[0]);
 
+// The form dropper: point at the room and take its shape.
+const beforeSample = await textOf();
+const sampledForm = await clickIf(/copy a shape from the room/i, 6_000);
+await page.waitForTimeout(900);
+const afterSample = await textOf();
+record("form dropper is reachable and answers", sampledForm &&
+  /copied that shape|point at something/i.test(afterSample) &&
+  afterSample !== beforeSample,
+  (afterSample.match(/copied that shape[^.]*\.|point at something[^.]*\./i) ?? ["no answer"])[0].slice(0, 60));
+
 // Stretch and turn: the controls that make a barrel out of a cylinder.
 const stretched = await clickIf(/^longer$/i, 6_000);
 await page.waitForTimeout(700);
