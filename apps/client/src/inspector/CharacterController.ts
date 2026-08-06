@@ -831,6 +831,11 @@ export class CharacterController {
         INSPECTOR_RADIUS_M,
         INSPECTOR_HEIGHT_M,
         INSPECTOR_STEP_HEIGHT_M,
+        // Where the body is now, so a blocker it is ALREADY inside does not
+        // hold it there. A pose can leave a body within a piece of furniture,
+        // and without this every direction out of it is refused - walking and
+        // jumping alike - so the only way out is to leave the round.
+        { x: this.position.x, z: this.position.z, feetY: this.position.y },
       )
     ) {
       return false;

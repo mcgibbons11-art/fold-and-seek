@@ -204,13 +204,41 @@ export function blocksCapsule(
   radius = INSPECTOR_RADIUS_M,
   height = INSPECTOR_HEIGHT_M,
   stepHeight = INSPECTOR_STEP_HEIGHT_M,
+  /**
+   * Where the body is moving FROM, when the caller knows it.
+   *
+   * A blocker the body is already standing inside does not block it. Without
+   * this the test is a trap rather than a wall: every destination inside the
+   * box is refused, in every direction including upwards, so a body that ends
+   * up in there by any means cannot walk out and cannot jump out either. It
+   * can still be pushed in no further, because a blocker it is NOT already
+   * inside goes on blocking normally.
+   */
+  origin?: { readonly x: number; readonly z: number; readonly feetY: number },
 ): boolean {
   const headY = feetY + height;
   const stepY = feetY + stepHeight;
   for (const blocker of blockers) {
     if (blocker.max.y <= stepY) continue;
     if (blocker.min.y >= headY) continue;
-    if (containsXZ(blocker, x, z, radius)) return true;
+    if (!containsXZ(blocker, x, z, radius)) continue;
+    if (origin !== undefined && alreadyInside(blocker, origin, radius, height, stepHeight)) {
+      continue;
+    }
+    return true;
   }
   return false;
+}
+
+/** Whether a capsule at `origin` is already within this blocker. */
+function alreadyInside(
+  blocker: AABB,
+  origin: { readonly x: number; readonly z: number; readonly feetY: number },
+  radius: number,
+  height: number,
+  stepHeight: number,
+): boolean {
+  if (blocker.max.y <= origin.feetY + stepHeight) return false;
+  if (blocker.min.y >= origin.feetY + height) return false;
+  return containsXZ(blocker, origin.x, origin.z, radius);
 }

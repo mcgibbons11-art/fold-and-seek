@@ -9,6 +9,10 @@ import {
   NAV_DATA,
   PROP_FOCUS_BOUNDS,
   SHOP_PLACEMENTS,
+  blocksCapsule,
+  INSPECTOR_HEIGHT_M,
+  INSPECTOR_RADIUS_M,
+  INSPECTOR_STEP_HEIGHT_M,
   MIMIC_NAV_BLOCKERS,
   SHELL_BLOCKERS,
   SOLID_PROP_COLLIDERS,
@@ -182,5 +186,29 @@ describe("what a Mimic is allowed to press against", () => {
       );
       expect(kept).toBe(true);
     }
+  });
+});
+
+describe("a body that ends up inside something", () => {
+  const box = { min: { x: -1, y: 0, z: -1 }, max: { x: 1, y: 2, z: 1 } };
+  const inside = { x: 0, z: 0, feetY: 0 };
+  const capsule = [INSPECTOR_RADIUS_M, INSPECTOR_HEIGHT_M, INSPECTOR_STEP_HEIGHT_M] as const;
+
+  it("is still stopped from entering that blocker from outside", () => {
+    // The escape rule must not become a licence to walk through furniture.
+    expect(blocksCapsule([box], 0, 0, 0, ...capsule, { x: 5, z: 5, feetY: 0 })).toBe(true);
+  });
+
+  it("can move within and out of a blocker it is already inside", () => {
+    // Refusing every destination inside the box is a trap, not a wall: with no
+    // legal move in any direction, walking and jumping are equally useless and
+    // the round is over for that player.
+    expect(blocksCapsule([box], 0.5, 0.5, 0, ...capsule, inside)).toBe(false);
+    expect(blocksCapsule([box], 0, 0, 0, ...capsule, inside)).toBe(false);
+  });
+
+  it("blocks on a different object even while escaping one", () => {
+    const other = { min: { x: 2, y: 0, z: -1 }, max: { x: 4, y: 2, z: 1 } };
+    expect(blocksCapsule([box, other], 3, 0, 0, ...capsule, inside)).toBe(true);
   });
 });
