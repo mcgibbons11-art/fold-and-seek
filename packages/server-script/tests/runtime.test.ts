@@ -5,6 +5,7 @@ import {
   decodeStateChunks,
   derivedSeatId,
   encodeDisguiseWire,
+  encodePaintLayer,
   jsonByteLength,
   MatchPhase,
   MAX_STATE_VALUE_BYTES,
@@ -401,6 +402,99 @@ describe("the authoritative server script", () => {
 
     expect(posed).toBe(true);
     expect(worstPerSecond).toBeLessThanOrEqual(SERVER_STATE_WRITES_PER_SECOND);
+  });
+
+  it("takes a pose as a message, because a written key has no provable author", () => {
+    const { host, runtime, sim } = startRuntime();
+    host.arrive({ id: "seat-a", displayName: "Ada" });
+    host.arrive({ id: "seat-b", displayName: "Bex" });
+    host.message(command({ type: "player_ready", ready: true }), "seat-a");
+    host.message(command({ type: "player_ready", ready: true }), "seat-b");
+    host.message(command({ type: "start_match" }), "seat-a");
+    for (let i = 0; i < 500; i += 1) runtime.tick();
+
+    const mimic = ["seat-a", "seat-b"].find(
+      (seat) => sim.getPrivateStateFor(seat)?.role === "mimic",
+    );
+    expect(mimic).toBeDefined();
+    const wire = createReferenceDisguiseWire(1);
+    wire.root.position = [0.2, 0, 0];
+    const pose = encodeDisguiseWire(wire);
+
+    host.emit(
+      "message",
+      { v: SERVER_PROTOCOL_VERSION, t: "forge", pose, rev: 1 },
+      mimic as string,
+    );
+    runtime.tick();
+
+    // The authority took it, so it is the authority's copy the room will see.
+    expect(sim.getPrivateStateFor(mimic as string)?.ownDisguise?.encodedPose ?? pose).toBe(pose);
+    // And a pose from a connection the server never seated is not a player's.
+    const before = host.sent.length;
+    host.emit("message", { v: SERVER_PROTOCOL_VERSION, t: "forge", pose, rev: 2 }, "stranger");
+    expect(host.sent.length).toBe(before);
+  });
+
+  it("reassembles a paint layer sent in parts, and abandons a stale one", () => {
+    const { host, runtime, sim } = startRuntime();
+    host.arrive({ id: "seat-a", displayName: "Ada" });
+    host.arrive({ id: "seat-b", displayName: "Bex" });
+    host.message(command({ type: "player_ready", ready: true }), "seat-a");
+    host.message(command({ type: "player_ready", ready: true }), "seat-b");
+    host.message(command({ type: "start_match" }), "seat-a");
+    for (let i = 0; i < 500; i += 1) runtime.tick();
+
+    const mimic = ["seat-a", "seat-b"].find(
+      (seat) => sim.getPrivateStateFor(seat)?.role === "mimic",
+    ) as string;
+    const layer = encodePaintLayer([
+      {
+        target: 0,
+        u: 0.5,
+        v: 0.5,
+        radius: 0.25,
+        color: [0.9, 0.3, 0.1],
+        opacity: 1,
+        erase: false,
+        continued: false,
+        metallic: 0,
+        smoothness: 0.5,
+        emissive: 0,
+      },
+    ]);
+    const half = Math.ceil(layer.length / 2);
+
+    // Half a layer is not a layer: an incomplete revision must reach the
+    // simulation neither as work nor as a refusal.
+    const quiet = host.sent.length;
+    host.emit("message", { v: SERVER_PROTOCOL_VERSION, t: "paint", rev: 1, i: 0, n: 2, data: layer.slice(0, half) }, mimic);
+    expect(host.sent.length).toBe(quiet);
+
+    // A part of a newer revision abandons the older one rather than splicing
+    // two authors' work into a layer neither of them painted.
+    host.emit("message", { v: SERVER_PROTOCOL_VERSION, t: "paint", rev: 2, i: 0, n: 2, data: layer.slice(0, half) }, mimic);
+    host.emit("message", { v: SERVER_PROTOCOL_VERSION, t: "paint", rev: 2, i: 1, n: 2, data: layer.slice(half) }, mimic);
+    runtime.tick();
+
+    // Completed, and accepted: the authority refused nothing back to the seat.
+    const refusals = host
+      .sentOfType("rejected")
+      .filter((entry) => entry["to"] === mimic);
+    expect(refusals).toEqual([]);
+
+    // The layer the authority now holds is the whole one, which it proves by
+    // carrying it onto the disguise the seat locks.
+    const wire = createReferenceDisguiseWire(1);
+    wire.root.position = [0.3, 0, 0];
+    const pose = encodeDisguiseWire(wire);
+    host.emit(
+      "message",
+      { v: SERVER_PROTOCOL_VERSION, t: "cmd", cmd: { type: "lock_disguise", payload: pose, revision: 2 } },
+      mimic,
+    );
+    runtime.tick();
+    expect(sim.getPrivateStateFor(mimic)?.ownDisguise?.encodedPaint).toBe(layer);
   });
 
   it("keeps its own clock rather than trusting the sandbox for time", () => {

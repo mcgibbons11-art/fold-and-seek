@@ -13,6 +13,8 @@ import {
 import {
   baseSeatIdOf,
   DEFAULT_MATCH_SETTINGS,
+  MAX_PAINT_PARTS,
+  PAINT_PART_CHARS,
   PrivateSimEventSchema,
   SERVER_HELLO_KEY,
   SERVER_PROTOCOL_VERSION,
@@ -1119,6 +1121,19 @@ export class PortalsNetAdapter implements NetworkAdapter {
   sendForgeSnapshot(snapshot: ForgeSnapshot): void {
     if (this.connection.status !== "connected" || this.selfSeatId === null) return;
     this.lastForgeSnapshot = snapshot;
+    // A pose goes to the referee as a message, never as a state key this
+    // client writes: the server cannot tell who wrote a key, so a published
+    // pose book is forgeable by any peer, while the relay stamps the sender
+    // of a message itself.
+    if (this.referee !== null) {
+      this.rawSend({
+        v: SERVER_PROTOCOL_VERSION,
+        t: "forge",
+        pose: snapshot.encodedPose,
+        rev: snapshot.revision,
+      } as unknown as NetEnvelope);
+      return;
+    }
     if (this.isAuthority()) {
       this.applyForgeSnapshot(this.selfSeatId, snapshot);
       return;
@@ -1136,6 +1151,15 @@ export class PortalsNetAdapter implements NetworkAdapter {
   sendPaintUpdate(update: PaintUpdate): void {
     if (this.connection.status !== "connected" || this.selfSeatId === null) return;
     this.lastPaintUpdate = update;
+    // Paint is the one payload too large for a single relay message, so it is
+    // sent whole, in numbered parts the authority reassembles. The compact
+    // delta encoding used between peers is not used here: the simulation
+    // records a complete layer, and the referee holds no peer's paint history
+    // to apply a delta against.
+    if (this.referee !== null) {
+      this.sendPaintToReferee(update);
+      return;
+    }
     if (this.isAuthority()) {
       this.applyPaintUpdate(this.selfSeatId, update);
       return;
@@ -2114,6 +2138,32 @@ export class PortalsNetAdapter implements NetworkAdapter {
     if (this.referee === null) return;
     if (this.clock() - this.referee.heardAtMs < REFEREE_SILENCE_MS) return;
     this.loseReferee();
+  }
+
+  /**
+   * Sends one paint layer to the referee, split to fit the relay's ceiling.
+   *
+   * A layer at the wire's own ceiling is about 12 KB against an 8 KB message
+   * cap. Refusing to send an oversized layer beats truncating one: a
+   * half-layer decodes into paint the player never applied.
+   */
+  private sendPaintToReferee(update: PaintUpdate): void {
+    const encoded = update.encodedPaint;
+    const parts = Math.ceil(encoded.length / PAINT_PART_CHARS);
+    if (parts < 1 || parts > MAX_PAINT_PARTS) {
+      console.warn(`[portals] paint layer of ${encoded.length} chars will not fit; dropping`);
+      return;
+    }
+    for (let index = 0; index < parts; index += 1) {
+      this.rawSend({
+        v: SERVER_PROTOCOL_VERSION,
+        t: "paint",
+        rev: update.revision,
+        i: index,
+        n: parts,
+        data: encoded.slice(index * PAINT_PART_CHARS, (index + 1) * PAINT_PART_CHARS),
+      } as unknown as NetEnvelope);
+    }
   }
 
   /** True while an authoritative server is running this session. */

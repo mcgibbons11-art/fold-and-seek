@@ -10,7 +10,10 @@ import type { MatchCommand, PrivateSimEvent, PublicMatchState, SimEvent } from "
  */
 
 export {
+  MAX_PAINT_PARTS,
+  MAX_SERVER_MESSAGE_BYTES,
   MAX_SERVER_STATE_CHUNKS,
+  PAINT_PART_CHARS,
   SERVER_BROADCASTS_PER_SECOND,
   SERVER_DEBUG_KEY,
   SERVER_HELLO_KEY,
@@ -35,7 +38,19 @@ export type ClientToServer =
       readonly eye?: readonly [number, number, number];
     }
   | { readonly v: number; readonly t: "eye"; readonly eye: readonly [number, number, number] | null }
-  | { readonly v: number; readonly t: "resync" };
+  | { readonly v: number; readonly t: "resync" }
+  /** The sender's latest legal Forge pose; see @foldseek/shared for why it is
+   * a message rather than a key the owner writes. */
+  | { readonly v: number; readonly t: "forge"; readonly pose: string; readonly rev: number }
+  /** One numbered part of a body-paint layer, reassembled here. */
+  | {
+      readonly v: number;
+      readonly t: "paint";
+      readonly rev: number;
+      readonly i: number;
+      readonly n: number;
+      readonly data: string;
+    };
 
 export type ServerToClient =
   | {

@@ -1,4 +1,5 @@
 import type {
+  CommandResult,
   DisguisePlacement,
   MatchSimulation,
   PrivateSimEvent,
@@ -8,6 +9,7 @@ import type { Vec3Like } from "@foldseek/map-data";
 import { baseSeatIdOf, derivedSeatId, encodeStateChunks } from "@foldseek/shared";
 
 import {
+  MAX_PAINT_PARTS,
   MAX_SERVER_STATE_CHUNKS,
   SERVER_DEBUG_KEY,
   SERVER_HELLO_KEY,
@@ -70,6 +72,11 @@ export class PortalsServerRuntime {
    * the two only coincide for a signed-out guest.
    */
   private readonly seatByConnection = new Map<string, string>();
+  /** Paint layers still arriving, one in flight per seat. */
+  private readonly paintParts = new Map<
+    string,
+    { readonly rev: number; readonly parts: (string | undefined)[] }
+  >();
   /** How many keys the last publication used, so a shorter one clears the tail. */
   private publishedCount = 0;
   private stateSeq = 0;
@@ -107,6 +114,7 @@ export class PortalsServerRuntime {
       // The seat is held, not dropped. A player who closes the tab mid-round
       // has a grace window to come back to their own disguise, and the
       // simulation runs that clock and evicts the seat itself when it expires.
+      this.paintParts.delete(seatId);
       this.drain(this.sim.markDisconnected(seatId, this.nowMs));
       this.options.onEye(seatId, null);
       this.publishState();
@@ -132,6 +140,54 @@ export class PortalsServerRuntime {
     this.ticks += 1;
     this.drain(this.sim.tick(this.nowMs));
     if (this.ticks % this.options.stateEveryTicks === 0) this.publishState();
+  }
+
+  /**
+   * Gathers the numbered parts of one seat's paint layer.
+   *
+   * Returns the whole layer once the last part lands, and null while it is
+   * still arriving. A seat holds at most one layer in progress: a part from a
+   * newer revision abandons the old one rather than splicing two authors'
+   * work into a layer neither of them made.
+   */
+  private collectPaint(
+    seatId: string,
+    part: { readonly rev: number; readonly i: number; readonly n: number; readonly data: string },
+  ): string | null {
+    if (part.n < 1 || part.n > MAX_PAINT_PARTS) return null;
+    if (part.i < 0 || part.i >= part.n) return null;
+
+    const pending = this.paintParts.get(seatId);
+    const current =
+      pending !== undefined && pending.rev === part.rev && pending.parts.length === part.n
+        ? pending
+        : // Filled rather than sized: a sparse array's holes are SKIPPED by
+          // `some`, which would report a half-received layer as complete and
+          // splice it into something nobody painted.
+          {
+            rev: part.rev,
+            parts: Array.from({ length: part.n }, () => undefined as string | undefined),
+          };
+    current.parts[part.i] = part.data;
+    this.paintParts.set(seatId, current);
+
+    if (current.parts.some((entry) => entry === undefined)) return null;
+    this.paintParts.delete(seatId);
+    return current.parts.join("");
+  }
+
+  /** Tells a seat its work was refused, or lets the result out to the room. */
+  private refuseOrDrain(seatId: string, result: CommandResult): void {
+    if (!result.accepted) {
+      this.broadcast({
+        v: this.options.protocolVersion,
+        t: "rejected",
+        to: seatId,
+        reason: result.detail ?? result.reason ?? "rejected",
+      });
+      return;
+    }
+    this.drain(result);
   }
 
   /**
@@ -188,6 +244,16 @@ export class PortalsServerRuntime {
     }
     if (envelope.t === "resync") {
       this.syncTo(fromId, seatId);
+      return;
+    }
+    if (envelope.t === "forge") {
+      this.refuseOrDrain(seatId, this.sim.recordForgeSnapshot(seatId, envelope.pose, envelope.rev, this.nowMs));
+      return;
+    }
+    if (envelope.t === "paint") {
+      const layer = this.collectPaint(seatId, envelope);
+      if (layer === null) return;
+      this.refuseOrDrain(seatId, this.sim.recordPaintUpdate(seatId, layer, envelope.rev, this.nowMs));
       return;
     }
     if (envelope.t !== "cmd") return;

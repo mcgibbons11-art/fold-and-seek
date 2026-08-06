@@ -55,6 +55,19 @@ export const MAX_SERVER_STATE_CHUNKS = SERVER_STATE_KEYS.length;
 export const SERVER_STATE_WRITES_PER_SECOND = 30;
 /** What the authority may broadcast in a second, documented as about sixty. */
 export const SERVER_BROADCASTS_PER_SECOND = 60;
+
+/** The relay's ceiling on one message or state value. */
+export const MAX_SERVER_MESSAGE_BYTES = 8_192;
+
+/**
+ * Characters of paint carried per part. Well under the byte ceiling because
+ * the payload is JSON-quoted and rides with an envelope.
+ */
+export const PAINT_PART_CHARS = 6_000;
+
+/** Most parts one layer may take, which bounds what a peer can make the
+ * authority hold while a layer is incomplete. */
+export const MAX_PAINT_PARTS = 4;
 /**
  * State key carrying the authority's own diagnostics.
  *
@@ -102,7 +115,34 @@ export type ClientToServer =
       readonly eye?: readonly [number, number, number];
     }
   | { readonly v: number; readonly t: "eye"; readonly eye: readonly [number, number, number] | null }
-  | { readonly v: number; readonly t: "resync" };
+  | { readonly v: number; readonly t: "resync" }
+  /**
+   * The sender's latest legal Forge pose.
+   *
+   * A pose travels as a MESSAGE rather than a state key the owner writes,
+   * because the server's `state` event carries no writer: it cannot tell who
+   * wrote a key, so a client-published pose book is forgeable by any peer. On
+   * a message the relay stamps `fromId` itself, which is the only attribution
+   * either side can trust.
+   */
+  | { readonly v: number; readonly t: "forge"; readonly pose: string; readonly rev: number }
+  /**
+   * One part of the sender's body-paint layer.
+   *
+   * Paint is the one payload that does not fit a single relay message - a
+   * layer at the wire ceiling is about 12 KB against an 8 KB cap - so it is
+   * sent in numbered parts and reassembled by the authority. Parts carry the
+   * revision they belong to, so a layer that is still arriving when a newer
+   * one starts is abandoned rather than spliced into a hybrid nobody authored.
+   */
+  | {
+      readonly v: number;
+      readonly t: "paint";
+      readonly rev: number;
+      readonly i: number;
+      readonly n: number;
+      readonly data: string;
+    };
 
 export type ServerToClient =
   | {
