@@ -5,7 +5,6 @@ import {
   starterArrangementLabel,
   type StarterArrangementId,
 } from "../mimic/disguiseState";
-import { PANEL_PROFILE_IDS, type PanelProfileId } from "../mimic/panels";
 import { MAX_SHAPES, SHAPE_PROFILE_IDS } from "@foldseek/shared";
 import { SEGMENT_PROFILE_IDS, type SegmentProfileId } from "../mimic/segmentForm";
 import {
@@ -16,13 +15,11 @@ import {
 import { PaintPanel } from "./paint/PaintPanel";
 import {
   FORGE_TOOL_MODES,
-  FORGE_QUICK_PANELS,
   FORGE_QUICK_SHAPES,
   FORGE_UI_ATTRIBUTE,
   type ForgeController,
   type ForgeHudState,
   type ForgeToolMode,
-  type PanelNumericKey,
   type SegmentFormNumericKey,
 } from "../forge/ForgeController";
 import { BRASS_LIT, CREAM, FONT_DISPLAY, FONT_UI, PRESS_CLASS, keycapStyle, plate } from "./rounds/theme";
@@ -1193,106 +1190,6 @@ function LockReadiness({ state }: { readonly state: ForgeHudState }): ReactEleme
       {valid ? null : <div style={{ marginTop: 5, fontSize: 10, color: "#e0785f" }}>{state.lockIssues[0]}</div>}
       {anchorsStable ? null : <div style={{ marginTop: 3, fontSize: 10, color: "#e0785f" }}>Adjust: {state.unsatisfiedAnchors.join(", ")}</div>}
     </div>
-  );
-}
-
-const PANEL_SLIDERS: readonly {
-  readonly key: PanelNumericKey;
-  readonly label: string;
-  readonly min: number;
-  readonly max: number;
-  readonly step: number;
-}[] = [
-  { key: "deployed", label: "Deploy", min: 0, max: 1, step: 0.01 },
-  { key: "hingeAngle", label: "Hinge", min: -180, max: 180, step: 1 },
-  { key: "extension", label: "Extension", min: 0, max: 1, step: 0.01 },
-  { key: "width", label: "Width", min: 0, max: 1, step: 0.01 },
-  { key: "height", label: "Height", min: 0, max: 1, step: 0.01 },
-];
-
-function PanelPanel({ controller, state, onCommit }: ContextPanelProps): ReactElement {
-  const selection = state.panel;
-  if (selection === null || selection.panel === null) {
-    return (
-      <Section title="Panels">
-        <div style={{ opacity: 0.65 }}>
-          Click a brass stud on the body to fold a panel out of that socket.
-        </div>
-      </Section>
-    );
-  }
-  const panel = selection.panel;
-  return (
-    <Section title={selection.socketId.replace("panel_socket_", "panel ")}>
-      <div style={{ opacity: 0.65, marginBottom: 8 }}>
-        Pick a panel shape, then drag its glowing tip in the world to place it.
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, marginBottom: 12 }}>
-        {FORGE_QUICK_PANELS.map((preset) => (
-          <button
-            key={preset.label}
-            type="button"
-            style={{ ...buttonStyle, textAlign: "center", margin: 0 }}
-            onClick={() => controller.applyPanelPreset(preset.values, preset.profileId)}
-          >
-            {preset.label}
-          </button>
-        ))}
-      </div>
-      {PANEL_SLIDERS.filter((slider) => ["deployed", "width", "height"].includes(slider.key)).map((slider) => (
-        <Slider
-          key={slider.key}
-          label={slider.label}
-          min={slider.min}
-          max={slider.max}
-          step={slider.step}
-          value={panel[slider.key]}
-          remountKey={`${selection.socketId}:${slider.key}:${state.formEpoch}`}
-          onInput={(value) => {
-            controller.setPanelValue(slider.key, value);
-          }}
-          onCommit={onCommit}
-        />
-      ))}
-      <details style={{ borderTop: EDGE, paddingTop: 8, marginBottom: 8 }}>
-        <summary style={{ cursor: "pointer", color: BRASS_LIT, marginBottom: 8 }}>Hinge and profile</summary>
-        {PANEL_SLIDERS.filter((slider) => ["hingeAngle", "extension"].includes(slider.key)).map((slider) => (
-          <Slider
-            key={slider.key}
-            label={slider.label}
-            min={slider.min}
-            max={slider.max}
-            step={slider.step}
-            value={panel[slider.key]}
-            remountKey={`${selection.socketId}:${slider.key}:${state.formEpoch}`}
-            onInput={(value) => controller.setPanelValue(slider.key, value)}
-            onCommit={onCommit}
-          />
-        ))}
-        <span style={labelStyle}><span>Profile</span></span>
-        <select
-          style={selectStyle}
-          value={panel.profileId}
-          onChange={(event) => {
-            controller.setPanelProfile(event.target.value as PanelProfileId);
-            controller.commitEdits();
-          }}
-        >
-          {PANEL_PROFILE_IDS.map((id) => (
-            <option key={id} value={id} style={{ color: "#14100c" }}>{id.replace(/_/g, " ")}</option>
-          ))}
-        </select>
-      </details>
-      <button
-        type="button"
-        style={{ ...buttonStyle, marginBottom: 0 }}
-        onClick={() => {
-          controller.removePanel(selection.socketId);
-        }}
-      >
-        Stow this panel
-      </button>
-    </Section>
   );
 }
 
