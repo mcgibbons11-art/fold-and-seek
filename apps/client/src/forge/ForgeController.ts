@@ -2046,7 +2046,7 @@ export class ForgeController {
       // click, and the disguise stayed empty with no reason given.
       this.status = "The disguise is locked. Unlock it to keep building.";
       this.audio.play("ui_deny");
-      this.refreshAll();
+      this.emit();
       return false;
     }
     const edit = addShapeToList(this.state.shapes, profileId, bone ?? this.shapeBone(), "body");
@@ -2070,7 +2070,7 @@ export class ForgeController {
         ? "The disguise is locked. Unlock it to keep building."
         : "Select a shape first, in the room or in the list.";
       this.audio.play("ui_deny");
-      this.refreshAll();
+      this.emit();
       return false;
     }
     const edit = duplicateShapeById(this.state.shapes, this.selectedShapeId);
@@ -2091,7 +2091,7 @@ export class ForgeController {
         ? "The disguise is locked. Unlock it to keep building."
         : "Select a shape first, in the room or in the list.";
       this.audio.play("ui_deny");
-      this.refreshAll();
+      this.emit();
       return false;
     }
     const edit = removeShapeById(this.state.shapes, this.selectedShapeId);
@@ -2122,12 +2122,14 @@ export class ForgeController {
       this.state,
     );
     this.refreshAll();
+    this.emit();
     return true;
   }
 
   selectShape(id: string | null): void {
     this.selectedShapeId = id;
     this.refreshAll();
+    this.emit();
   }
 
   /** The shapes a disguise carries, with the names the object panel draws. */
@@ -2156,6 +2158,10 @@ export class ForgeController {
     this.selectedShapeId = edit.selectedId === "" ? null : edit.selectedId;
     this.audio.play("panel_snap");
     this.refreshAll();
+    // refreshAll redraws the body; only emit tells the panel anything
+    // happened. Without it a shape really was added and the tool went on
+    // reading NOTHING BUILT YET, which is exactly how this looked dead.
+    this.emit();
   }
 
   addPanel(socketId: string): void {
@@ -3929,6 +3935,7 @@ export class ForgeController {
         this.state,
       );
       this.refreshAll();
+      this.emit();
       return;
     }
 
