@@ -155,7 +155,7 @@ record("adding shapes works", addedCube && addedCylinder && /2 of 16 shapes/i.te
   (afterAdd.match(/\d+ of 16 shapes/i) ?? ["no count"])[0]);
 
 // Duplicate by key, then delete by key.
-await page.keyboard.press("d");
+await page.keyboard.press("Control+d");
 await page.waitForTimeout(900);
 const afterDup = await textOf();
 record("D duplicates", /3 of 16 shapes/i.test(afterDup),
