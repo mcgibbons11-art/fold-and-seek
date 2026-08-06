@@ -502,6 +502,10 @@ const GIZMO_PICK_RADIUS_M = WORLD_SCALE.playerHeight * 0.09;
 /** A shape may not be scaled away to nothing, nor past the body's own reach. */
 const SHAPE_MIN_SCALE = 0.02;
 const SHAPE_MAX_SCALE = 4;
+/** A drag the width of the body turns a shape most of a half circle. */
+const SHAPE_ROTATE_RAD_PER_METRE = Math.PI * 1.4;
+const SHAPE_ROTATE_SCRATCH = new THREE.Quaternion();
+const SHAPE_START_SCRATCH = new THREE.Quaternion();
 const SHAPE_AXIS_X = new THREE.Vector3(1, 0, 0);
 const SHAPE_AXIS_Y = new THREE.Vector3(0, 1, 0);
 const SHAPE_AXIS_Z = new THREE.Vector3(0, 0, 1);
@@ -835,7 +839,13 @@ export class ForgeController {
      * body. A shape arrives at its bone's origin, so without this the only
      * thing a player could do with one is delete it again.
      */
-    shape: { id: string; start: [number, number, number] } | null;
+    shape: {
+      id: string;
+      start: [number, number, number];
+      startRotation: [number, number, number, number];
+      /** Shift turns the shape about the axis instead of sliding along it. */
+      rotate: boolean;
+    } | null;
   } | null = null;
   private selectedSocket: PanelSocketName | null = null;
   private formEpoch = 0;
@@ -3919,7 +3929,10 @@ export class ForgeController {
     return [...slots];
   }
 
-  private beginGizmoDrag(arrow: { key: "width" | "length" | "depth"; dir: THREE.Vector3 }): void {
+  private beginGizmoDrag(
+    arrow: { key: "width" | "length" | "depth"; dir: THREE.Vector3 },
+    rotate = false,
+  ): void {
     if (this.resizeGizmo === null) return;
     this.commitEdits();
     const origin = this.resizeGizmo.position.clone();
@@ -3936,7 +3949,12 @@ export class ForgeController {
         startT: this.gizmoAxisParam(origin, arrow.dir),
         startValues: new Map(),
         before: new Map(),
-        shape: { id: shape.id, start: [...shape.position] as [number, number, number] },
+        shape: {
+          id: shape.id,
+          start: [...shape.position] as [number, number, number],
+          startRotation: [...shape.rotation] as [number, number, number, number],
+          rotate,
+        },
       };
       this.startManipulationAudio();
       this.canvas.style.cursor = "grabbing";
@@ -3973,10 +3991,28 @@ export class ForgeController {
     if (drag.shape !== null) {
       const shape = this.state.shapes.find((entry) => entry.id === drag.shape?.id);
       if (shape !== undefined) {
-        // Metres along the axis the arrow points, in the bone's own frame,
-        // which is the frame the shape is stored in.
         const axis = drag.key === "width" ? 0 : drag.key === "length" ? 1 : 2;
-        shape.position[axis] = (drag.shape.start[axis] ?? 0) + delta;
+        if (drag.shape.rotate) {
+          // Free rotation about the arrow's own axis. Quarter turns square a
+          // shape up fast; this is for the tilted lid and the leaning plank
+          // that a room actually contains.
+          const turn = SHAPE_ROTATE_SCRATCH.setFromAxisAngle(
+            axis === 0 ? SHAPE_AXIS_X : axis === 1 ? SHAPE_AXIS_Y : SHAPE_AXIS_Z,
+            delta * SHAPE_ROTATE_RAD_PER_METRE,
+          );
+          const start = SHAPE_START_SCRATCH.set(
+            drag.shape.startRotation[0],
+            drag.shape.startRotation[1],
+            drag.shape.startRotation[2],
+            drag.shape.startRotation[3],
+          );
+          const next = start.clone().multiply(turn).normalize();
+          shape.rotation = [next.x, next.y, next.z, next.w];
+        } else {
+          // Metres along the axis the arrow points, in the bone's own frame,
+          // which is the frame the shape is stored in.
+          shape.position[axis] = (drag.shape.start[axis] ?? 0) + delta;
+        }
       }
       this.pendingValueRefresh = "solve";
       return;
@@ -4007,10 +4043,22 @@ export class ForgeController {
       if (moved === undefined) return;
       const before = cloneDisguiseState(this.state);
       const restored = before.shapes.find((entry) => entry.id === drag.shape?.id);
-      if (restored !== undefined) restored.position = [...drag.shape.start] as [number, number, number];
-      if (restored?.position.every((axis, index) => axis === moved.position[index]) === true) return;
+      if (restored !== undefined) {
+        restored.position = [...drag.shape.start] as [number, number, number];
+        restored.rotation = [...drag.shape.startRotation] as [number, number, number, number];
+      }
+      const unchanged =
+        restored !== undefined &&
+        restored.position.every((axis, index) => axis === moved.position[index]) &&
+        restored.rotation.every((axis, index) => axis === moved.rotation[index]);
+      if (unchanged) return;
       this.commands.pushApplied(
-        createReplaceCommand(before, cloneDisguiseState(this.state), issuedAt, "move shape"),
+        createReplaceCommand(
+          before,
+          cloneDisguiseState(this.state),
+          issuedAt,
+          drag.shape.rotate ? "turn shape" : "move shape",
+        ),
         this.state,
       );
       this.refreshAll();
@@ -4625,7 +4673,10 @@ export class ForgeController {
       // all - the list was the only way to select one.
       const arrow = this.pickGizmoArrow();
       if (arrow !== null) {
-        this.beginGizmoDrag(arrow);
+        // Shift turns instead of sliding, which keeps one set of arrows doing
+        // both jobs rather than putting a mode switch between the player and
+        // the shape they are holding.
+        this.beginGizmoDrag(arrow, event.shiftKey);
         this.audio.play("ui_click");
         return true;
       }

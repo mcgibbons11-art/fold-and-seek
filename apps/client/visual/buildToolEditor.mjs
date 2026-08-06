@@ -167,6 +167,15 @@ const afterDel = await textOf();
 record("Delete removes", /2 of 16 shapes/i.test(afterDel),
   (afterDel.match(/\d+ of 16 shapes/i) ?? ["no count"])[0]);
 
+// Stretch and turn: the controls that make a barrel out of a cylinder.
+const stretched = await clickIf(/^longer$/i, 6_000);
+await page.waitForTimeout(700);
+const turned = await clickIf(/^turn$/i, 6_000);
+await page.waitForTimeout(700);
+const afterShape = await textOf();
+record("stretch and turn are reachable", stretched && turned,
+  (afterShape.match(/\d+ OF 16 SHAPES/i) ?? ["no count"])[0]);
+
 // Drag the middle of the pane, where the gizmo sits on the selected shape.
 await dragAt(0.5, 0.5, 0.62, 0.5);
 await page.waitForTimeout(900);
