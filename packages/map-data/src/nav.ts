@@ -397,7 +397,7 @@ export const WALKABLE_SURFACES: readonly WalkableSurface[] = [
  * The window bay is left open between the sill and the head, which is what lets
  * a player stand on the sill instead of inside a wall.
  */
-const SHELL_BLOCKERS: readonly AABB[] = [
+export const SHELL_BLOCKERS: readonly AABB[] = [
   // North wall, in bands around the window bay and the street door.
   aabb(SHOP_MIN_X, 0, SHOP_MIN_Z, WINDOW_MIN_X, WALL_HEIGHT, SHOP_MIN_Z + WALL_THICKNESS),
   aabb(WINDOW_MIN_X, 0, SHOP_MIN_Z, WINDOW_MAX_X, WINDOW_SILL_Y, SHOP_MIN_Z + WALL_THICKNESS),
@@ -719,8 +719,46 @@ export const OFFICE_DOOR_BLOCKER: AABB = aabb(
  * hiding place the map means to offer, and its blockers are hand-written
  * board by board so those bays stay open.
  */
+/**
+ * How much of a furnishing's authored box a Mimic is actually stopped by.
+ *
+ * A hider's whole job is to press itself against the furniture until it reads
+ * as part of it, and authored collision boxes are drawn a little proud of the
+ * mesh so a walker never clips a corner. For the Inspector that is invisible;
+ * for a Mimic it is a force field holding it away from the one thing it is
+ * trying to become.
+ *
+ * Walls and the bookcase bays are NOT shrunk. The shell is what keeps a body
+ * inside the shop at all, and the bays are hand-written board by board
+ * precisely so the hollows stay open - moving either would let a player out of
+ * the map or collapse a hiding place the map means to offer.
+ */
+export const MIMIC_FURNISHING_COLLIDER_SCALE = 0.7;
+
+/** Pulls a box's horizontal extents toward its centre, leaving height alone. */
+function snug(box: AABB, scale: number): AABB {
+  const midX = (box.min.x + box.max.x) / 2;
+  const midZ = (box.min.z + box.max.z) / 2;
+  const extentX = ((box.max.x - box.min.x) / 2) * scale;
+  const extentZ = ((box.max.z - box.min.z) / 2) * scale;
+  return {
+    min: { x: midX - extentX, y: box.min.y, z: midZ - extentZ },
+    max: { x: midX + extentX, y: box.max.y, z: midZ + extentZ },
+  };
+}
+
+/** The furnishings a Mimic may press right up against. */
+export const MIMIC_FURNISHING_BLOCKERS: readonly AABB[] = [
+  ...FURNITURE_BLOCKERS,
+  ...CLUTTER_BLOCKERS,
+].map((box) => snug(box, MIMIC_FURNISHING_COLLIDER_SCALE));
+
 export const MIMIC_NAV_BLOCKERS: readonly AABB[] = [
-  ...NAV_BLOCKERS,
+  // The shell at full size: nothing lets a body out of the shop.
+  ...SHELL_BLOCKERS,
+  // The bays at full size: their hollows are authored hiding places.
+  ...EXPANSION_BLOCKERS,
+  ...MIMIC_FURNISHING_BLOCKERS,
   // The tighter collider, not the aiming box: a Mimic has to be able to press
   // right up against the object it is imitating. Planting a root inside one is
   // refused separately, by canOccupy against the full volume.

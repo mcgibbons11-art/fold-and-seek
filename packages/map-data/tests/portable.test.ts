@@ -9,6 +9,8 @@ import {
   NAV_DATA,
   PROP_FOCUS_BOUNDS,
   SHOP_PLACEMENTS,
+  MIMIC_NAV_BLOCKERS,
+  SHELL_BLOCKERS,
   SOLID_PROP_COLLIDERS,
   SOLID_PROP_VOLUMES,
   SpatialValidatorImpl,
@@ -162,6 +164,23 @@ describe("solid props stop a body without holding it at arm's length", () => {
       // collider would let a body stand through the top of it.
       expect(collider.min.y).toBe(volume.min.y);
       expect(collider.max.y).toBe(volume.max.y);
+    }
+  });
+});
+
+describe("what a Mimic is allowed to press against", () => {
+  it("keeps every wall at full size, so nobody leaves the shop", () => {
+    // The shell is the one thing that must not move: shrinking it opens a gap
+    // between the collision and the plaster that a body can be pushed into.
+    for (const wall of SHELL_BLOCKERS) {
+      const kept = MIMIC_NAV_BLOCKERS.some(
+        (box) =>
+          box.min.x === wall.min.x &&
+          box.max.x === wall.max.x &&
+          box.min.z === wall.min.z &&
+          box.max.z === wall.max.z,
+      );
+      expect(kept).toBe(true);
     }
   });
 });
