@@ -1758,7 +1758,10 @@ export class ForgeController {
     } else if (wasPainting) {
       this.paintTool.deactivate();
     }
-    this.mimic.setSocketMarkersVisible(mode === "panels");
+    // The PANELS slot is the build tool now, and it builds with placed
+    // primitives rather than flaps on sockets. Leaving the studs up put a ring
+    // of live-looking handles on a body they no longer do anything to.
+    this.mimic.setSocketMarkersVisible(false);
     this.materialDropperArmed = false;
     this.hoveredSlot = -1;
     this.hoveredSocket = null;
@@ -3759,6 +3762,16 @@ export class ForgeController {
     }
   }
 
+  /** The built shape under the pointer, so clicking one selects it. */
+  private pickShape(): string | null {
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const meshes = this.mimic.shapeMeshes.filter((mesh) => mesh.parent !== null);
+    const hit = this.raycaster.intersectObjects(meshes, false)[0];
+    if (hit === undefined) return null;
+    const index = this.mimic.shapeMeshes.indexOf(hit.object as THREE.Mesh);
+    return this.state.shapes[index]?.id ?? null;
+  }
+
   private pickGizmoArrow(): { key: "width" | "length" | "depth"; dir: THREE.Vector3 } | null {
     if (this.resizeGizmo === null || !this.resizeGizmo.visible) return null;
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
@@ -4497,6 +4510,23 @@ export class ForgeController {
     }
 
     if (this.mode === "panels") {
+      // The build tool's own pointer path, ahead of the panel handles it is
+      // replacing. Without this the arrows drew on a selected shape and did
+      // nothing when dragged, and a shape could not be picked in the world at
+      // all - the list was the only way to select one.
+      const arrow = this.pickGizmoArrow();
+      if (arrow !== null) {
+        this.beginGizmoDrag(arrow);
+        this.audio.play("ui_click");
+        return true;
+      }
+      const shapeId = this.pickShape();
+      if (shapeId !== null) {
+        this.selectShape(shapeId);
+        this.audio.play("ui_click");
+        return true;
+      }
+
       const tipSocket = this.pickPanelTipHandle();
       if (tipSocket !== null) {
         const panel = this.findPanel(tipSocket);
