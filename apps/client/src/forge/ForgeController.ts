@@ -823,6 +823,12 @@ export class ForgeController {
     startT: number;
     startValues: Map<number, number>;
     before: Map<number, SegmentFormState>;
+    /**
+     * Set while the gizmo is moving a built shape rather than resizing the
+     * body. A shape arrives at its bone's origin, so without this the only
+     * thing a player could do with one is delete it again.
+     */
+    shape: { id: string; start: [number, number, number] } | null;
   } | null = null;
   private selectedSocket: PanelSocketName | null = null;
   private formEpoch = 0;
@@ -2067,6 +2073,30 @@ export class ForgeController {
     if (edit === null) return false;
     this.commitShapes(edit, "delete shape");
     this.status = "Removed a shape.";
+    return true;
+  }
+
+  /**
+   * Moves the selected shape by a delta in its bone's frame, as one undoable
+   * edit.
+   *
+   * The gizmo drives the same path a fraction at a time while dragging. This
+   * is the whole move in one call, which is what a precise nudge wants: a
+   * shape that needs to sit two millimetres further out is easier typed than
+   * dragged at this scale, where a body is 0.35 m tall.
+   */
+  nudgeSelectedShape(dx: number, dy: number, dz: number): boolean {
+    const shape = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
+    if (this.locked || shape === undefined) return false;
+    const before = cloneDisguiseState(this.state);
+    shape.position[0] += dx;
+    shape.position[1] += dy;
+    shape.position[2] += dz;
+    this.commands.pushApplied(
+      createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "move shape"),
+      this.state,
+    );
+    this.refreshAll();
     return true;
   }
 
@@ -3648,6 +3678,24 @@ export class ForgeController {
 
   /** Parks the gizmo on the primary segment, in that segment's own frame. */
   private layoutResizeGizmo(): void {
+    // A selected shape gets the arrows while the build tool is open. A shape
+    // arrives at its bone's origin and there is nothing else to move it with,
+    // so without this the tool can only add and delete.
+    const shapeIndex =
+      this.toolsActive && this.mode === "panels" && !this.locked && this.selectedShapeId !== null
+        ? this.state.shapes.findIndex((entry) => entry.id === this.selectedShapeId)
+        : -1;
+    if (shapeIndex >= 0) {
+      const shapeMesh = this.mimic.shapeMeshes[shapeIndex];
+      const shapeGizmo = this.ensureResizeGizmo();
+      this.layoutSelectionOutlines(false);
+      if (shapeGizmo === null || shapeMesh === undefined) return;
+      shapeGizmo.visible = true;
+      shapeMesh.getWorldPosition(this.scratchVector);
+      shapeGizmo.position.copy(this.scratchVector);
+      return;
+    }
+
     const wanted =
       this.toolsActive &&
       this.mode === "shape" &&
@@ -3755,6 +3803,25 @@ export class ForgeController {
     if (this.resizeGizmo === null) return;
     this.commitEdits();
     const origin = this.resizeGizmo.position.clone();
+
+    // A selected shape takes the gizmo. Moving what you just built is the
+    // first thing anyone tries, and the arrows are already the language the
+    // Forge uses for "drag along this axis".
+    const shape = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
+    if (shape !== undefined) {
+      this.gizmoDrag = {
+        key: arrow.key,
+        dir: arrow.dir.clone(),
+        origin,
+        startT: this.gizmoAxisParam(origin, arrow.dir),
+        startValues: new Map(),
+        before: new Map(),
+        shape: { id: shape.id, start: [...shape.position] as [number, number, number] },
+      };
+      this.startManipulationAudio();
+      this.canvas.style.cursor = "grabbing";
+      return;
+    }
     const startValues = new Map<number, number>();
     const before = new Map<number, SegmentFormState>();
     for (const slot of this.resizeTargetSlots()) {
@@ -3771,6 +3838,7 @@ export class ForgeController {
       startT: this.gizmoAxisParam(origin, arrow.dir),
       startValues,
       before,
+      shape: null,
     };
     this.startManipulationAudio();
     this.canvas.style.cursor = "grabbing";
@@ -3781,6 +3849,19 @@ export class ForgeController {
     if (drag === null) return;
     const t = this.gizmoAxisParam(drag.origin, drag.dir);
     const delta = (t - drag.startT) * GIZMO_PARAM_PER_METRE;
+
+    if (drag.shape !== null) {
+      const shape = this.state.shapes.find((entry) => entry.id === drag.shape?.id);
+      if (shape !== undefined) {
+        // Metres along the axis the arrow points, in the bone's own frame,
+        // which is the frame the shape is stored in.
+        const axis = drag.key === "width" ? 0 : drag.key === "length" ? 1 : 2;
+        shape.position[axis] = (drag.shape.start[axis] ?? 0) + delta;
+      }
+      this.pendingValueRefresh = "solve";
+      return;
+    }
+
     for (const [slot, start] of drag.startValues) {
       const form = this.pose.segments[slot];
       if (form === undefined) continue;
@@ -3797,6 +3878,25 @@ export class ForgeController {
     this.canvas.style.cursor = "crosshair";
     this.flushPendingValueRefresh();
     const issuedAt = performance.now();
+
+    if (drag.shape !== null) {
+      // One drag, one command. The live edit already moved the shape, so the
+      // undo has to carry the position it started from rather than re-deriving
+      // it - the pointer is long gone by the time anyone presses undo.
+      const moved = this.state.shapes.find((entry) => entry.id === drag.shape?.id);
+      if (moved === undefined) return;
+      const before = cloneDisguiseState(this.state);
+      const restored = before.shapes.find((entry) => entry.id === drag.shape?.id);
+      if (restored !== undefined) restored.position = [...drag.shape.start] as [number, number, number];
+      if (restored?.position.every((axis, index) => axis === moved.position[index]) === true) return;
+      this.commands.pushApplied(
+        createReplaceCommand(before, cloneDisguiseState(this.state), issuedAt, "move shape"),
+        this.state,
+      );
+      this.refreshAll();
+      return;
+    }
+
     const parts: ForgeCommand[] = [];
     for (const [slot, beforeForm] of drag.before) {
       const form = this.pose.segments[slot];

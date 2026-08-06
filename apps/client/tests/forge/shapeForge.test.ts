@@ -190,6 +190,23 @@ describe("building a disguise in the Forge", () => {
     expect(forge.disguise.shapes).toHaveLength(0);
   });
 
+  it("moves a shape with the arrows, as one undoable drag", () => {
+    // A shape arrives at its bone's origin, so if the gizmo could not move it
+    // the build tool could only add and delete.
+    const forge = controller();
+    forge.setToolMode("panels");
+    forge.addShape("cube");
+    const placed = forge.disguise.shapes[0];
+    expect(placed).toBeDefined();
+    const before: [number, number, number] = [...(placed?.position ?? [0, 0, 0])] as [number, number, number];
+
+    forge.nudgeSelectedShape(0.25, 0, 0);
+    expect(forge.disguise.shapes[0]?.position[0]).toBeCloseTo(before[0] + 0.25, 5);
+
+    forge.undo();
+    expect(forge.disguise.shapes[0]?.position[0]).toBeCloseTo(before[0], 5);
+  });
+
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {
     const forge = controller();
     for (let index = 0; index < MAX_SHAPES; index += 1) forge.addShape("cube");
