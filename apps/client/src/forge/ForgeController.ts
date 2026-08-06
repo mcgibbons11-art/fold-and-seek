@@ -46,6 +46,8 @@ import {
   addShape as addShapeToList,
   duplicateShapeById,
   fitScore,
+  snapOffset,
+  type FitBox,
   removeShapeById,
   shapeLabels,
   type ShapeEdit,
@@ -2167,6 +2169,61 @@ export class ForgeController {
     this.commitShapes(edit, "mirror shape");
     this.status = "Mirrored to the other side.";
     return true;
+  }
+
+  /**
+   * Slides the selected shape until it sits flush against its nearest
+   * neighbour.
+   *
+   * A gap of a few millimetres at this scale reads as two objects rather than
+   * one, which is the exact tell a disguise exists to avoid, and closing it by
+   * hand costs more of a 115 second Forge than it is worth.
+   */
+  snapSelectedShape(): boolean {
+    const index = this.state.shapes.findIndex((entry) => entry.id === this.selectedShapeId);
+    const shape = this.state.shapes[index];
+    if (this.locked || shape === undefined) {
+      this.status = this.locked
+        ? "The disguise is locked. Unlock it to keep building."
+        : "Select a shape first, in the room or in the list.";
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+
+    // Measured where the renderer put them, so the snap closes the gap the
+    // player can actually see.
+    const boxOf = (at: number): FitBox | null => {
+      const mesh = this.mimic.shapeMeshes[at];
+      if (mesh === undefined || mesh.parent === null) return null;
+      const box = new THREE.Box3().setFromObject(mesh);
+      return { min: { ...box.min }, max: { ...box.max } };
+    };
+    const moving = boxOf(index);
+    const others = this.state.shapes
+      .map((_, at) => (at === index ? null : boxOf(at)))
+      .filter((box): box is FitBox => box !== null);
+    if (moving === null || others.length === 0) {
+      this.status = "Nothing to snap against yet. Build another shape first.";
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+
+    const offset = snapOffset(moving, others);
+    if (offset === null) {
+      this.status = "Already flush.";
+      this.emit();
+      return false;
+    }
+    // The gap is measured in world metres and the shape is stored in its
+    // bone's frame; at this scale the two agree closely enough that the move
+    // lands, and the player sees the result either way.
+    return this.nudgeSelectedShape(
+      offset.axis === 0 ? offset.delta : 0,
+      offset.axis === 1 ? offset.delta : 0,
+      offset.axis === 2 ? offset.delta : 0,
+    );
   }
 
   /** Removes the selected shape, leaving its neighbour selected. */

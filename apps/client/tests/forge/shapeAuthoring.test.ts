@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   addShape,
   fitScore,
+  snapOffset,
   duplicateShapeById,
   nextShapeId,
   removeShapeById,
@@ -105,5 +106,33 @@ describe("how much of the body a disguise actually hides", () => {
     // Stacking shapes on one limb must not read as hiding the whole body,
     // or the cheapest way to a perfect score is a pile on one arm.
     expect(fitScore([inside, outside], [box, box, box])).toBeCloseTo(0.5, 6);
+  });
+});
+
+describe("closing the gap between two built shapes", () => {
+  const box = (x0: number, x1: number) => ({
+    min: { x: x0, y: 0, z: 0 },
+    max: { x: x1, y: 1, z: 1 },
+  });
+
+  it("has nothing to say when there is nothing to snap against", () => {
+    expect(snapOffset(box(0, 1), [])).toBeNull();
+  });
+
+  it("closes a gap along the axis the shapes are nearest on", () => {
+    // A gap of a few millimetres at this scale reads as two objects rather
+    // than one, which is the tell a disguise exists to avoid.
+    const offset = snapOffset(box(0, 1), [box(1.2, 2.2)]);
+    expect(offset?.axis).toBe(0);
+    expect(offset?.delta).toBeCloseTo(0.2, 6);
+  });
+
+  it("pulls back rather than pushing through when the shapes overlap", () => {
+    const offset = snapOffset(box(0, 1), [box(0.8, 1.8)]);
+    expect(offset?.delta).toBeCloseTo(-0.2, 6);
+  });
+
+  it("says nothing when they already touch", () => {
+    expect(snapOffset(box(0, 1), [box(1, 2)])).toBeNull();
   });
 });

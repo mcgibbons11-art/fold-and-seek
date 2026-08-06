@@ -142,3 +142,48 @@ export function fitScore(parts: readonly FitPoint[], boxes: readonly FitBox[]): 
   }
   return inside / parts.length;
 }
+
+/**
+ * Where a shape has to move to sit flush against its nearest neighbour.
+ *
+ * Built shapes float. A barrel's two bands end up nearly touching, a lid ends
+ * up nearly on its jar, and "nearly" is what a hider gets shot for: a gap of a
+ * few millimetres at this scale reads as two objects rather than one, which is
+ * exactly the tell a disguise is trying not to give.
+ *
+ * Snapping moves along the single axis the two are already closest on, which is
+ * the one the player was plainly aiming at. Returns null when there is nothing
+ * to snap to, or when they already touch.
+ */
+/** Closer than this reads as touching, at a scale where the body is 0.35 m. */
+const FLUSH_TOLERANCE_M = 1e-4;
+
+export function snapOffset(
+  moving: FitBox,
+  others: readonly FitBox[],
+): { readonly axis: 0 | 1 | 2; readonly delta: number } | null {
+  let best: { axis: 0 | 1 | 2; delta: number; distance: number } | null = null;
+
+  for (const other of others) {
+    const axes: [0 | 1 | 2, number, number, number, number][] = [
+      [0, moving.min.x, moving.max.x, other.min.x, other.max.x],
+      [1, moving.min.y, moving.max.y, other.min.y, other.max.y],
+      [2, moving.min.z, moving.max.z, other.min.z, other.max.z],
+    ];
+    for (const [axis, lo, hi, otherLo, otherHi] of axes) {
+      // Two ways to sit flush: this one's far face on that one's near face,
+      // or the reverse. The smaller move is the one that was meant.
+      const above = otherHi - lo;
+      const below = otherLo - hi;
+      const delta = Math.abs(above) <= Math.abs(below) ? above : below;
+      const distance = Math.abs(delta);
+      // Already touching on this axis means the pair is flush, and moving them
+      // on a different axis would slide a seated shape off its neighbour -
+      // which is worse than the gap the player asked to close.
+      if (distance <= FLUSH_TOLERANCE_M) return null;
+      if (best === null || distance < best.distance) best = { axis, delta, distance };
+    }
+  }
+
+  return best === null ? null : { axis: best.axis, delta: best.delta };
+}

@@ -468,6 +468,15 @@ export function ForgeHud({
           <Keycap>M</Keycap>
           Mirror
         </button>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
+          disabled={state.locked || state.shapes.length < 2}
+          onClick={() => controller.snapSelectedShape()}
+        >
+          Snap flush
+        </button>
         <div className="fs-forge-history" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, paddingTop: 4, borderTop: EDGE }}>
           <button
             type="button"
