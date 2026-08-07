@@ -481,7 +481,10 @@ export function ForgeHud({
           type="button"
           className={PRESS_CLASS}
           style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
-          disabled={state.locked || state.shapes.length === 0 || state.sampledSwatchId === null}
+          // Enabled without a held finish on purpose. A disabled button says
+          // "not now" and never says why; pressing this one answers "sample a
+          // finish first, with F", which is the thing the player needs to know.
+          disabled={state.locked || state.shapes.length === 0}
           onClick={() => controller.paintSelectedShape()}
         >
           Paint it

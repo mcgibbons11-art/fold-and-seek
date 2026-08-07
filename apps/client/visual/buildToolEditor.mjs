@@ -222,6 +222,12 @@ const afterSnap = await textOf();
 record("snap flush is reachable and answers", snapped &&
   /already flush|nothing to snap|of 16 shapes/i.test(afterSnap), snapped ? "pressed" : "missing");
 
+// Paint one shape without repainting the rest.
+const painted = await clickIf(/^paint it$/i, 6_000);
+await page.waitForTimeout(900);
+record("per-shape paint is reachable", painted ||
+  /sample a finish first/i.test(await textOf()), painted ? "pressed" : "needs a held finish");
+
 // The two verdicts a hider builds against.
 const verdicts = await textOf();
 record("panel reports what it reads as and how hidden the body is",
