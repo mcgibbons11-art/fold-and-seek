@@ -25,6 +25,8 @@ export interface ShapeState {
   rotation: [number, number, number, number];
   scale: [number, number, number];
   materialSlotId: string;
+  /** The swept outline, for a drawn solid. Absent on the primitives. */
+  outline?: [number, number][];
 }
 
 /** Where a new shape appears, in the frame of the bone carrying it. */
@@ -50,6 +52,9 @@ export function createShape(
 export function cloneShapeState(shape: ShapeState): ShapeState {
   return {
     ...shape,
+    ...(shape.outline === undefined
+      ? {}
+      : { outline: shape.outline.map((point) => [...point] as [number, number]) }),
     position: [...shape.position] as [number, number, number],
     rotation: [...shape.rotation] as [number, number, number, number],
     scale: [...shape.scale] as [number, number, number],

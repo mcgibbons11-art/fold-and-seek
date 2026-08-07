@@ -29,6 +29,7 @@ import {
   createPanelGeometry,
   createPuckGeometry,
   createSegmentShellGeometry,
+  createDrawnGeometry,
   createShapeGeometry,
   writeSegmentShell,
 } from "./mimicGeometry";
@@ -195,6 +196,8 @@ interface ShapeVisual {
   readonly localRotation: THREE.Quaternion;
   boneIndex: number;
   present: boolean;
+  /** The outline the current geometry was built for, so it rebuilds only on change. */
+  outlineKey: string | null;
 }
 
 interface SegmentVisual {
@@ -475,6 +478,7 @@ export class MimicVisual {
         localRotation: new THREE.Quaternion(),
         boneIndex: 0,
         present: false,
+        outlineKey: null,
       });
     }
     this.shapes = shapes;
@@ -682,9 +686,21 @@ export class MimicVisual {
         state.rotation[3],
       );
       visual.mesh.scale.set(state.scale[0], state.scale[1], state.scale[2]);
-      const geometry = this.shapeGeometries.get(state.profileId);
-      if (geometry !== undefined && visual.mesh.geometry !== geometry) {
-        visual.mesh.geometry = geometry;
+      if (state.profileId === "drawn" && state.outline !== undefined) {
+        // A drawn solid owns its geometry: it is this player's outline and no
+        // other shape's, so it cannot come from the shared pool.
+        const key = JSON.stringify(state.outline);
+        if (visual.outlineKey !== key) {
+          visual.mesh.geometry.dispose();
+          visual.mesh.geometry = createDrawnGeometry(state.outline);
+          visual.outlineKey = key;
+        }
+      } else {
+        const geometry = this.shapeGeometries.get(state.profileId);
+        if (geometry !== undefined && visual.mesh.geometry !== geometry) {
+          visual.mesh.geometry = geometry;
+          visual.outlineKey = null;
+        }
       }
     }
   }

@@ -442,6 +442,31 @@ export function createPuckGeometry(radius: number, thickness: number): THREE.Buf
  * these each, and a disguise is read at a distance as a silhouette, where a
  * cylinder's facet count is invisible and its draw cost is not.
  */
+/**
+ * The solid a drawn outline becomes.
+ *
+ * The player's own sweep, closed and given thickness. One mesh, not an
+ * approximation assembled from boxes: what they drew is what stands in the
+ * room, which is the whole promise of drawing it.
+ */
+export function createDrawnGeometry(outline: readonly (readonly [number, number])[]): THREE.BufferGeometry {
+  if (outline.length < 3) return new THREE.BoxGeometry(1, 1, 1);
+  const path = new THREE.Shape();
+  const [first, ...rest] = outline;
+  path.moveTo(first?.[0] ?? 0, first?.[1] ?? 0);
+  for (const point of rest) path.lineTo(point[0], point[1]);
+  path.closePath();
+  const geometry = new THREE.ExtrudeGeometry(path, {
+    depth: 1,
+    bevelEnabled: false,
+    curveSegments: 4,
+  });
+  // Centred, because a shape carries its own position and a geometry with its
+  // own offset would fight the gizmo that moves it.
+  geometry.center();
+  return geometry;
+}
+
 export function createShapeGeometry(profileId: ShapeProfileId): THREE.BufferGeometry {
   switch (profileId) {
     case "cylinder":

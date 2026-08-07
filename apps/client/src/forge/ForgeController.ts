@@ -39,7 +39,7 @@ import {
   type PanelProfileId,
   type PanelState,
 } from "../mimic/panels";
-import { MAX_SHAPES, type ShapeProfileId } from "@foldseek/shared";
+import { MAX_OUTLINE_POINTS, MAX_SHAPES, type ShapeProfileId } from "@foldseek/shared";
 import { readsAs } from "@foldseek/map-data";
 import type { BoneName } from "../mimic/rig";
 import {
@@ -526,6 +526,17 @@ const SHAPE_NUDGE_M = 0.007;
 const AUTO_SEAT_M = 0.012;
 /** Smaller than this was a click, not a drawn shape. */
 const SHAPE_DRAW_MIN_M = 0.01;
+/**
+ * How wide a drawn disguise ends up, whatever size it was drawn.
+ *
+ * A little over the body's own height, so a drawing wraps its owner rather
+ * than towering over the room. Proportions are the player's; scale is not.
+ */
+/** How deep a drawn outline stands, as a share of its own width. */
+const DRAWN_THICKNESS_SHARE = 0.35;
+/** The pointer while the Build tool is up, so drawing looks like drawing. */
+const DRAW_CURSOR =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24'><path d='M3 21l4-1 12-12-3-3L4 17z' fill='%23e2b86a' stroke='%2314100c' stroke-width='1.5'/><path d='M16 5l3 3' stroke='%2314100c' stroke-width='1.5'/></svg>\") 2 22, crosshair";
 const SHAPE_MIN_SCALE = 0.02;
 const SHAPE_MAX_SCALE = 4;
 /** A drag the width of the body turns a shape most of a half circle. */
@@ -1807,6 +1818,9 @@ export class ForgeController {
   }
 
   setToolMode(mode: ForgeToolMode): void {
+    // The pointer says which tool is in hand: a crayon while the Build tool is
+    // up, the ordinary crosshair everywhere else.
+    this.canvas.style.cursor = mode === "panels" ? DRAW_CURSOR : "crosshair";
     if ((this.mode === mode && this.toolsActive) || this.locked) {
       return;
     }
@@ -2283,7 +2297,7 @@ export class ForgeController {
     const start = this.pointerOnDragPlane();
     if (start === null) return;
     this.shapeDraw = { points: [{ x: start.x, y: start.y }], plane: start.clone() };
-    this.canvas.style.cursor = "crosshair";
+    this.canvas.style.cursor = DRAW_CURSOR;
     // Says so while the stroke is live, which is both the feedback a player
     // needs and the only way to tell a draw that never started from one that
     // started and collected nothing.
@@ -2308,52 +2322,91 @@ export class ForgeController {
   private endShapeDraw(): void {
     const draw = this.shapeDraw;
     this.shapeDraw = null;
+    this.canvas.style.cursor = this.mode === "panels" ? DRAW_CURSOR : "crosshair";
     if (draw === null || this.locked) return;
     if (draw.points.length < 3) {
-      this.status = `That was a click, not a drawing (${String(draw.points.length)} points).`;
+      this.status = "That was a click. Hold the button and sweep to draw.";
       this.emit();
       return;
     }
 
-    const room = Math.max(0, MAX_SHAPES - this.state.shapes.length);
-    const boxes = strokeToBoxes(draw.points, room, SHAPE_DRAW_MIN_M);
-    if (boxes.length === 0) {
-      if (draw.points.length > 2) {
-        this.status = "That was too small to draw. Sweep a bigger outline.";
-        this.audio.play("ui_deny");
-        this.emit();
-      }
+    // The outline in its own local units, centred on itself. What the player
+    // swept IS the shape - one solid, at the size they drew it - rather than
+    // an approximation assembled out of boxes.
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const point of draw.points) {
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, point.y);
+      maxY = Math.max(maxY, point.y);
+    }
+    const width = maxX - minX;
+    const height = maxY - minY;
+    if (width < SHAPE_DRAW_MIN_M && height < SHAPE_DRAW_MIN_M) {
+      this.status = "Too small to draw. Sweep a bigger outline.";
+      this.audio.play("ui_deny");
+      this.emit();
       return;
     }
 
-    const before = cloneDisguiseState(this.state);
-    const bone = this.shapeBone();
-    const origin = this.pose.worldPositions[boneIndex(bone)];
-    let shapes = this.state.shapes;
-    let lastId = this.selectedShapeId;
-    for (const box of boxes) {
-      const edit = addShapeToList(shapes, this.drawProfileId, bone);
-      if (edit === null) break;
-      const shape = edit.shapes.at(-1);
-      if (shape === undefined) break;
-      shape.scale = [
-        clamp(box.width, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
-        clamp(box.height, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
-        clamp(Math.min(box.width, box.height), SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
-      ];
-      // Placed where it was drawn, in the carrying bone's frame.
-      shape.position = [
-        box.x - (origin?.x ?? 0),
-        box.y - (origin?.y ?? 0),
-        draw.plane.z - (origin?.z ?? 0),
-      ];
-      shapes = edit.shapes;
-      lastId = shape.id;
+    const centreX = (minX + maxX) / 2;
+    const centreY = (minY + maxY) / 2;
+    const longest = Math.max(width, height, 1e-6);
+    // Thinned to at most `MAX_OUTLINE_POINTS`, keeping the sweep's own order.
+    const step = Math.max(1, Math.ceil(draw.points.length / MAX_OUTLINE_POINTS));
+    const outline: [number, number][] = [];
+    for (let index = 0; index < draw.points.length; index += step) {
+      const point = draw.points[index];
+      if (point === undefined) continue;
+      outline.push([(point.x - centreX) / longest, (point.y - centreY) / longest]);
     }
-    if (shapes === this.state.shapes) return;
+    if (outline.length < 3) return;
 
-    this.state.shapes = [...shapes];
-    this.selectedShapeId = lastId;
+    // Built as ONE command rather than an add followed by an edit, so a sweep
+    // is taken back by a single undo - two would leave an empty solid behind
+    // and read as the tool half-forgetting what you drew.
+    const before = cloneDisguiseState(this.state);
+    const edit = addShapeToList(this.state.shapes, "drawn", this.shapeBone());
+    if (edit === null) {
+      this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
+      this.audio.play("ui_deny");
+      this.emit();
+      return;
+    }
+    const shape = edit.shapes.at(-1);
+    if (shape === undefined) return;
+    this.state.shapes = edit.shapes;
+    this.selectedShapeId = shape.id;
+    shape.outline = outline;
+    // Drawn to the size it was swept, not shrunk to a token and not blown up
+    // into an invisible mountain: the outline's own span in world metres.
+    shape.scale = [
+      clamp(longest, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
+      clamp(longest, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
+      clamp(Math.max(longest * DRAWN_THICKNESS_SHARE, SHAPE_MIN_SCALE), SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
+    ];
+
+    // Where it was drawn, converted into the bone's frame. Subtracting the
+    // bone's position is not enough - the renderer turns the stored offset by
+    // the bone's rotation, so a raw world offset gets rotated twice and the
+    // solid lands nowhere near the stroke.
+    const origin = this.pose.worldPositions[boneIndex(shape.bone)];
+    const local = new THREE.Vector3(
+      centreX - (origin?.x ?? 0),
+      centreY - (origin?.y ?? 0),
+      draw.plane.z - (origin?.z ?? 0),
+    );
+    const boneTurn = this.pose.worldRotations[boneIndex(shape.bone)];
+    if (boneTurn !== undefined) {
+      local.applyQuaternion(
+        SHAPE_ROTATE_SCRATCH.set(boneTurn.x, boneTurn.y, boneTurn.z, boneTurn.w).invert(),
+      );
+    }
+    shape.position = [local.x, local.y, local.z];
+
     this.commands.pushApplied(
       createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "draw a disguise"),
       this.state,
@@ -2361,7 +2414,7 @@ export class ForgeController {
     this.refreshAll(true);
     this.emit();
     this.audio.play("panel_snap");
-    this.status = `Drew that in ${String(boxes.length)} ${boxes.length === 1 ? "piece" : "pieces"}. Drag the arrows to reshape it.`;
+    this.status = "Drew that. Drag its arrows to reshape it.";
   }
 
   /** The profile a drawn rectangle becomes. */

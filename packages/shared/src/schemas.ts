@@ -5,6 +5,7 @@ import {
   INNOCENT_REACTION_IDS,
   MAX_PANELS,
   MAX_SEEKER_COUNT,
+  MAX_OUTLINE_POINTS,
   MAX_SHAPES,
   PANEL_MAX_HINGE_DEG,
   PANEL_MIN_HINGE_DEG,
@@ -311,6 +312,14 @@ const shapeInstance = z.strictObject({
   rotation: QuaternionSchema,
   scale: Vec3Schema,
   materialSlotId: id,
+  /**
+   * The outline a drawn solid was swept from, in its own local units, closed
+   * and extruded by the renderer. Absent on the primitives.
+   */
+  outline: z
+    .array(z.tuple([z.number(), z.number()]))
+    .max(MAX_OUTLINE_POINTS)
+    .optional(),
 });
 
 const anchorState = z.strictObject({

@@ -343,7 +343,17 @@ export type SegmentProfileId = (typeof SEGMENT_PROFILE_IDS)[number];
  * it, and a disguise is judged on the body folding to fit INSIDE the silhouette
  * it builds. Folding stays the game; this is what the fold is dressed in.
  */
-export const SHAPE_PROFILE_IDS = ["cube", "cylinder", "wedge", "sphere", "plane"] as const;
+export const SHAPE_PROFILE_IDS = ["drawn", "cube", "cylinder", "wedge", "sphere", "plane"] as const;
+
+/**
+ * Points a drawn outline may carry.
+ *
+ * A drawing is ONE solid - the player's own outline given thickness - rather
+ * than an approximation assembled from primitives, so the outline itself has
+ * to travel on the wire. Sixty-four points describes any silhouette a hand can
+ * sweep while staying inside the pose budget.
+ */
+export const MAX_OUTLINE_POINTS = 64;
 
 export type ShapeProfileId = (typeof SHAPE_PROFILE_IDS)[number];
 

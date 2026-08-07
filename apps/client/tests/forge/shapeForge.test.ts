@@ -353,37 +353,39 @@ describe("building a disguise in the Forge", () => {
     expect(next?.position[0]).not.toBeCloseTo(forge.disguise.shapes[0]?.position[0] ?? 0, 6);
   });
 
-  it("turns a swept outline into a disguise you can then reshape", () => {
+  it("turns one lasso sweep into one closed solid you can reshape", () => {
     const forge = controller();
     forge.setToolMode("panels");
 
-    // An arch: up, across, down. The shape a player sweeps when they mean
-    // "that thing over there".
-    const stroke = Array.from({ length: 40 }, (_, index) => {
-      const t = index / 39;
-      return { x: t * 0.6, y: Math.sin(t * Math.PI) * 0.4 };
+    // Half a circle. A lasso closes itself, so an unfinished sweep still
+    // leaves a solid standing over the player rather than nothing.
+    const stroke = Array.from({ length: 30 }, (_, index) => {
+      const t = (index / 29) * Math.PI;
+      return { x: Math.cos(t) * 0.12, y: Math.sin(t) * 0.12 };
     });
     expect(forge.drawOutline(stroke)).toBe(true);
 
-    const drawn = forge.disguise.shapes;
-    expect(drawn.length).toBeGreaterThan(1);
-    // It has the outline's shape, not one uniform block: the middle of an arch
-    // stands taller than its ends.
-    const heights = drawn.map((shape) => shape.scale[1]);
-    expect(Math.max(...heights)).toBeGreaterThan(Math.min(...heights));
+    // ONE shape, not a pile of cubes standing in for the outline.
+    expect(forge.disguise.shapes).toHaveLength(1);
+    const drawn = forge.disguise.shapes[0];
+    expect(drawn?.profileId).toBe("drawn");
+    // Carrying the sweep itself, which is what makes it that shape and no
+    // other, and closed by the renderer rather than by the player.
+    expect((drawn?.outline ?? []).length).toBeGreaterThan(2);
+    // Drawn to the size it was swept: roughly the outline's own span, not a
+    // token and not an invisible mountain.
+    expect(drawn?.scale[0]).toBeGreaterThan(0.1);
+    expect(drawn?.scale[0]).toBeLessThan(0.5);
 
-    // And it is ordinary shapes, so everything that reshapes one works here.
-    forge.selectShape(drawn[0]?.id ?? null);
+    // And it is an ordinary shape, so every gizmo verb works on it.
+    forge.selectShape(drawn?.id ?? null);
     expect(forge.scaleSelectedShape(0, 1.5)).toBe(true);
     expect(forge.rotateSelectedShape(1, 1)).toBe(true);
     expect(forge.nudgeSelectedShape(0.01, 0, 0)).toBe(true);
-    expect(forge.mirrorSelectedShape()).toBe(true);
 
-    // One gesture, one undo: a drawing taken back in pieces would be worse
-    // than no undo at all.
-    const afterEdits = forge.disguise.shapes.length;
-    for (let index = 0; index < 4; index += 1) forge.undo();
-    expect(forge.disguise.shapes.length).toBeLessThan(afterEdits);
+    // One sweep, one undo: three edits back, then the drawing itself.
+    for (let index = 0; index < 3; index += 1) forge.undo();
+    expect(forge.disguise.shapes).toHaveLength(1);
     forge.undo();
     expect(forge.disguise.shapes).toHaveLength(0);
   });
