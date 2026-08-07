@@ -6,6 +6,7 @@ import { applyDisguiseStateToPose } from "../../src/mimic/disguiseState";
 import { createPoseState } from "../../src/mimic/ikSolver";
 import { MimicVisual } from "../../src/mimic/visual/MimicVisual";
 import { createShape } from "../../src/mimic/shapes";
+import { paintTargetOfObject } from "../../src/paint/paintTargets";
 
 /**
  * Drawing the primitives a disguise is built from.
@@ -92,6 +93,18 @@ describe("shapes on a disguise", () => {
     expect(pale).toBeDefined();
     expect(dark).toBeDefined();
     expect(dark).not.toBe(pale);
+  });
+
+  it("owns a paint tile, so a brush stroke has somewhere to land", () => {
+    const visual = posed(2);
+    const first = visual.shapeMeshes[0];
+    const second = visual.shapeMeshes[1];
+    // The tiles the retired panels left behind. Without one, a stroke on a
+    // shape either goes nowhere or lands on another part's tile.
+    expect(paintTargetOfObject(first as THREE.Object3D)).not.toBeNull();
+    expect(paintTargetOfObject(second as THREE.Object3D)).not.toBe(
+      paintTargetOfObject(first as THREE.Object3D),
+    );
   });
 
   it("detaches a shape again when the disguise drops it", () => {

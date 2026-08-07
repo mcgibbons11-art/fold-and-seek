@@ -995,7 +995,16 @@ export class ForgeController {
     this.scene.add(this.handleGroup);
     this.indexAnchorSurfaces();
 
-    this.paintMeshes = [...this.mimic.segmentMeshes, ...this.mimic.panelMeshes];
+    // Built shapes are paintable too, and they stand in front of the body, so
+    // a brush stroke aimed at a jar lands on the jar rather than on the arm
+    // behind it. Only the first eight own an atlas tile - the ones the retired
+    // panels left - and a stroke on a shape without one is refused by the
+    // target lookup rather than painted onto somebody else's tile.
+    this.paintMeshes = [
+      ...this.mimic.shapeMeshes,
+      ...this.mimic.segmentMeshes,
+      ...this.mimic.panelMeshes,
+    ];
     this.paintTool = createPaintTool({
       canvas: this.canvas,
       camera: this.camera,

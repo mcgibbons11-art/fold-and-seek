@@ -670,6 +670,9 @@ export class MimicVisual {
       }
       if (!visual.present) this.root.add(visual.mesh);
       visual.present = true;
+      // The paint atlas tile this shape owns, inherited from the retired
+      // panel sockets. Only the first eight get one; the rest wear swatches.
+      visual.mesh.userData["shapeTarget"] = index;
       visual.boneIndex = boneIndex(state.bone);
       visual.localPosition.set(state.position[0], state.position[1], state.position[2]);
       visual.localRotation.set(

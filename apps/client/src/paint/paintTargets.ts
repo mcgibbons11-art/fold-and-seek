@@ -115,6 +115,16 @@ export function paintTargetOfObject(object: THREE.Object3D): number | null {
     const index = PANEL_SOCKET_NAMES.indexOf(socket as (typeof PANEL_SOCKET_NAMES)[number]);
     if (index >= 0) return PANEL_TARGET_OFFSET + index;
   }
+  // Built shapes take the tiles the panels left behind. Panels are retired, so
+  // those eight targets are dead space in an atlas that is otherwise full, and
+  // reusing them gives shapes real brush strokes with no change to the paint
+  // wire at all. Shapes past the eighth carry no target and take swatches
+  // only, which is a ceiling worth raising with a wire version rather than by
+  // quietly painting the wrong tile.
+  const shape = object.userData["shapeTarget"];
+  if (typeof shape === "number" && shape >= 0 && shape < PANEL_SOCKET_NAMES.length) {
+    return PANEL_TARGET_OFFSET + shape;
+  }
   return null;
 }
 
