@@ -520,6 +520,8 @@ const GIZMO_PICK_RADIUS_M = WORLD_SCALE.playerHeight * 0.09;
 /** A shape may not be scaled away to nothing, nor past the body's own reach. */
 /** One arrow press, about a fiftieth of the body's height. */
 const SHAPE_NUDGE_M = 0.007;
+/** A gap this small after a drag was not intended, so it closes itself. */
+const AUTO_SEAT_M = 0.012;
 const SHAPE_MIN_SCALE = 0.02;
 const SHAPE_MAX_SCALE = 4;
 /** A drag the width of the body turns a shape most of a half circle. */
@@ -2296,6 +2298,36 @@ export class ForgeController {
     this.audio.play("material_sample");
     this.status = "Painted that shape.";
     return true;
+  }
+
+  /**
+   * Seats a shape against its neighbour when a drag left it nearly touching.
+   *
+   * Deliberately tight. A generous magnet fights the player whenever they
+   * want two things a small distance apart, which a room is full of; this only
+   * closes the gap nobody meant to leave.
+   */
+  private autoSeat(id: string): void {
+    const index = this.state.shapes.findIndex((entry) => entry.id === id);
+    const shape = this.state.shapes[index];
+    if (shape === undefined) return;
+    const boxOf = (at: number): FitBox | null => {
+      const mesh = this.mimic.shapeMeshes[at];
+      if (mesh === undefined || mesh.parent === null) return null;
+      const box = new THREE.Box3().setFromObject(mesh);
+      return { min: { ...box.min }, max: { ...box.max } };
+    };
+    const moving = boxOf(index);
+    if (moving === null) return;
+    const others = this.state.shapes
+      .map((_, at) => (at === index ? null : boxOf(at)))
+      .filter((box): box is FitBox => box !== null);
+    if (others.length === 0) return;
+
+    const offset = snapOffset(moving, others);
+    if (offset === null || Math.abs(offset.delta) > AUTO_SEAT_M) return;
+    shape.position[offset.axis] = (shape.position[offset.axis] ?? 0) + offset.delta;
+    this.status = "Seated flush.";
   }
 
   /** Removes the selected shape, leaving its neighbour selected. */
@@ -4447,6 +4479,11 @@ export class ForgeController {
         restored.rotation.every((axis, index) => axis === moved.rotation[index]) &&
         restored.scale.every((axis, index) => axis === moved.scale[index]);
       if (unchanged) return;
+      // A move that lands within a hair of another shape seats itself. The
+      // player was aiming for flush - nobody drags a barrel band to three
+      // millimetres off on purpose - and asking them to press Snap after every
+      // drag is a second gesture for something the first one already said.
+      if (drag.shape.mode === "move") this.autoSeat(moved.id);
       this.commands.pushApplied(
         createReplaceCommand(
           before,
