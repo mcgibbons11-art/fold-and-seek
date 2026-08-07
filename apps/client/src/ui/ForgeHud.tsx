@@ -5,7 +5,7 @@ import {
   starterArrangementLabel,
   type StarterArrangementId,
 } from "../mimic/disguiseState";
-import { MAX_SHAPES, SHAPE_PROFILE_IDS } from "@foldseek/shared";
+import { MAX_SHAPES } from "@foldseek/shared";
 import { SEGMENT_PROFILE_IDS, type SegmentProfileId } from "../mimic/segmentForm";
 import {
   swatchById,
@@ -468,27 +468,6 @@ export function ForgeHud({
           <Keycap>M</Keycap>
           Mirror
         </button>
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
-          disabled={state.locked || state.shapes.length < 2}
-          onClick={() => controller.snapSelectedShape()}
-        >
-          Snap flush
-        </button>
-        <button
-          type="button"
-          className={PRESS_CLASS}
-          style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
-          // Enabled without a held finish on purpose. A disabled button says
-          // "not now" and never says why; pressing this one answers "sample a
-          // finish first, with F", which is the thing the player needs to know.
-          disabled={state.locked || state.shapes.length === 0}
-          onClick={() => controller.paintSelectedShape()}
-        >
-          Paint it
-        </button>
         <div className="fs-forge-history" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, paddingTop: 4, borderTop: EDGE }}>
           <button
             type="button"
@@ -645,7 +624,6 @@ export function ForgeHud({
           width: FORGE_LAYOUT.rightStackWidth,
         }}
       >
-        {!state.locked ? <LockReadiness state={state} /> : null}
         <button
           type="button"
           style={state.locked ? activeButtonStyle : buttonStyle}
@@ -894,35 +872,9 @@ function BuildPanel({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={labelStyle}>Draw what you want to be</div>
       <div style={{ ...labelStyle, opacity: 0.6, textTransform: "none" }}>
-        Sweep the mouse over empty space and the outline becomes a solid you can
-        hide in. Reshape any piece with its arrows afterwards. The buttons pick
-        what a drawn piece is made of.
-      </div>
-      <button
-        type="button"
-        className={PRESS_CLASS}
-        style={{ ...buttonStyle, marginBottom: 0 }}
-        disabled={state.locked}
-        onClick={() => controller.sampleFormUnderPointer()}
-      >
-        Copy a shape from the room · F
-      </button>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-        {SHAPE_PROFILE_IDS.map((profileId) => (
-          <button
-            key={profileId}
-            type="button"
-            className={PRESS_CLASS}
-            style={buttonStyle}
-            disabled={state.locked}
-            onClick={() => {
-              controller.setDrawProfile(profileId);
-              controller.addShape(profileId);
-            }}
-          >
-            {profileId}
-          </button>
-        ))}
+        Sweep the mouse across empty space. Whatever outline you draw becomes a
+        solid you can hide inside, and every piece of it can be reshaped
+        afterwards with its arrows.
       </div>
 
       <div style={labelStyle}>
@@ -1198,28 +1150,6 @@ function ArrangementThumbnail({ id }: { readonly id: StarterArrangementId }): Re
     >
       {ARRANGEMENT_GLYPHS[id]}
     </span>
-  );
-}
-
-function LockReadiness({ state }: { readonly state: ForgeHudState }): ReactElement {
-  const valid = state.lockIssues.length === 0;
-  const anchorsStable = state.unsatisfiedAnchors.length === 0;
-  const rows = [
-    ["Legal shape", valid],
-    ["Contacts stable", anchorsStable],
-    ["Ready to deploy", valid && anchorsStable],
-  ] as const;
-  return (
-    <div aria-label="Disguise readiness" aria-live="polite" style={{ marginBottom: 9 }}>
-      <div style={{ ...labelStyle, color: BRASS_LIT, opacity: 1, marginBottom: 5 }}>Lock readiness</div>
-      {rows.map(([label, ready]) => (
-        <div key={label} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 10, color: ready ? CREAM : "#e0785f" }}>
-          <span>{label}</span><span>{ready ? "✓" : "!"}</span>
-        </div>
-      ))}
-      {valid ? null : <div style={{ marginTop: 5, fontSize: 10, color: "#e0785f" }}>{state.lockIssues[0]}</div>}
-      {anchorsStable ? null : <div style={{ marginTop: 3, fontSize: 10, color: "#e0785f" }}>Adjust: {state.unsatisfiedAnchors.join(", ")}</div>}
-    </div>
   );
 }
 

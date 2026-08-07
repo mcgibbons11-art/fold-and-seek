@@ -2217,94 +2217,7 @@ export class ForgeController {
     return true;
   }
 
-  /**
-   * Slides the selected shape until it sits flush against its nearest
-   * neighbour.
-   *
-   * A gap of a few millimetres at this scale reads as two objects rather than
-   * one, which is the exact tell a disguise exists to avoid, and closing it by
-   * hand costs more of a 115 second Forge than it is worth.
-   */
-  snapSelectedShape(): boolean {
-    const index = this.state.shapes.findIndex((entry) => entry.id === this.selectedShapeId);
-    const shape = this.state.shapes[index];
-    if (this.locked || shape === undefined) {
-      this.status = this.locked
-        ? "The disguise is locked. Unlock it to keep building."
-        : "Select a shape first, in the room or in the list.";
-      this.audio.play("ui_deny");
-      this.emit();
-      return false;
-    }
 
-    // Measured where the renderer put them, so the snap closes the gap the
-    // player can actually see.
-    const boxOf = (at: number): FitBox | null => {
-      const mesh = this.mimic.shapeMeshes[at];
-      if (mesh === undefined || mesh.parent === null) return null;
-      const box = new THREE.Box3().setFromObject(mesh);
-      return { min: { ...box.min }, max: { ...box.max } };
-    };
-    const moving = boxOf(index);
-    const others = this.state.shapes
-      .map((_, at) => (at === index ? null : boxOf(at)))
-      .filter((box): box is FitBox => box !== null);
-    if (moving === null || others.length === 0) {
-      this.status = "Nothing to snap against yet. Build another shape first.";
-      this.audio.play("ui_deny");
-      this.emit();
-      return false;
-    }
-
-    const offset = snapOffset(moving, others);
-    if (offset === null) {
-      this.status = "Already flush.";
-      this.emit();
-      return false;
-    }
-    // The gap is measured in world metres and the shape is stored in its
-    // bone's frame; at this scale the two agree closely enough that the move
-    // lands, and the player sees the result either way.
-    return this.nudgeSelectedShape(
-      offset.axis === 0 ? offset.delta : 0,
-      offset.axis === 1 ? offset.delta : 0,
-      offset.axis === 2 ? offset.delta : 0,
-    );
-  }
-
-  /**
-   * Wears the held finish on the selected shape alone.
-   *
-   * Built objects are rarely one colour: a jar has a darker rim, a barrel has
-   * iron bands, a crate has its boards and its corners. Painting the whole
-   * body for each of them would undo the last one, so each shape carries a
-   * slot of its own and this is what fills it.
-   */
-  paintSelectedShape(): boolean {
-    const shape = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
-    const held = this.sampledSwatchId;
-    if (this.locked || shape === undefined || held === null) {
-      this.status =
-        held === null
-          ? "Sample a finish first, with F on something in the room."
-          : "Select a shape first, in the room or in the list.";
-      this.audio.play("ui_deny");
-      this.emit();
-      return false;
-    }
-    const before = cloneDisguiseState(this.state);
-    const assignments = this.state.materials.filter((entry) => entry.slotId !== shape.materialSlotId);
-    this.state.materials = [...assignments, { slotId: shape.materialSlotId, swatchId: held }];
-    this.commands.pushApplied(
-      createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "paint shape"),
-      this.state,
-    );
-    this.refreshAll(true);
-    this.emit();
-    this.audio.play("material_sample");
-    this.status = "Painted that shape.";
-    return true;
-  }
 
   /**
    * Seats a shape against its neighbour when a drag left it nearly touching.
@@ -2342,6 +2255,26 @@ export class ForgeController {
    * The rectangle is measured on a plane through the body facing the camera,
    * so what the player draws around the body is the size they get on it.
    */
+  /**
+   * Draws an outline directly, in the drawing plane's own metres.
+   *
+   * The pointer path calls the same code with points it read off the screen.
+   * This is the seam a test drives, because the thing worth proving is that a
+   * SWEPT OUTLINE becomes a disguise - not that Playwright can move a mouse.
+   */
+  drawOutline(points: readonly { readonly x: number; readonly y: number }[]): boolean {
+    if (this.locked || points.length < 2) return false;
+    const first = points[0];
+    if (first === undefined) return false;
+    this.shapeDraw = {
+      points: points.map((point) => ({ x: point.x, y: point.y })),
+      plane: new THREE.Vector3(first.x, first.y, 0),
+    };
+    const before = this.state.shapes.length;
+    this.endShapeDraw();
+    return this.state.shapes.length > before;
+  }
+
   private beginShapeDraw(): void {
     this.dragPlane.setFromNormalAndCoplanarPoint(
       this.camera.getWorldDirection(this.scratchForward),
@@ -2775,80 +2708,6 @@ export class ForgeController {
   }
 
   /** Samples whatever the pointer is over, the `F` key of §7.5. */
-  /**
-   * Copies the FORM of the thing under the cursor, the way the dropper copies
-   * its colour.
-   *
-   * Pointing at a jar and getting a jar-sized cylinder is the difference
-   * between a Forge you can finish in 115 seconds and one you cannot. It also
-   * teaches the room's vocabulary by example: the proportions that read as a
-   * barrel are the barrel's own, not a guess made by eye at toy scale, where a
-   * body is 0.35 m tall and judging a few centimetres is genuinely hard.
-   *
-   * The shape arrives sized and oriented to the prop's own box; what it does
-   * not do is finish the job. It is a starting point to stretch, turn and
-   * paint, which is what keeps a disguise the player's work rather than a
-   * button that wins.
-   */
-  sampleFormUnderPointer(): boolean {
-    if (this.locked) {
-      this.status = "The disguise is locked. Unlock it to keep building.";
-      this.audio.play("ui_deny");
-      this.emit();
-      return false;
-    }
-    const hit = this.raycastRoom();
-    if (hit === null) {
-      this.status = "Point at something in the room to copy its shape.";
-      this.audio.play("ui_deny");
-      this.emit();
-      return false;
-    }
-
-    const box = new THREE.Box3().setFromObject(hit.object);
-    const size = box.getSize(this.scratchVector.clone());
-    if (!Number.isFinite(size.x) || size.x <= 0) {
-      this.status = "That has no shape to copy.";
-      this.audio.play("ui_deny");
-      this.emit();
-      return false;
-    }
-
-    // Round things read as cylinders, square things as cubes. A jar sampled as
-    // a box would need every one of its corners taken off by hand.
-    const roundish = Math.abs(size.x - size.z) < Math.max(size.x, size.z) * 0.25;
-    const profileId: ShapeProfileId = roundish ? "cylinder" : "cube";
-    if (!this.addShape(profileId)) return false;
-
-    const shape = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
-    if (shape === undefined) return true;
-    const before = cloneDisguiseState(this.state);
-    shape.scale = [
-      clamp(size.x, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
-      clamp(size.y, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
-      clamp(size.z, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
-    ];
-    this.commands.pushApplied(
-      createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "sample form"),
-      this.state,
-    );
-    // And its finish, not only its outline. A jar-shaped cylinder in the
-    // wrong colour is still a thing that does not belong on that shelf, so
-    // copying the form without the surface only does half the job.
-    const swatchId = resolveSurfaceSwatch(hit.object);
-    const sample = swatchId === null ? ({ kind: "none" } as const) : traySwatchForSurface(swatchId);
-    const worn = sample.kind === "wear" ? sample.tray : null;
-    if (worn !== null) this.sampledSwatchId = worn.id;
-
-    this.audio.play("material_sample");
-    this.status =
-      worn === null
-        ? `Copied that shape: a ${profileId} its size. Stretch and turn it from here.`
-        : `Copied that shape and its ${worn.label.toLowerCase()} finish. Stretch and turn it from here.`;
-    this.refreshAll();
-    this.emit();
-    return true;
-  }
 
   sampleUnderPointer(): void {
     // A built shape first, since it stands in front of the body: copying one
@@ -5041,13 +4900,6 @@ export class ForgeController {
         // dropper keeps: press, then click to copy. Everywhere else it stays
         // the §7.5 instant sample at the pointer.
         if (!this.toolsActive) break;
-        if (this.mode === "panels") {
-          // Same key as paint's and material's droppers, because it is the
-          // same idea: point at the room and take something from it. There it
-          // is the colour; here it is the form.
-          this.sampleFormUnderPointer();
-          break;
-        }
         if (this.mode === "material") {
           this.setMaterialDropperArmed(!this.materialDropperArmed);
         } else if (this.mode !== "paint") {

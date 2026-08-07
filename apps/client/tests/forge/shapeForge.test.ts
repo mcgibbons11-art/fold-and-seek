@@ -246,28 +246,6 @@ describe("building a disguise in the Forge", () => {
     expect(Math.abs(full[3] ?? 0)).toBeCloseTo(Math.abs(before[3] ?? 0), 4);
   });
 
-  it("copies a room object's form, sized to it and round if it is round", () => {
-    const forge = controller();
-    // The wall in the fixture room is far wider than it is deep, so it is not
-    // round: a square thing must not come back as a cylinder.
-    forge.selectShape(null);
-    const sampled = forge.sampleFormUnderPointer();
-    if (!sampled) {
-      // Nothing under the centre of this fixture's view; the refusal is the
-      // behaviour worth pinning, and it must say so rather than sit silent.
-      expect(forge.disguise.shapes).toHaveLength(0);
-      return;
-    }
-    const shape = forge.disguise.shapes.at(-1);
-    expect(shape).toBeDefined();
-    // Sized to the thing it copied, not to the default 0.35 cube.
-    expect(shape?.scale.some((axis) => Math.abs(axis - 0.35) > 1e-6)).toBe(true);
-
-    forge.undo();
-    forge.undo();
-    expect(forge.disguise.shapes).toHaveLength(0);
-  });
-
   it("mirrors a shape to the other side of the body", () => {
     const forge = controller();
     forge.addShape("cylinder");
@@ -373,6 +351,41 @@ describe("building a disguise in the Forge", () => {
     // And it arrives beside its predecessor rather than buried at the bone
     // origin, where the first move is always dragging it out to see it.
     expect(next?.position[0]).not.toBeCloseTo(forge.disguise.shapes[0]?.position[0] ?? 0, 6);
+  });
+
+  it("turns a swept outline into a disguise you can then reshape", () => {
+    const forge = controller();
+    forge.setToolMode("panels");
+
+    // An arch: up, across, down. The shape a player sweeps when they mean
+    // "that thing over there".
+    const stroke = Array.from({ length: 40 }, (_, index) => {
+      const t = index / 39;
+      return { x: t * 0.6, y: Math.sin(t * Math.PI) * 0.4 };
+    });
+    expect(forge.drawOutline(stroke)).toBe(true);
+
+    const drawn = forge.disguise.shapes;
+    expect(drawn.length).toBeGreaterThan(1);
+    // It has the outline's shape, not one uniform block: the middle of an arch
+    // stands taller than its ends.
+    const heights = drawn.map((shape) => shape.scale[1]);
+    expect(Math.max(...heights)).toBeGreaterThan(Math.min(...heights));
+
+    // And it is ordinary shapes, so everything that reshapes one works here.
+    forge.selectShape(drawn[0]?.id ?? null);
+    expect(forge.scaleSelectedShape(0, 1.5)).toBe(true);
+    expect(forge.rotateSelectedShape(1, 1)).toBe(true);
+    expect(forge.nudgeSelectedShape(0.01, 0, 0)).toBe(true);
+    expect(forge.mirrorSelectedShape()).toBe(true);
+
+    // One gesture, one undo: a drawing taken back in pieces would be worse
+    // than no undo at all.
+    const afterEdits = forge.disguise.shapes.length;
+    for (let index = 0; index < 4; index += 1) forge.undo();
+    expect(forge.disguise.shapes.length).toBeLessThan(afterEdits);
+    forge.undo();
+    expect(forge.disguise.shapes).toHaveLength(0);
   });
 
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {

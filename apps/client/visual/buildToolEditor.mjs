@@ -207,6 +207,25 @@ record("form dropper is reachable and answers", sampledForm &&
   afterSample !== beforeSample,
   (afterSample.match(/copied that shape[^.]*\.|point at something[^.]*\./i) ?? ["no answer"])[0].slice(0, 60));
 
+// Draw a disguise: sweep an outline and it becomes solids.
+const beforeDraw = Number((await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
+{
+  const from = await at(0.30, 0.62);
+  const to = await at(0.44, 0.34);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 14; step += 1) {
+    const t = step / 14;
+    await page.mouse.move(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * Math.sin(t * Math.PI));
+  }
+  await page.mouse.up();
+}
+await page.waitForTimeout(1_200);
+const afterDraw = await textOf();
+const drawnCount = Number(afterDraw.match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
+record("a swept outline becomes solids", drawnCount > beforeDraw,
+  `${String(beforeDraw)} then ${String(drawnCount)} · ${(afterDraw.match(/drew that in [^.]*\./i) ?? ["no answer"])[0]}`);
+
 // Mirror: the verb that halves a symmetric build.
 const beforeMirror = (await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0";
 const mirrored = await clickIf(/^mirror$/i, 6_000);
