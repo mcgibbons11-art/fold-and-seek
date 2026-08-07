@@ -2408,7 +2408,9 @@ export class ForgeController {
     this.commands.push(createReplaceCommand(before, after, performance.now(), label), this.state);
     this.selectedShapeId = edit.selectedId === "" ? null : edit.selectedId;
     this.audio.play("panel_snap");
-    this.refreshAll();
+    // Materials reapplied, so a new shape arrives already wearing the body's
+    // finish rather than a frame of default porcelain.
+    this.refreshAll(true);
     // refreshAll redraws the body; only emit tells the panel anything
     // happened. Without it a shape really was added and the tool went on
     // reading NOTHING BUILT YET, which is exactly how this looked dead.
@@ -3054,6 +3056,8 @@ export class ForgeController {
     this.mimic.applyForms(this.pose);
     this.mimic.applyPanels(this.state.panels);
     this.mimic.applyShapes(this.state.shapes);
+    // After applyShapes, so a shape added this frame is wearing its finish
+    // before it is ever drawn rather than a frame of porcelain first.
     if (reapplyMaterials) {
       this.mimic.applyMaterials(this.state.materials);
     }

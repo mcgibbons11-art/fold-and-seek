@@ -72,6 +72,28 @@ describe("shapes on a disguise", () => {
     expect(withShape.containsBox(shapeBox)).toBe(true);
   });
 
+  it("wears the finish its slot was given, not a fixed porcelain", () => {
+    // A shop is walnut, brass and clay. Every built object arriving in the
+    // same white would be a poor disguise, and would make copying a prop's
+    // finish pointless because it had nowhere to land.
+    const visual = new MimicVisual();
+    const state = createDefaultDisguiseState();
+    state.shapes.push(createShape("shape_a", "cube", "pelvis", "body"));
+    const pose = createPoseState();
+    applyDisguiseStateToPose(state, pose);
+    visual.applyShapes(state.shapes);
+    visual.applyPose(pose);
+
+    visual.applyMaterials([{ slotId: "body", swatchId: "mimic_porcelain" }]);
+    const pale = visual.shapeMeshes[0]?.material;
+    visual.applyMaterials([{ slotId: "body", swatchId: "mimic_walnut" }]);
+    const dark = visual.shapeMeshes[0]?.material;
+
+    expect(pale).toBeDefined();
+    expect(dark).toBeDefined();
+    expect(dark).not.toBe(pale);
+  });
+
   it("detaches a shape again when the disguise drops it", () => {
     const visual = posed(2);
     visual.applyShapes([]);

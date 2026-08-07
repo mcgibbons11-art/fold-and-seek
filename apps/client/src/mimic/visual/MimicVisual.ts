@@ -283,6 +283,8 @@ export class MimicVisual {
   private readonly panels: readonly PanelVisual[];
   private readonly shapes: readonly ShapeVisual[];
   private readonly shapeGeometries = new Map<ShapeProfileId, THREE.BufferGeometry>();
+  /** The states behind the drawn shapes, so materials can find their slots. */
+  private shapeStates: readonly ShapeState[] = [];
   private readonly bellows: readonly THREE.Mesh[];
   private readonly bellowsBones: readonly number[];
   private readonly panelGeometries: ReadonlyMap<PanelProfileId, THREE.BufferGeometry>;
@@ -658,6 +660,7 @@ export class MimicVisual {
    * brackets and the gun is checked against.
    */
   applyShapes(shapes: readonly ShapeState[]): void {
+    this.shapeStates = shapes;
     for (const [index, visual] of this.shapes.entries()) {
       const state = shapes[index];
       if (state === undefined) {
@@ -830,6 +833,17 @@ export class MimicVisual {
       segment.mesh.material = defaultShoulderAccent
         ? this.pool.brass
         : this.pool.swatches.get(swatchId);
+    }
+
+    // Built shapes wear the finish they were given. Without this every
+    // object a player builds is the same porcelain, which is a poor disguise
+    // in a shop full of walnut, brass and clay - and makes copying a prop's
+    // finish pointless, since it had nowhere to land.
+    for (const [index, visual] of this.shapes.entries()) {
+      if (!visual.present) continue;
+      const assigned = this.shapeStates[index]?.materialSlotId;
+      const swatchId = (assigned !== undefined ? bySlot.get(assigned) : undefined) ?? bodySwatch;
+      visual.mesh.material = this.pool.swatches.get(swatchId) ?? visual.mesh.material;
     }
 
     const stateBySocket = new Map<string, PanelState>();
