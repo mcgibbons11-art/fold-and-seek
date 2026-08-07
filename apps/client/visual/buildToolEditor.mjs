@@ -178,10 +178,10 @@ const names = await game.getByRole("button").allInnerTexts().catch(() => []);
 console.log("BUTTONS:", names.map((n) => n.replace(/\s+/g, " ")).slice(0, 24).join(" | "));
 
 /** One free-form loop over the character, drawn with the real mouse. */
-const sweep = async (scale = 1) => {
+const sweep = async (scale = 1, fx = 0.58, fy = 0.52) => {
   const box = await paneBox();
-  const cx = box.x + box.w * 0.58;
-  const cy = box.y + box.h * 0.52;
+  const cx = box.x + box.w * fx;
+  const cy = box.y + box.h * fy;
   const rx = box.w * 0.10 * scale;
   const ry = box.h * 0.13 * scale;
   await page.mouse.move(cx + rx, cy);
@@ -304,7 +304,9 @@ record("deleting everything then drawing leaves exactly one", emptied === 0 && a
 const lineMode = await clickIf(/^just the line$/i, 6_000);
 await page.waitForTimeout(600);
 const beforeLine = await shapeCount();
-await sweep(0.7);
+// Away from the selected shape's gizmo: the arrows rightly outrank drawing
+// at the press, so a sweep that starts on one drags instead of draws.
+await sweep(0.7, 0.40, 0.64);
 const afterLine = await shapeCount();
 record("an unfilled drawing still makes a solid", lineMode && afterLine === beforeLine + 1,
   `${String(beforeLine)} then ${String(afterLine)}`);
