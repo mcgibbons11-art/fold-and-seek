@@ -477,6 +477,15 @@ export function ForgeHud({
         >
           Snap flush
         </button>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={{ ...buttonStyle, marginBottom: 0, flex: 1 }}
+          disabled={state.locked || state.shapes.length === 0 || state.sampledSwatchId === null}
+          onClick={() => controller.paintSelectedShape()}
+        >
+          Paint it
+        </button>
         <div className="fs-forge-history" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5, paddingTop: 4, borderTop: EDGE }}>
           <button
             type="button"

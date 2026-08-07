@@ -2088,7 +2088,7 @@ export class ForgeController {
       this.emit();
       return false;
     }
-    const edit = addShapeToList(this.state.shapes, profileId, bone ?? this.shapeBone(), "body");
+    const edit = addShapeToList(this.state.shapes, profileId, bone ?? this.shapeBone());
     if (edit === null) {
       this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
       this.audio.play("ui_deny");
@@ -2224,6 +2224,40 @@ export class ForgeController {
       offset.axis === 1 ? offset.delta : 0,
       offset.axis === 2 ? offset.delta : 0,
     );
+  }
+
+  /**
+   * Wears the held finish on the selected shape alone.
+   *
+   * Built objects are rarely one colour: a jar has a darker rim, a barrel has
+   * iron bands, a crate has its boards and its corners. Painting the whole
+   * body for each of them would undo the last one, so each shape carries a
+   * slot of its own and this is what fills it.
+   */
+  paintSelectedShape(): boolean {
+    const shape = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
+    const held = this.sampledSwatchId;
+    if (this.locked || shape === undefined || held === null) {
+      this.status =
+        held === null
+          ? "Sample a finish first, with F on something in the room."
+          : "Select a shape first, in the room or in the list.";
+      this.audio.play("ui_deny");
+      this.emit();
+      return false;
+    }
+    const before = cloneDisguiseState(this.state);
+    const assignments = this.state.materials.filter((entry) => entry.slotId !== shape.materialSlotId);
+    this.state.materials = [...assignments, { slotId: shape.materialSlotId, swatchId: held }];
+    this.commands.pushApplied(
+      createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "paint shape"),
+      this.state,
+    );
+    this.refreshAll(true);
+    this.emit();
+    this.audio.play("material_sample");
+    this.status = "Painted that shape.";
+    return true;
   }
 
   /** Removes the selected shape, leaving its neighbour selected. */

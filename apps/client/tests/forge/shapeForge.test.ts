@@ -305,6 +305,26 @@ describe("building a disguise in the Forge", () => {
     expect(forge.disguise.shapes[0]?.position[0]).toBeCloseTo(before[0] ?? 0, 9);
   });
 
+  it("gives each shape a finish slot of its own", () => {
+    const forge = controller();
+    forge.addShape("cylinder");
+    forge.addShape("cube");
+    const [first, second] = forge.disguise.shapes;
+    // A jar with a darker rim needs two slots; one shared slot would mean
+    // painting the rim repainted the jar.
+    expect(first?.materialSlotId).not.toBe(second?.materialSlotId);
+  });
+
+  it("keeps a duplicate wearing what it was copied from", () => {
+    const forge = controller();
+    forge.addShape("cube");
+    const source = forge.disguise.shapes[0];
+    forge.duplicateSelectedShape();
+    const copy = forge.disguise.shapes.at(-1);
+    // "Another one of these" means another one that looks like it.
+    expect(copy?.materialSlotId).toBe(source?.materialSlotId);
+  });
+
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {
     const forge = controller();
     for (let index = 0; index < MAX_SHAPES; index += 1) forge.addShape("cube");

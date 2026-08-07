@@ -55,10 +55,14 @@ export function addShape(
   shapes: readonly ShapeState[],
   profileId: ShapeProfileId,
   bone: BoneName,
-  materialSlotId: string,
+  materialSlotId?: string,
 ): ShapeEdit | null {
   if (shapes.length >= MAX_SHAPES) return null;
-  const shape = createShape(nextShapeId(shapes), profileId, bone, materialSlotId);
+  const id = nextShapeId(shapes);
+  // A slot of its own, so a jar can have a darker rim. Nothing is assigned to
+  // it until the player paints it, and an unassigned slot falls back to the
+  // body's finish, so the default look is unchanged.
+  const shape = createShape(id, profileId, bone, materialSlotId ?? id);
   return { shapes: [...shapes, shape], selectedId: shape.id };
 }
 
@@ -74,7 +78,11 @@ export function duplicateShapeById(
   if (shapes.length >= MAX_SHAPES) return null;
   const source = shapes.find((shape) => shape.id === id);
   if (source === undefined) return null;
-  const copy = duplicateShape(source, nextShapeId(shapes));
+  const copyId = nextShapeId(shapes);
+  const copy = duplicateShape(source, copyId);
+  // A copy keeps the finish it was copied from rather than inheriting a fresh
+  // empty slot, because "another one of these" means another one that looks
+  // like it.
   return { shapes: [...shapes, copy], selectedId: copy.id };
 }
 
