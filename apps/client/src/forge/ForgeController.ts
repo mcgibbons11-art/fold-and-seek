@@ -4558,7 +4558,10 @@ export class ForgeController {
         // angle onto a body wedged behind whatever the map put next to it.
         this.cameraDrag = "orbit";
       }
-      if (this.cameraDrag !== null || this.draggedHandle !== null) {
+      // A live drawing has to claim the pointer like any other drag, or every
+      // move after the press is rejected as somebody else's and the stroke
+      // arrives at pointerup with a single point in it.
+      if (this.cameraDrag !== null || this.draggedHandle !== null || this.shapeDraw !== null) {
         this.dragPointerId = event.pointerId;
         trySetPointerCapture(this.canvas, event.pointerId);
       }
