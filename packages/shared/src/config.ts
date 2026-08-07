@@ -145,9 +145,11 @@ export const DEFAULT_MATCH_SETTINGS = {
   minPlayers: 2,
   // Lowered 12 -> 6 (2026-08-06, user order). Six is the roster the shop
   // actually plays well at, and it is the number the authoritative server
-  // script is sized against: fewer seats mean less state, fewer broadcasts,
-  // and more room inside the sandbox's per-callback budget.
-  maxPlayers: 6,
+  // script is sized against: the full-room tests in packages/server-script
+  // derive their rosters from THIS value, so raising it re-measures the
+  // chunked state against the 8 KB key cap and the ~30 writes/s budget on the
+  // next test run rather than trusting a stale figure.
+  maxPlayers: 8,
   /**
    * Seekers the host asks for, one or two. It is a floor rather than the final
    * count: a roster too small to support a second seeker gets one anyway, and

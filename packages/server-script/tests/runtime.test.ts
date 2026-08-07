@@ -317,7 +317,7 @@ describe("the authoritative server script", () => {
     });
     runtime.start();
 
-    const seats = ["s0", "s1", "s2", "s3", "s4", "s5"];
+    const seats = Array.from({ length: DEFAULT_MATCH_SETTINGS.maxPlayers }, (_, i) => `s${String(i)}`);
     for (const id of seats) {
       host.arrive({ id, displayName: id });
       host.message(command({ type: "player_ready", ready: true }), id);
@@ -373,7 +373,7 @@ describe("the authoritative server script", () => {
     });
     runtime.start();
 
-    const seats = ["s0", "s1", "s2", "s3", "s4", "s5"];
+    const seats = Array.from({ length: DEFAULT_MATCH_SETTINGS.maxPlayers }, (_, i) => `s${String(i)}`);
     for (const id of seats) {
       host.arrive({ id, displayName: id });
       host.message(command({ type: "player_ready", ready: true }), id);
