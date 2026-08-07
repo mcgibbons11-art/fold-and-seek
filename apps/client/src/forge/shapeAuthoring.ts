@@ -22,9 +22,16 @@ export interface ShapeEdit {
   readonly selectedId: string;
 }
 
-/** Ids are sequential per disguise, so a list reads Cube 1, Cube 2 in order. */
-export function nextShapeId(shapes: readonly ShapeState[]): string {
-  let highest = 0;
+/**
+ * The next unused shape id.
+ *
+ * `floor` is a high-water mark that never falls, and it is not optional
+ * decoration: ids double as material slots and paint tiles, so an id handed
+ * out twice gives a fresh shape the previous occupant's colour and strokes.
+ * Deleting the highest-numbered shape freed its number for exactly that.
+ */
+export function nextShapeId(shapes: readonly ShapeState[], floor = 0): string {
+  let highest = floor;
   for (const shape of shapes) {
     const match = /^shape_(\d+)$/.exec(shape.id);
     if (match?.[1] !== undefined) highest = Math.max(highest, Number(match[1]));
@@ -56,9 +63,10 @@ export function addShape(
   profileId: ShapeProfileId,
   bone: BoneName,
   materialSlotId?: string,
+  floor = 0,
 ): ShapeEdit | null {
   if (shapes.length >= MAX_SHAPES) return null;
-  const id = nextShapeId(shapes);
+  const id = nextShapeId(shapes, floor);
   // A slot of its own, so a jar can have a darker rim. Nothing is assigned to
   // it until the player paints it, and an unassigned slot falls back to the
   // body's finish, so the default look is unchanged.
@@ -74,11 +82,12 @@ export function addShape(
 export function duplicateShapeById(
   shapes: readonly ShapeState[],
   id: string,
+  floor = 0,
 ): ShapeEdit | null {
   if (shapes.length >= MAX_SHAPES) return null;
   const source = shapes.find((shape) => shape.id === id);
   if (source === undefined) return null;
-  const copyId = nextShapeId(shapes);
+  const copyId = nextShapeId(shapes, floor);
   const copy = duplicateShape(source, copyId);
   // A copy keeps the finish it was copied from rather than inheriting a fresh
   // empty slot, because "another one of these" means another one that looks

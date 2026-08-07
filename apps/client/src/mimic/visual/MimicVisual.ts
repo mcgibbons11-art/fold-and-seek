@@ -689,10 +689,10 @@ export class MimicVisual {
       if (state.profileId === "drawn" && state.outline !== undefined) {
         // A drawn solid owns its geometry: it is this player's outline and no
         // other shape's, so it cannot come from the shared pool.
-        const key = JSON.stringify(state.outline);
+        const key = `${String(state.filled ?? true)}:${JSON.stringify(state.outline)}`;
         if (visual.outlineKey !== key) {
           visual.mesh.geometry.dispose();
-          visual.mesh.geometry = createDrawnGeometry(state.outline);
+          visual.mesh.geometry = createDrawnGeometry(state.outline, state.filled ?? true);
           visual.outlineKey = key;
         }
       } else {

@@ -27,6 +27,8 @@ export interface ShapeState {
   materialSlotId: string;
   /** The swept outline, for a drawn solid. Absent on the primitives. */
   outline?: [number, number][];
+  /** Filled into a slab, or followed as a ribbon. Absent means filled. */
+  filled?: boolean;
 }
 
 /** Where a new shape appears, in the frame of the bone carrying it. */

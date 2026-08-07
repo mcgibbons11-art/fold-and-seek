@@ -177,30 +177,29 @@ console.log("PANEL BEFORE:", panelText(before));
 const names = await game.getByRole("button").allInnerTexts().catch(() => []);
 console.log("BUTTONS:", names.map((n) => n.replace(/\s+/g, " ")).slice(0, 24).join(" | "));
 
-// Draw a disguise: sweep an outline across empty space.
+// Draw a disguise: a free-form squiggle over the character, not a straight
+// sweep - a curve is what proves nothing is being straightened or flattened.
 const beforeDraw = Number((await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
 {
-  // Right of centre: the left third of the pane is the tool panel, and a
-  // press that lands on the HUD never reaches the canvas at all.
-  const from = await at(0.60, 0.55);
-  const to = await at(0.80, 0.55);
-  await page.mouse.move(from.x, from.y);
+  const box = await paneBox();
+  const cx = box.x + box.w * 0.58;
+  const cy = box.y + box.h * 0.52;
+  const rx = box.w * 0.10;
+  const ry = box.h * 0.13;
+  await page.mouse.move(cx + rx, cy);
   await page.mouse.down();
-  for (let step = 1; step <= 18; step += 1) {
-    const t = step / 18;
-    await page.mouse.move(
-      from.x + (to.x - from.x) * t,
-      from.y - Math.sin(t * Math.PI) * (await paneBox()).h * 0.14,
-      { steps: 2 },
-    );
+  for (let step = 1; step <= 40; step += 1) {
+    const t = (step / 40) * Math.PI * 2;
+    await page.mouse.move(cx + Math.cos(t) * rx, cy + Math.sin(t) * ry, { steps: 2 });
   }
   await page.mouse.up();
 }
-await page.waitForTimeout(1_500);
+await page.waitForTimeout(1_800);
 const afterAdd = await textOf();
-console.log("DRAW STATUS:", (afterAdd.match(/drawing…|that was a click[^.]*\.|drew that in[^.]*\.|too small to draw/i) ?? ["none"])[0]);
-record("drawing adds shapes", Number(afterAdd.match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0") > beforeDraw,
-  (afterAdd.match(/drew that in [^.]*\.|too small to draw/i) ?? ["no answer"])[0]);
+const drewCount = Number(afterAdd.match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
+console.log("DRAW STATUS:", (afterAdd.match(/drew that[^.]*\.|that was a click[^.]*\.|too small to draw/i) ?? ["none"])[0]);
+record("a free-form sweep makes exactly one solid", drewCount === beforeDraw + 1,
+  `${String(beforeDraw)} then ${String(drewCount)}`);
 
 // Duplicate by key, then delete by key.
 await page.keyboard.press("Control+d");

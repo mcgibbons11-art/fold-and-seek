@@ -320,6 +320,12 @@ const shapeInstance = z.strictObject({
     .array(z.tuple([z.number(), z.number()]))
     .max(MAX_OUTLINE_POINTS)
     .optional(),
+  /**
+   * Whether a drawn outline is filled into a slab or followed as a ribbon.
+   * Absent means filled, so a pose from before the choice existed reads the
+   * way it was authored.
+   */
+  filled: z.boolean().optional(),
 });
 
 const anchorState = z.strictObject({

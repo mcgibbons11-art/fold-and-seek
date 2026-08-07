@@ -288,6 +288,8 @@ export interface ForgeHudState {
    * creature, and this is what tells a player which one they have made.
    */
   readonly fit: number;
+  /** Whether a drawn outline closes into a slab or stands as the bare line. */
+  readonly fillDrawings: boolean;
   /**
    * What the outline resembles in this room, and how closely. Null until
    * something is built. This is the answer a hider could only guess at before:
@@ -846,6 +848,16 @@ export class ForgeController {
   private materialDropperArmed = false;
   /** The shape the gizmo drives, and the row the object panel highlights. */
   private selectedShapeId: string | null = null;
+  /**
+   * The highest shape number handed out this session, which never falls.
+   *
+   * Ids double as material slots and paint tiles, so reusing one gives a fresh
+   * shape the last occupant's colour and strokes - which is what made a
+   * deleted drawing "come back" the moment a new one was made.
+   */
+  private shapeIdFloor = 0;
+  /** Whether a drawn outline closes into a slab or stands as the line itself. */
+  private fillDrawings = true;
   private shapeOutline: THREE.LineSegments | null = null;
   private strokeTrace: THREE.Line | null = null;
   private shapeDraw: {
@@ -1775,6 +1787,7 @@ export class ForgeController {
               panel: panelState === null ? null : clonePanelState(panelState),
             },
       shapes: this.shapeList(),
+      fillDrawings: this.fillDrawings,
       fit: this.fitScore(),
       readsAs: this.readsAs(),
       sampledSwatchId: this.sampledSwatchId,
@@ -2138,7 +2151,13 @@ export class ForgeController {
       this.emit();
       return false;
     }
-    const edit = addShapeToList(this.state.shapes, profileId, bone ?? this.shapeBone());
+    const edit = addShapeToList(
+      this.state.shapes,
+      profileId,
+      bone ?? this.shapeBone(),
+      undefined,
+      this.shapeIdFloor,
+    );
     if (edit !== null) {
       const fresh = edit.shapes.at(-1);
       const previous = this.state.shapes.at(-1);
@@ -2181,7 +2200,7 @@ export class ForgeController {
       this.emit();
       return false;
     }
-    const edit = duplicateShapeById(this.state.shapes, this.selectedShapeId);
+    const edit = duplicateShapeById(this.state.shapes, this.selectedShapeId, this.shapeIdFloor);
     if (edit === null) {
       this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
       this.audio.play("ui_deny");
@@ -2215,7 +2234,7 @@ export class ForgeController {
       this.emit();
       return false;
     }
-    const edit = duplicateShapeById(this.state.shapes, shape.id);
+    const edit = duplicateShapeById(this.state.shapes, shape.id, this.shapeIdFloor);
     if (edit === null) {
       this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
       this.audio.play("ui_deny");
@@ -2436,7 +2455,13 @@ export class ForgeController {
     if (outline.length < 3) return;
 
     const before = cloneDisguiseState(this.state);
-    const edit = addShapeToList(this.state.shapes, "drawn", this.shapeBone());
+    const edit = addShapeToList(
+      this.state.shapes,
+      "drawn",
+      this.shapeBone(),
+      undefined,
+      this.shapeIdFloor,
+    );
     if (edit === null) {
       this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
       this.audio.play("ui_deny");
@@ -2446,8 +2471,10 @@ export class ForgeController {
     const shape = edit.shapes.at(-1);
     if (shape === undefined) return;
     this.state.shapes = edit.shapes;
+    this.raiseShapeFloor(edit.shapes);
     this.selectedShapeId = shape.id;
     shape.outline = outline;
+    shape.filled = this.fillDrawings;
     shape.scale = [
       clamp(longest, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
       clamp(longest, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
@@ -2512,8 +2539,16 @@ export class ForgeController {
       this.emit();
       return false;
     }
+    const gone = this.state.shapes.find((entry) => entry.id === this.selectedShapeId);
     const edit = removeShapeById(this.state.shapes, this.selectedShapeId);
     if (edit === null) return false;
+    // Its finish goes with it. A slot left behind would dress whatever took
+    // the id next, and the drawing would look like it had come back.
+    if (gone !== undefined) {
+      this.state.materials = this.state.materials.filter(
+        (entry) => entry.slotId !== gone.materialSlotId,
+      );
+    }
     this.commitShapes(edit, "delete shape");
     this.status = "Removed a shape.";
     return true;
@@ -2669,6 +2704,25 @@ export class ForgeController {
     }));
   }
 
+  /** Switches between a filled drawing and the bare stroke. */
+  setFillDrawings(filled: boolean): void {
+    this.fillDrawings = filled;
+    this.status = filled
+      ? "Drawings fill in. Sweep a closed outline."
+      : "Drawings follow the line. Nothing is added between the ends.";
+    this.emit();
+  }
+
+  /** Keeps the id mark above every shape ever made, so none is handed out twice. */
+  private raiseShapeFloor(shapes: readonly { readonly id: string }[]): void {
+    for (const shape of shapes) {
+      const match = /^shape_(\d+)$/.exec(shape.id);
+      if (match?.[1] !== undefined) {
+        this.shapeIdFloor = Math.max(this.shapeIdFloor, Number(match[1]));
+      }
+    }
+  }
+
   /** Where a new shape rides: the selected part, or the pelvis as the body's centre. */
   private shapeBone(): BoneName {
     const slot = [...this.selectedSlots][0];
@@ -2678,6 +2732,7 @@ export class ForgeController {
 
   /** One accepted edit becomes one undoable command, as every Forge edit does. */
   private commitShapes(edit: ShapeEdit, label: string): void {
+    this.raiseShapeFloor(edit.shapes);
     const before = cloneDisguiseState(this.state);
     const after = cloneDisguiseState(this.state);
     after.shapes = edit.shapes;

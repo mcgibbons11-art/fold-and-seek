@@ -872,9 +872,34 @@ function BuildPanel({
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={labelStyle}>Draw what you want to be</div>
       <div style={{ ...labelStyle, opacity: 0.6, textTransform: "none" }}>
-        Sweep the mouse across empty space. Whatever outline you draw becomes a
-        solid you can hide inside, and every piece of it can be reshaped
-        afterwards with its arrows.
+        Hold the button and sweep across the screen. What you draw stands up as
+        a solid you can hide inside, and the arrows reshape it afterwards.
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={
+            state.fillDrawings
+              ? { ...buttonStyle, marginBottom: 0, flex: 1, borderColor: BRASS_LIT }
+              : { ...buttonStyle, marginBottom: 0, flex: 1 }
+          }
+          onClick={() => controller.setFillDrawings(true)}
+        >
+          Fill it in
+        </button>
+        <button
+          type="button"
+          className={PRESS_CLASS}
+          style={
+            state.fillDrawings
+              ? { ...buttonStyle, marginBottom: 0, flex: 1 }
+              : { ...buttonStyle, marginBottom: 0, flex: 1, borderColor: BRASS_LIT }
+          }
+          onClick={() => controller.setFillDrawings(false)}
+        >
+          Just the line
+        </button>
       </div>
 
       <div style={labelStyle}>

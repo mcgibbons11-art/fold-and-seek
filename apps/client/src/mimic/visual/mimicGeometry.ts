@@ -449,8 +449,20 @@ export function createPuckGeometry(radius: number, thickness: number): THREE.Buf
  * approximation assembled from boxes: what they drew is what stands in the
  * room, which is the whole promise of drawing it.
  */
-export function createDrawnGeometry(outline: readonly (readonly [number, number])[]): THREE.BufferGeometry {
+export function createDrawnGeometry(
+  outline: readonly (readonly [number, number])[],
+  /**
+   * Fill the outline, or follow it as a ribbon.
+   *
+   * Filling closes the stroke into a solid slab, which reads as an object but
+   * invents surface the player never drew - two ends of a C become a closed
+   * crescent. A ribbon follows the line itself and adds nothing, so what
+   * stands in the room is exactly the gesture that was made.
+   */
+  filled = true,
+): THREE.BufferGeometry {
   if (outline.length < 3) return new THREE.BoxGeometry(1, 1, 1);
+  if (!filled) return withBoxUvs(createRibbonGeometry(outline));
   const path = new THREE.Shape();
   const [first, ...rest] = outline;
   path.moveTo(first?.[0] ?? 0, first?.[1] ?? 0);
@@ -464,6 +476,32 @@ export function createDrawnGeometry(outline: readonly (readonly [number, number]
   // Centred, because a shape carries its own position and a geometry with its
   // own offset would fight the gizmo that moves it.
   geometry.center();
+  return withBoxUvs(geometry);
+}
+
+/**
+ * Rewrites a geometry's UVs as a box projection over its own bounds.
+ *
+ * ExtrudeGeometry takes the front and back faces' UVs straight from the
+ * the shape's own coordinates, which after centring run about -0.5 to +0.5.
+ * Everything negative falls outside the paint atlas tile, so a brush landed on
+ * roughly half the solid and the rest stayed bare.
+ */
+function withBoxUvs(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
+  geometry.center();
+  geometry.computeBoundingBox();
+  const bounds = geometry.boundingBox;
+  const position = geometry.getAttribute("position");
+  if (bounds !== null && position !== undefined) {
+    const spanX = Math.max(bounds.max.x - bounds.min.x, 1e-6);
+    const spanY = Math.max(bounds.max.y - bounds.min.y, 1e-6);
+    const uv = new Float32Array(position.count * 2);
+    for (let index = 0; index < position.count; index += 1) {
+      uv[index * 2] = (position.getX(index) - bounds.min.x) / spanX;
+      uv[index * 2 + 1] = (position.getY(index) - bounds.min.y) / spanY;
+    }
+    geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+  }
   return geometry;
 }
 
@@ -499,4 +537,66 @@ export function createShapeGeometry(profileId: ShapeProfileId): THREE.BufferGeom
     default:
       return new THREE.BoxGeometry(1, 1, 1);
   }
+}
+
+/** How wide a ribbon stands, as a share of the drawing's own span. */
+const RIBBON_WIDTH = 0.12;
+
+/**
+ * The stroke itself, given width and depth, with nothing added between its
+ * ends.
+ *
+ * Every segment becomes a slab along the line, so a C stays a C. What the
+ * player drew is all that stands up.
+ */
+function createRibbonGeometry(
+  outline: readonly (readonly [number, number])[],
+): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  for (let index = 1; index < outline.length; index += 1) {
+    const from = outline[index - 1];
+    const to = outline[index];
+    if (from === undefined || to === undefined) continue;
+    const dx = to[0] - from[0];
+    const dy = to[1] - from[1];
+    const length = Math.hypot(dx, dy);
+    if (length < 1e-6) continue;
+    const segment = new THREE.BoxGeometry(length + RIBBON_WIDTH, RIBBON_WIDTH, 1);
+    segment.rotateZ(Math.atan2(dy, dx));
+    segment.translate((from[0] + to[0]) / 2, (from[1] + to[1]) / 2, 0);
+    parts.push(segment);
+  }
+  if (parts.length === 0) return new THREE.BoxGeometry(1, 1, 1);
+
+  // Merged by hand rather than by a helper, because the client bundles no
+  // BufferGeometryUtils and a ribbon is only ever a few dozen boxes.
+  let vertices = 0;
+  for (const part of parts) vertices += part.getAttribute("position").count;
+  const position = new Float32Array(vertices * 3);
+  const normal = new Float32Array(vertices * 3);
+  const indices: number[] = [];
+  let offset = 0;
+  for (const part of parts) {
+    const partPosition = part.getAttribute("position");
+    const partNormal = part.getAttribute("normal");
+    const partIndex = part.getIndex();
+    for (let i = 0; i < partPosition.count; i += 1) {
+      position[(offset + i) * 3] = partPosition.getX(i);
+      position[(offset + i) * 3 + 1] = partPosition.getY(i);
+      position[(offset + i) * 3 + 2] = partPosition.getZ(i);
+      normal[(offset + i) * 3] = partNormal?.getX(i) ?? 0;
+      normal[(offset + i) * 3 + 1] = partNormal?.getY(i) ?? 0;
+      normal[(offset + i) * 3 + 2] = partNormal?.getZ(i) ?? 1;
+    }
+    if (partIndex !== null) {
+      for (let i = 0; i < partIndex.count; i += 1) indices.push(offset + partIndex.getX(i));
+    }
+    offset += partPosition.count;
+    part.dispose();
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(position, 3));
+  geometry.setAttribute("normal", new THREE.BufferAttribute(normal, 3));
+  geometry.setIndex(indices);
+  return geometry;
 }

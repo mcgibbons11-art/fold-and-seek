@@ -375,6 +375,29 @@ describe("building a disguise in the Forge", () => {
     expect(after[2]).toBeCloseTo(before[2] ?? 0, 6);
   });
 
+  it("never hands a new shape the paint of one that was deleted", () => {
+    const forge = controller();
+    forge.setToolMode("panels");
+    forge.addShape("cube");
+    const first = forge.disguise.shapes[0];
+    forge.assignSwatch(first?.materialSlotId ?? "", "wood_walnut");
+
+    // Deleting the HIGHEST-numbered shape used to free its number, so the next
+    // one reclaimed the id - and with it the slot and the paint tile. The old
+    // drawing appeared to come back wearing its old finish.
+    forge.selectShape(first?.id ?? null);
+    expect(forge.deleteSelectedShape()).toBe(true);
+    expect(forge.disguise.shapes).toHaveLength(0);
+
+    forge.addShape("cube");
+    const fresh = forge.disguise.shapes[0];
+    expect(fresh?.id).not.toBe(first?.id);
+    const inherited = forge.disguise.materials.find(
+      (entry) => entry.slotId === fresh?.materialSlotId,
+    );
+    expect(inherited).toBeUndefined();
+  });
+
   it("keeps the shape of a free-form sweep instead of flattening it", () => {
     const forge = controller();
     forge.setToolMode("panels");
