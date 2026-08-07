@@ -505,31 +505,48 @@ function withBoxUvs(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
     const x = position.getX(index);
     const y = position.getY(index);
     const z = position.getZ(index);
-    // The plane a face actually faces. Projecting everything on X and Y gave
-    // the extruded SIDE walls the same coordinate front to back - a zero-area
-    // patch of texture stretched along the whole wall, which is what the white
-    // streaks were. Each face is mapped on the two axes it spans instead.
-    const nx = Math.abs(normal?.getX(index) ?? 0);
-    const ny = Math.abs(normal?.getY(index) ?? 0);
-    const nz = Math.abs(normal?.getZ(index) ?? 1);
+    const nx = normal?.getX(index) ?? 0;
+    const ny = normal?.getY(index) ?? 0;
+    const nz = normal?.getZ(index) ?? 1;
+    const ax = Math.abs(nx);
+    const ay = Math.abs(ny);
+    const az = Math.abs(nz);
+
+    // The plane a face spans, mapped into 0..1 of that plane.
     let u: number;
     let v: number;
-    if (nz >= nx && nz >= ny) {
+    let axis: number;
+    if (az >= ax && az >= ay) {
       u = (x - bounds.min.x) / spanX;
       v = (y - bounds.min.y) / spanY;
-    } else if (nx >= ny) {
+      axis = nz >= 0 ? 0 : 1;
+    } else if (ax >= ay) {
       u = (z - bounds.min.z) / spanZ;
       v = (y - bounds.min.y) / spanY;
+      axis = nx >= 0 ? 2 : 3;
     } else {
       u = (x - bounds.min.x) / spanX;
       v = (z - bounds.min.z) / spanZ;
+      axis = ny >= 0 ? 4 : 5;
     }
-    uv[index * 2] = u;
-    uv[index * 2 + 1] = v;
+
+    // Each of the six face directions gets its OWN cell of the tile. Mapping
+    // opposite faces onto the same coordinates gave them the same texels, so
+    // painting the front painted the back stroke for stroke - one side applied
+    // to all sides. A 3x2 grid keeps them apart at the cost of resolution,
+    // which is the same trade every atlas tile already makes.
+    const column = axis % 3;
+    const row = axis < 3 ? 0 : 1;
+    // Inset within the cell: a vertex at a cell's exact edge otherwise lands
+    // in its neighbour's column, and linear filtering bleeds paint across the
+    // border either way.
+    uv[index * 2] = (column + CELL_INSET + u * (1 - 2 * CELL_INSET)) / 3;
+    uv[index * 2 + 1] = (row + CELL_INSET + v * (1 - 2 * CELL_INSET)) / 2;
   }
   geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   return geometry;
 }
+
 
 
 export function createShapeGeometry(profileId: ShapeProfileId): THREE.BufferGeometry {
@@ -565,6 +582,9 @@ export function createShapeGeometry(profileId: ShapeProfileId): THREE.BufferGeom
       return new THREE.BoxGeometry(1, 1, 1);
   }
 }
+
+/** Padding inside each UV cell, keeping faces off each other's texels. */
+const CELL_INSET = 0.03;
 
 /** How wide a ribbon stands, as a share of the drawing's own span. */
 const RIBBON_WIDTH = 0.12;

@@ -70,6 +70,27 @@ describe("a drawn solid", () => {
     expect(spread).toBeGreaterThan(0.2);
   });
 
+  it("keeps opposite faces on different texels, so paint stays where it lands", () => {
+    // Front and back were mapped onto identical coordinates, so they shared
+    // the same texels: painting one side painted the other stroke for stroke,
+    // and a brush on any face appeared on its opposite.
+    const geometry = createDrawnGeometry(square);
+    const normal = geometry.getAttribute("normal");
+    const uv = geometry.getAttribute("uv");
+
+    const front = new Set<string>();
+    const back = new Set<string>();
+    for (let index = 0; index < normal.count; index += 1) {
+      const nz = normal.getZ(index);
+      if (Math.abs(nz) < 0.5) continue;
+      const cell = `${String(Math.floor(uv.getX(index) * 3))}:${String(Math.floor(uv.getY(index) * 2 - 1e-9))}`;
+      (nz > 0 ? front : back).add(cell);
+    }
+    expect(front.size).toBeGreaterThan(0);
+    expect(back.size).toBeGreaterThan(0);
+    for (const cell of front) expect(back.has(cell)).toBe(false);
+  });
+
   it("stands the outline up as a solid with real depth", () => {
     const geometry = createDrawnGeometry(square);
     geometry.computeBoundingBox();
