@@ -359,6 +359,22 @@ describe("building a disguise in the Forge", () => {
     expect(grown).toBeLessThanOrEqual(4);
   });
 
+  it("carries the tuned size onto the next shape instead of starting over", () => {
+    const forge = controller();
+    forge.addShape("cube");
+    forge.scaleSelectedShape(1, 2);
+    const tuned = forge.disguise.shapes[0]?.scale[1] ?? 0;
+
+    forge.addShape("cylinder");
+    const next = forge.disguise.shapes[1];
+    // A build is a run of similar parts; retuning the same numbers for each
+    // is the most expensive thing a short Forge can ask for.
+    expect(next?.scale[1]).toBeCloseTo(tuned, 6);
+    // And it arrives beside its predecessor rather than buried at the bone
+    // origin, where the first move is always dragging it out to see it.
+    expect(next?.position[0]).not.toBeCloseTo(forge.disguise.shapes[0]?.position[0] ?? 0, 6);
+  });
+
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {
     const forge = controller();
     for (let index = 0; index < MAX_SHAPES; index += 1) forge.addShape("cube");

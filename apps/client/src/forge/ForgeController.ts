@@ -828,6 +828,7 @@ export class ForgeController {
   private materialDropperArmed = false;
   /** The shape the gizmo drives, and the row the object panel highlights. */
   private selectedShapeId: string | null = null;
+  private shapeOutline: THREE.LineSegments | null = null;
   /** Paint's own colour reader, for surfaces that declare no swatch. */
   private materialEyedropper: Eyedropper | null = null;
   private resizeGizmo: THREE.Group | null = null;
@@ -2107,6 +2108,25 @@ export class ForgeController {
       return false;
     }
     const edit = addShapeToList(this.state.shapes, profileId, bone ?? this.shapeBone());
+    if (edit !== null) {
+      const fresh = edit.shapes.at(-1);
+      const previous = this.state.shapes.at(-1);
+      if (fresh !== undefined && previous !== undefined) {
+        // Carry the size the player already tuned. A build is a run of
+        // similar parts - a barrel's bands, a crate's boards - and starting
+        // every one back at the default means retuning the same numbers over
+        // and over against a 115 second clock.
+        fresh.scale = [...previous.scale] as [number, number, number];
+        // And appear beside the last one rather than inside the body at the
+        // bone's origin, where the first thing anyone must do is drag it out
+        // before they can even see it.
+        fresh.position = [
+          previous.position[0] + previous.scale[0],
+          previous.position[1],
+          previous.position[2],
+        ];
+      }
+    }
     if (edit === null) {
       this.status = `A disguise carries at most ${String(MAX_SHAPES)} shapes.`;
       this.audio.play("ui_deny");
@@ -4118,12 +4138,14 @@ export class ForgeController {
       const shapeMesh = this.mimic.shapeMeshes[shapeIndex];
       const shapeGizmo = this.ensureResizeGizmo();
       this.layoutSelectionOutlines(false);
+      this.layoutShapeOutline(shapeMesh ?? null);
       if (shapeGizmo === null || shapeMesh === undefined) return;
       shapeGizmo.visible = true;
       shapeMesh.getWorldPosition(this.scratchVector);
       shapeGizmo.position.copy(this.scratchVector);
       return;
     }
+    this.layoutShapeOutline(null);
 
     const wanted =
       this.toolsActive &&
@@ -4149,6 +4171,47 @@ export class ForgeController {
    * multi-select in play, the body itself has to say which pieces the arrows
    * are about to resize.
    */
+  /**
+   * Draws a box round the shape the gizmo is driving.
+   *
+   * A build is a pile of similar primitives, and the arrows alone do not say
+   * WHICH of them a drag is about to move - so a player checks by dragging and
+   * undoing, which is the most expensive way to ask a question under a 115
+   * second clock.
+   */
+  private layoutShapeOutline(mesh: THREE.Mesh | null): void {
+    if (mesh === null) {
+      if (this.shapeOutline !== null) this.shapeOutline.visible = false;
+      return;
+    }
+    if (this.selectionOutlineMaterial === null) {
+      this.selectionOutlineMaterial = new THREE.LineBasicMaterial({
+        color: 0xe2b86a,
+        transparent: true,
+        opacity: 0.9,
+        depthTest: false,
+      });
+    }
+    if (this.shapeOutline === null) {
+      this.shapeOutline = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+        this.selectionOutlineMaterial,
+      );
+      this.shapeOutline.renderOrder = 29;
+      this.handleGroup.add(this.shapeOutline);
+    }
+    this.shapeOutline.visible = true;
+    this.selectionBox.setFromObject(mesh);
+    this.selectionBox.getCenter(this.shapeOutline.position);
+    this.selectionBox.getSize(this.scratchVector);
+    this.shapeOutline.scale.set(
+      Math.max(this.scratchVector.x, 1e-4) * 1.08,
+      Math.max(this.scratchVector.y, 1e-4) * 1.08,
+      Math.max(this.scratchVector.z, 1e-4) * 1.08,
+    );
+    this.shapeOutline.quaternion.identity();
+  }
+
   private layoutSelectionOutlines(wanted: boolean): void {
     for (const [slot, outline] of this.selectionOutlines) {
       outline.visible = wanted && this.selectedSlots.has(slot);

@@ -244,13 +244,15 @@ const afterShape = await textOf();
 record("stretch and turn are reachable", stretched && turned,
   (afterShape.match(/\d+ OF 16 SHAPES/i) ?? ["no count"])[0]);
 
-// Drag the middle of the pane, where the gizmo sits on the selected shape.
+// Every gesture the one gizmo carries: slide, turn, stretch, resize.
 await dragAt(0.5, 0.5, 0.62, 0.5);
-await page.waitForTimeout(700);
-// And the same drag with Shift, which turns instead of sliding.
-await page.keyboard.down("Shift");
-await dragAt(0.5, 0.5, 0.60, 0.5);
-await page.keyboard.up("Shift");
+await page.waitForTimeout(600);
+for (const keys of [["Shift"], ["Alt"], ["Alt", "Shift"]]) {
+  for (const key of keys) await page.keyboard.down(key);
+  await dragAt(0.5, 0.5, 0.58, 0.5);
+  for (const key of keys) await page.keyboard.up(key);
+  await page.waitForTimeout(600);
+}
 await page.waitForTimeout(900);
 const afterDrag = await textOf();
 record("dragging leaves the disguise intact", /of 16 shapes/i.test(afterDrag),
