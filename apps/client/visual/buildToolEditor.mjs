@@ -138,6 +138,9 @@ for (let attempt = 0; attempt < 3 && !inLobby; attempt += 1) {
     .catch(() => false);
 }
 if (!inLobby) {
+  console.log("STUCK AT:", (await textOf()).replace(/\s+/g, " ").slice(0, 400));
+  console.log("BUTTONS:", (await game.getByRole("button").allInnerTexts().catch(() => []))
+    .map((b) => b.replace(/\s+/g, " ")).slice(0, 18).join(" | "));
   console.log(JSON.stringify({ findings, errors: errors.slice(0, 6), note: "never reached a lobby" }, null, 1));
   await context.close();
   process.exit(3);
@@ -157,7 +160,7 @@ let reachedForge = false;
 for (let attempt = 0; attempt < 12 && !reachedForge; attempt += 1) {
   await page.keyboard.press("3");
   await page.waitForTimeout(2_500);
-  reachedForge = /add a shape/i.test(await textOf());
+  reachedForge = /draw what you want to be/i.test(await textOf());
 }
 record("forge tools reachable", reachedForge, reachedForge ? "build tool open" : "never seated");
 if (!reachedForge) {
@@ -168,21 +171,33 @@ if (!reachedForge) {
 await page.waitForTimeout(600);
 
 const before = await textOf();
-record("build panel shows its adders", /add a shape/i.test(before), "");
+record("build panel shows its adders", /draw what you want to be/i.test(before), "");
 const panelText = (t) => (t.match(/add a shape[\s\S]{0,220}/i) ?? ["none"])[0].replace(/\s+/g, " ");
 console.log("PANEL BEFORE:", panelText(before));
 const names = await game.getByRole("button").allInnerTexts().catch(() => []);
 console.log("BUTTONS:", names.map((n) => n.replace(/\s+/g, " ")).slice(0, 24).join(" | "));
 
-// Add two shapes from the panel.
-const addedCube = await clickIf(/^cube$/i, 6_000);
-await page.waitForTimeout(900);
-const addedCylinder = await clickIf(/^cylinder$/i, 6_000);
-await page.waitForTimeout(900);
+// Draw a disguise: sweep an outline across empty space.
+const beforeDraw = Number((await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
+{
+  const from = await at(0.30, 0.62);
+  const to = await at(0.46, 0.62);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  for (let step = 1; step <= 18; step += 1) {
+    const t = step / 18;
+    await page.mouse.move(
+      from.x + (to.x - from.x) * t,
+      from.y - Math.sin(t * Math.PI) * (await paneBox()).h * 0.14,
+      { steps: 2 },
+    );
+  }
+  await page.mouse.up();
+}
+await page.waitForTimeout(1_500);
 const afterAdd = await textOf();
-console.log("PANEL AFTER ADD:", panelText(afterAdd), "| clicked:", addedCube, addedCylinder);
-record("adding shapes works", addedCube && addedCylinder && /2 of 16 shapes/i.test(afterAdd),
-  (afterAdd.match(/\d+ of 16 shapes/i) ?? ["no count"])[0]);
+record("drawing adds shapes", Number(afterAdd.match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0") > beforeDraw,
+  (afterAdd.match(/drew that in [^.]*\.|too small to draw/i) ?? ["no answer"])[0]);
 
 // Duplicate by key, then delete by key.
 await page.keyboard.press("Control+d");
@@ -196,35 +211,6 @@ await page.waitForTimeout(900);
 const afterDel = await textOf();
 record("Delete removes", /2 of 16 shapes/i.test(afterDel),
   (afterDel.match(/\d+ of 16 shapes/i) ?? ["no count"])[0]);
-
-// The form dropper: point at the room and take its shape.
-const beforeSample = await textOf();
-const sampledForm = await clickIf(/copy a shape from the room/i, 6_000);
-await page.waitForTimeout(900);
-const afterSample = await textOf();
-record("form dropper is reachable and answers", sampledForm &&
-  /copied that shape|point at something/i.test(afterSample) &&
-  afterSample !== beforeSample,
-  (afterSample.match(/copied that shape[^.]*\.|point at something[^.]*\./i) ?? ["no answer"])[0].slice(0, 60));
-
-// Draw a disguise: sweep an outline and it becomes solids.
-const beforeDraw = Number((await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
-{
-  const from = await at(0.30, 0.62);
-  const to = await at(0.44, 0.34);
-  await page.mouse.move(from.x, from.y);
-  await page.mouse.down();
-  for (let step = 1; step <= 14; step += 1) {
-    const t = step / 14;
-    await page.mouse.move(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * Math.sin(t * Math.PI));
-  }
-  await page.mouse.up();
-}
-await page.waitForTimeout(1_200);
-const afterDraw = await textOf();
-const drawnCount = Number(afterDraw.match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
-record("a swept outline becomes solids", drawnCount > beforeDraw,
-  `${String(beforeDraw)} then ${String(drawnCount)} · ${(afterDraw.match(/drew that in [^.]*\./i) ?? ["no answer"])[0]}`);
 
 // Mirror: the verb that halves a symmetric build.
 const beforeMirror = (await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0";

@@ -4580,14 +4580,14 @@ export class ForgeController {
           CAMERA_MAX_PITCH,
         );
         this.updateCamera();
+      } else if (this.shapeDraw !== null) {
+        // A live drawing owns the pointer: every move is a point on the
+        // outline, and none of them orbit the camera.
+        this.updatePointerNdc(event);
+        const point = this.pointerOnDragPlane();
+        if (point !== null) this.shapeDraw.points.push({ x: point.x, y: point.y });
       } else if (this.gizmoDrag !== null) {
         this.updateGizmoDrag();
-        if (this.shapeDraw !== null) {
-          const point = this.pointerOnDragPlane();
-          // Sampled sparsely: a freehand stroke fires far more moves than the
-          // outline needs, and every one of them costs a rasterise later.
-          if (point !== null) this.shapeDraw.points.push({ x: point.x, y: point.y });
-        }
       } else if (this.draggedHandle !== null) {
         this.pointerGestureDirty = true;
       } else if (this.draggedPanelSocket !== null) {
@@ -4610,6 +4610,11 @@ export class ForgeController {
       if (!this.ownsPointerEvent(event) && event.pointerId !== this.dragPointerId) return;
       if (this.paintOwnsPointer()) return;
       event.stopPropagation();
+      if (this.shapeDraw !== null) {
+        this.updatePointerNdc(event);
+        const drawn = this.pointerOnDragPlane();
+        if (drawn !== null) this.shapeDraw.points.push({ x: drawn.x, y: drawn.y });
+      }
       if (this.gizmoDrag !== null) {
         if (event.clientX !== this.lastPointerX || event.clientY !== this.lastPointerY) {
           this.updatePointerNdc(event);
