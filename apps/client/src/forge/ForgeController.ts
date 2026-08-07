@@ -544,6 +544,7 @@ const SHAPE_ROTATE_RAD_PER_METRE = Math.PI * 1.4;
 /** A drag the width of the body roughly doubles a shape along that axis. */
 const SHAPE_SCALE_PER_METRE = 1.2;
 const SHAPE_ROTATE_SCRATCH = new THREE.Quaternion();
+const SHAPE_MOVE_SCRATCH = new THREE.Vector3();
 const SHAPE_START_SCRATCH = new THREE.Quaternion();
 const SHAPE_AXIS_X = new THREE.Vector3(1, 0, 0);
 const SHAPE_AXIS_Y = new THREE.Vector3(0, 1, 0);
@@ -846,6 +847,7 @@ export class ForgeController {
   /** The shape the gizmo drives, and the row the object panel highlights. */
   private selectedShapeId: string | null = null;
   private shapeOutline: THREE.LineSegments | null = null;
+  private strokeTrace: THREE.Line | null = null;
   private shapeDraw: { points: DrawPoint[]; plane: THREE.Vector3 } | null = null;
   private drawProfileId: ShapeProfileId = "cube";
   /** Paint's own colour reader, for surfaces that declare no swatch. */
@@ -2290,9 +2292,16 @@ export class ForgeController {
   }
 
   private beginShapeDraw(): void {
+    // Through the BODY, not the visual group's origin. The group sits at the
+    // world origin, so a plane through it put every drawing wherever the map
+    // happens to start - which is how a sweep over the character ended up
+    // hanging in the air somewhere else entirely.
+    const pelvis = this.pose.worldPositions[boneIndex("pelvis")];
     this.dragPlane.setFromNormalAndCoplanarPoint(
       this.camera.getWorldDirection(this.scratchForward),
-      this.mimic.root.position,
+      pelvis === undefined
+        ? this.mimic.root.position
+        : this.scratchVector.set(pelvis.x, pelvis.y, pelvis.z),
     );
     const start = this.pointerOnDragPlane();
     if (start === null) return;
@@ -2306,6 +2315,40 @@ export class ForgeController {
   }
 
   /** Where the pointer meets the drawing plane, or null when it misses. */
+  /**
+   * Draws the stroke as it is being swept.
+   *
+   * Without it a player is drawing blind and only finds out what they made
+   * after they let go, which is the slowest possible way to learn a tool.
+   */
+  private traceStroke(): void {
+    const draw = this.shapeDraw;
+    if (draw === null || draw.points.length < 2) {
+      if (this.strokeTrace !== null) this.strokeTrace.visible = false;
+      return;
+    }
+    if (this.strokeTrace === null) {
+      const material = new THREE.LineBasicMaterial({
+        color: 0xe2b86a,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+      });
+      this.strokeTrace = new THREE.Line(new THREE.BufferGeometry(), material);
+      this.strokeTrace.renderOrder = 31;
+      this.strokeTrace.frustumCulled = false;
+      this.handleGroup.add(this.strokeTrace);
+    }
+    // Closed as it goes, so the player sees the solid they will actually get
+    // rather than an open squiggle that silently fills in on release.
+    const points = draw.points.map((point) => new THREE.Vector3(point.x, point.y, draw.plane.z));
+    const first = points[0];
+    if (first !== undefined) points.push(first.clone());
+    this.strokeTrace.geometry.dispose();
+    this.strokeTrace.geometry = new THREE.BufferGeometry().setFromPoints(points);
+    this.strokeTrace.visible = true;
+  }
+
   private pointerOnDragPlane(): THREE.Vector3 | null {
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
     const hit = this.raycaster.ray.intersectPlane(this.dragPlane, this.scratchVector);
@@ -2322,6 +2365,7 @@ export class ForgeController {
   private endShapeDraw(): void {
     const draw = this.shapeDraw;
     this.shapeDraw = null;
+    if (this.strokeTrace !== null) this.strokeTrace.visible = false;
     this.canvas.style.cursor = this.mode === "panels" ? DRAW_CURSOR : "crosshair";
     if (draw === null || this.locked) return;
     if (draw.points.length < 3) {
@@ -4454,9 +4498,23 @@ export class ForgeController {
           const next = start.clone().multiply(turn).normalize();
           shape.rotation = [next.x, next.y, next.z, next.w];
         } else {
-          // Metres along the axis the arrow points, in the bone's own frame,
-          // which is the frame the shape is stored in.
-          shape.position[axis] = (drag.shape.start[axis] ?? 0) + delta;
+          // Along the arrow's own WORLD direction, converted into the bone's
+          // frame. Writing the delta straight into a local axis moved the
+          // shape wherever that bone happened to face, so an arrow pointing
+          // right slid the piece somewhere else - the gizmo lied about what it
+          // would do.
+          const world = SHAPE_MOVE_SCRATCH.copy(drag.dir).multiplyScalar(delta);
+          const boneTurn = this.pose.worldRotations[boneIndex(shape.bone)];
+          if (boneTurn !== undefined) {
+            world.applyQuaternion(
+              SHAPE_ROTATE_SCRATCH.set(boneTurn.x, boneTurn.y, boneTurn.z, boneTurn.w).invert(),
+            );
+          }
+          shape.position = [
+            (drag.shape.start[0] ?? 0) + world.x,
+            (drag.shape.start[1] ?? 0) + world.y,
+            (drag.shape.start[2] ?? 0) + world.z,
+          ];
         }
       }
       this.pendingValueRefresh = "solve";
@@ -4652,6 +4710,7 @@ export class ForgeController {
         this.updatePointerNdc(event);
         const point = this.pointerOnDragPlane();
         if (point !== null) this.shapeDraw.points.push({ x: point.x, y: point.y });
+        this.traceStroke();
       } else if (this.gizmoDrag !== null) {
         this.updateGizmoDrag();
       } else if (this.draggedHandle !== null) {
@@ -4680,6 +4739,7 @@ export class ForgeController {
         this.updatePointerNdc(event);
         const drawn = this.pointerOnDragPlane();
         if (drawn !== null) this.shapeDraw.points.push({ x: drawn.x, y: drawn.y });
+        this.traceStroke();
         // The release ends the stroke, whatever else the pointer was doing.
         this.endShapeDraw();
         this.canvas.style.cursor = "crosshair";

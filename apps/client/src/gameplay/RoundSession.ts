@@ -1019,6 +1019,21 @@ export class RoundSession {
       this.actions.ready(true);
     }
 
+    // Reopening the editor for the hunt is a CONDITION too, for the same
+    // reason: it used to fire only on entering InspectionIntro, so a client
+    // whose Forge opened after that moment - or who was mid-phase when it
+    // passed - stayed locked for the whole hunt and could not draw, pose or
+    // paint while creeping, which override 2 says it must.
+    if (
+      INSPECTION_PHASES.has(phase) &&
+      this.forge !== null &&
+      this.forge.snapshot().locked &&
+      state.self.role === "mimic" &&
+      state.self.lifeState === "active"
+    ) {
+      this.forge.unlock(HUNT_EDIT_HINT);
+    }
+
     const desired = this.desiredMode(state);
     if (desired === this.mode) return;
 

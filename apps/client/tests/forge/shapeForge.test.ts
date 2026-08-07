@@ -353,6 +353,28 @@ describe("building a disguise in the Forge", () => {
     expect(next?.position[0]).not.toBeCloseTo(forge.disguise.shapes[0]?.position[0] ?? 0, 6);
   });
 
+  it("moves a shape the way the arrow points, not the way its bone faces", () => {
+    // The arrows are drawn in world space. Writing a drag straight into a
+    // local axis moved the piece wherever that bone happened to face, so the
+    // gizmo lied about what it was going to do.
+    const forge = controller();
+    forge.setToolMode("panels");
+    const stroke = Array.from({ length: 20 }, (_, index) => ({
+      x: Math.cos((index / 19) * Math.PI) * 0.1,
+      y: Math.sin((index / 19) * Math.PI) * 0.1,
+    }));
+    expect(forge.drawOutline(stroke)).toBe(true);
+    const drawn = forge.disguise.shapes[0];
+    forge.selectShape(drawn?.id ?? null);
+
+    const before = [...(drawn?.position ?? [])];
+    expect(forge.nudgeSelectedShape(0.05, 0, 0)).toBe(true);
+    const after = forge.disguise.shapes[0]?.position ?? [];
+    expect(after[0]).toBeCloseTo((before[0] ?? 0) + 0.05, 6);
+    expect(after[1]).toBeCloseTo(before[1] ?? 0, 6);
+    expect(after[2]).toBeCloseTo(before[2] ?? 0, 6);
+  });
+
   it("turns one lasso sweep into one closed solid you can reshape", () => {
     const forge = controller();
     forge.setToolMode("panels");
