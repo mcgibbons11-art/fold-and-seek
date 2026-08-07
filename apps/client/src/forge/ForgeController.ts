@@ -2339,11 +2339,11 @@ export class ForgeController {
       this.strokeTrace.frustumCulled = false;
       this.handleGroup.add(this.strokeTrace);
     }
-    // Closed as it goes, so the player sees the solid they will actually get
-    // rather than an open squiggle that silently fills in on release.
+    // The line the player is actually drawing, and nothing else. Closing it
+    // every frame drew a chord straight back to the start, so the trace showed
+    // shapes nobody had swept yet and the drawing appeared to fill itself in
+    // ahead of the cursor. The close happens on release, where it belongs.
     const points = draw.points.map((point) => new THREE.Vector3(point.x, point.y, draw.plane.z));
-    const first = points[0];
-    if (first !== undefined) points.push(first.clone());
     this.strokeTrace.geometry.dispose();
     this.strokeTrace.geometry = new THREE.BufferGeometry().setFromPoints(points);
     this.strokeTrace.visible = true;
@@ -2399,13 +2399,20 @@ export class ForgeController {
     const centreX = (minX + maxX) / 2;
     const centreY = (minY + maxY) / 2;
     const longest = Math.max(width, height, 1e-6);
-    // Thinned to at most `MAX_OUTLINE_POINTS`, keeping the sweep's own order.
-    const step = Math.max(1, Math.ceil(draw.points.length / MAX_OUTLINE_POINTS));
+    // Thinned by DISTANCE rather than by index. Dropping every Nth point
+    // throws away corners on a long sweep and keeps redundant ones where the
+    // hand slowed down, so the solid stopped resembling the drawing; spacing
+    // them evenly keeps the outline the player actually made.
+    const spacing = longest / MAX_OUTLINE_POINTS;
     const outline: [number, number][] = [];
-    for (let index = 0; index < draw.points.length; index += step) {
-      const point = draw.points[index];
-      if (point === undefined) continue;
+    let lastX = Infinity;
+    let lastY = Infinity;
+    for (const point of draw.points) {
+      if (Math.hypot(point.x - lastX, point.y - lastY) < spacing) continue;
+      lastX = point.x;
+      lastY = point.y;
       outline.push([(point.x - centreX) / longest, (point.y - centreY) / longest]);
+      if (outline.length >= MAX_OUTLINE_POINTS) break;
     }
     if (outline.length < 3) return;
 
