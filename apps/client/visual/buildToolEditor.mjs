@@ -198,6 +198,7 @@ const beforeDraw = Number((await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? 
 }
 await page.waitForTimeout(1_500);
 const afterAdd = await textOf();
+console.log("DRAW STATUS:", (afterAdd.match(/drawing…|that was a click[^.]*\.|drew that in[^.]*\.|too small to draw/i) ?? ["none"])[0]);
 record("drawing adds shapes", Number(afterAdd.match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0") > beforeDraw,
   (afterAdd.match(/drew that in [^.]*\.|too small to draw/i) ?? ["no answer"])[0]);
 

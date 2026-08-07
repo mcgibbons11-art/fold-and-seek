@@ -4627,6 +4627,9 @@ export class ForgeController {
         this.updatePointerNdc(event);
         const drawn = this.pointerOnDragPlane();
         if (drawn !== null) this.shapeDraw.points.push({ x: drawn.x, y: drawn.y });
+        // The release ends the stroke, whatever else the pointer was doing.
+        this.endShapeDraw();
+        this.canvas.style.cursor = "crosshair";
       }
       if (this.gizmoDrag !== null) {
         if (event.clientX !== this.lastPointerX || event.clientY !== this.lastPointerY) {
@@ -4634,8 +4637,6 @@ export class ForgeController {
           this.updateGizmoDrag();
         }
         this.endGizmoDrag();
-    this.endShapeDraw();
-        this.endShapeDraw();
       }
       if (this.draggedHandle !== null) {
         if (event.clientX !== this.lastPointerX || event.clientY !== this.lastPointerY) {
