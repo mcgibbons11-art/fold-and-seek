@@ -407,7 +407,13 @@ const CAMERA_MAX_RADIUS = MAX_BOOM_LENGTH_M;
  * an orbit rather than an over-shoulder rig, but neither role begins with the
  * character filling the frame and both can pull back to the shared ceiling.
  */
-const CAMERA_START_RADIUS = DEFAULT_BOOM_LENGTH_M;
+/**
+ * The opening shot stands back half again from the follow boom. Opening at
+ * the boom's own length put the lens nearly against the body ("starts out too
+ * close"), and the narrower lens above magnifies that; the player can still
+ * zoom to either clamp.
+ */
+const CAMERA_START_RADIUS = DEFAULT_BOOM_LENGTH_M * 1.5;
 const CAMERA_MIN_PITCH = -1.2;
 const CAMERA_MAX_PITCH = 1.45;
 
@@ -1031,7 +1037,9 @@ export class ForgeController {
     this.locomotion =
       options.navData === undefined ? null : new HiderLocomotion(options.navData);
 
-    this.camera = new THREE.PerspectiveCamera(40, 1, 0.05, 60);
+    // 32 rather than 40: the wide lens at toy scale bowed the body at the
+    // opening distance and read as fisheye ("camera angle is too wide").
+    this.camera = new THREE.PerspectiveCamera(32, 1, 0.05, 60);
 
     const origin = options.origin ?? new THREE.Vector3(-1.55, 0.075, -1.05);
     this.state = createStarterArrangement("upright");

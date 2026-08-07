@@ -319,7 +319,7 @@ export interface RematchView {
  */
 export interface NoticeView {
   readonly id: number;
-  readonly kind: "hunt_hint" | "warrant_restock" | "close_pass_jackpot" | "bait_nudge";
+  readonly kind: "hunt_hint" | "warrant_restock" | "close_pass_jackpot" | "bait_nudge" | "taunt_scored";
   readonly title: string;
   readonly body: string | null;
   /** Local monotonic deadline after which the HUD must stop showing it. */

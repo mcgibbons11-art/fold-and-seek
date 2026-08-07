@@ -11,6 +11,7 @@ import {
   type SimEvent,
   type WatchedLevel,
   SCORE_MIMIC_CLOSE_PASS_JACKPOT,
+  SCORE_MIMIC_PER_OBSERVED_TAUNT,
 } from "@foldseek/game-sim";
 import { DEFAULT_MATCH_SETTINGS, MatchPhase, type PlayerRole } from "@foldseek/shared";
 
@@ -547,6 +548,18 @@ export class RoundDirector {
 
       case "taunt_streak":
         this.tauntStreak = event.streak;
+        // The payoff, said out loud. A taunt only scores while somebody is
+        // watching, and the taunter cannot see the Inspector's eyes - so
+        // without this the gamble paid out silently and nobody learned what
+        // worked. Streak zero is a taunt into empty air, which stays quiet:
+        // the ask is to light up when it WORKS.
+        if (event.streak > 0) {
+          this.pushNotice(
+            "taunt_scored",
+            `TAUNT +${String(SCORE_MIMIC_PER_OBSERVED_TAUNT)}`,
+            event.streak > 1 ? `Bait streak ×${String(event.streak)} - they are watching.` : "Somebody saw that.",
+          );
+        }
         break;
 
       case "hunt_hint":
