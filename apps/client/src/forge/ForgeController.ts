@@ -524,6 +524,8 @@ const SHAPE_MIN_SCALE = 0.02;
 const SHAPE_MAX_SCALE = 4;
 /** A drag the width of the body turns a shape most of a half circle. */
 const SHAPE_ROTATE_RAD_PER_METRE = Math.PI * 1.4;
+/** A drag the width of the body roughly doubles a shape along that axis. */
+const SHAPE_SCALE_PER_METRE = 1.2;
 const SHAPE_ROTATE_SCRATCH = new THREE.Quaternion();
 const SHAPE_START_SCRATCH = new THREE.Quaternion();
 const SHAPE_AXIS_X = new THREE.Vector3(1, 0, 0);
@@ -863,8 +865,15 @@ export class ForgeController {
       id: string;
       start: [number, number, number];
       startRotation: [number, number, number, number];
-      /** Shift turns the shape about the axis instead of sliding along it. */
-      rotate: boolean;
+      startScale: [number, number, number];
+      /**
+       * What the drag is doing to this shape.
+       *
+       * One set of arrows carries all three transforms, chosen by modifier,
+       * so a player never leaves the shape they are holding to find a mode
+       * switch: bare drag slides, Shift turns, Alt stretches.
+       */
+      mode: "move" | "turn" | "scale" | "uniform";
     } | null;
   } | null = null;
   private selectedSocket: PanelSocketName | null = null;
@@ -4231,7 +4240,7 @@ export class ForgeController {
 
   private beginGizmoDrag(
     arrow: { key: "width" | "length" | "depth"; dir: THREE.Vector3 },
-    rotate = false,
+    mode: "move" | "turn" | "scale" | "uniform" = "move",
   ): void {
     if (this.resizeGizmo === null) return;
     this.commitEdits();
@@ -4253,7 +4262,8 @@ export class ForgeController {
           id: shape.id,
           start: [...shape.position] as [number, number, number],
           startRotation: [...shape.rotation] as [number, number, number, number],
-          rotate,
+          startScale: [...shape.scale] as [number, number, number],
+          mode,
         },
       };
       this.startManipulationAudio();
@@ -4292,7 +4302,27 @@ export class ForgeController {
       const shape = this.state.shapes.find((entry) => entry.id === drag.shape?.id);
       if (shape !== undefined) {
         const axis = drag.key === "width" ? 0 : drag.key === "length" ? 1 : 2;
-        if (drag.shape.rotate) {
+        if (drag.shape.mode === "uniform") {
+          // Every axis at once, from the size the drag began at. Most things a
+          // room contains are resized whole - a bigger jar is a bigger jar,
+          // not a taller one - so this is the common case and the per-axis
+          // stretch is the exception.
+          const factor = 1 + delta * SHAPE_SCALE_PER_METRE;
+          for (let axisIndex = 0; axisIndex < 3; axisIndex += 1) {
+            const start = drag.shape.startScale[axisIndex] ?? 1;
+            shape.scale[axisIndex] = clamp(start * Math.max(factor, 0.05), SHAPE_MIN_SCALE, SHAPE_MAX_SCALE);
+          }
+        } else if (drag.shape.mode === "scale") {
+          // Stretching along the arrow the player grabbed, from the size the
+          // drag started at, so a shape grows and shrinks under the hand
+          // rather than stepping in fixed amounts from a button.
+          const start = drag.shape.startScale[axis] ?? 1;
+          shape.scale[axis] = clamp(
+            start + delta * SHAPE_SCALE_PER_METRE,
+            SHAPE_MIN_SCALE,
+            SHAPE_MAX_SCALE,
+          );
+        } else if (drag.shape.mode === "turn") {
           // Free rotation about the arrow's own axis. Quarter turns square a
           // shape up fast; this is for the tilted lid and the leaning plank
           // that a room actually contains.
@@ -4346,18 +4376,26 @@ export class ForgeController {
       if (restored !== undefined) {
         restored.position = [...drag.shape.start] as [number, number, number];
         restored.rotation = [...drag.shape.startRotation] as [number, number, number, number];
+        restored.scale = [...drag.shape.startScale] as [number, number, number];
       }
       const unchanged =
         restored !== undefined &&
         restored.position.every((axis, index) => axis === moved.position[index]) &&
-        restored.rotation.every((axis, index) => axis === moved.rotation[index]);
+        restored.rotation.every((axis, index) => axis === moved.rotation[index]) &&
+        restored.scale.every((axis, index) => axis === moved.scale[index]);
       if (unchanged) return;
       this.commands.pushApplied(
         createReplaceCommand(
           before,
           cloneDisguiseState(this.state),
           issuedAt,
-          drag.shape.rotate ? "turn shape" : "move shape",
+          drag.shape.mode === "uniform"
+            ? "resize shape"
+            : drag.shape.mode === "scale"
+              ? "stretch shape"
+            : drag.shape.mode === "turn"
+              ? "turn shape"
+              : "move shape",
         ),
         this.state,
       );
@@ -5004,7 +5042,21 @@ export class ForgeController {
         // Shift turns instead of sliding, which keeps one set of arrows doing
         // both jobs rather than putting a mode switch between the player and
         // the shape they are holding.
-        this.beginGizmoDrag(arrow, event.shiftKey);
+        // Alt stretches, Shift turns, bare drag slides. Alt rather than Ctrl
+        // because Ctrl is already undo, redo and duplicate.
+        // Alt+Shift resizes the whole shape, Alt one axis, Shift turns, bare
+        // drag slides. Four transforms on one set of arrows, and the player
+        // never leaves the shape to find a mode.
+        this.beginGizmoDrag(
+          arrow,
+          event.altKey && event.shiftKey
+            ? "uniform"
+            : event.altKey
+              ? "scale"
+              : event.shiftKey
+                ? "turn"
+                : "move",
+        );
         this.audio.play("ui_click");
         return true;
       }

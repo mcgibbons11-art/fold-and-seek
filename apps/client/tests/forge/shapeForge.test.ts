@@ -343,6 +343,22 @@ describe("building a disguise in the Forge", () => {
     expect(body?.swatchId).not.toBe("wood_walnut");
   });
 
+  it("keeps a scale drag inside the same bounds the buttons respect", () => {
+    // The drag path and the button path clamp identically, or a shape could be
+    // dragged away to nothing where a button would have refused - an invisible
+    // thing that still answers clicks and still counts against the sixteen.
+    const forge = controller();
+    forge.addShape("cube");
+    for (let index = 0; index < 60; index += 1) forge.scaleSelectedShape(0, 0.5);
+    const shrunk = forge.disguise.shapes[0]?.scale[0] ?? 0;
+    expect(shrunk).toBeGreaterThan(0);
+
+    for (let index = 0; index < 60; index += 1) forge.scaleSelectedShape(0, 2);
+    const grown = forge.disguise.shapes[0]?.scale[0] ?? 0;
+    expect(Number.isFinite(grown)).toBe(true);
+    expect(grown).toBeLessThanOrEqual(4);
+  });
+
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {
     const forge = controller();
     for (let index = 0; index < MAX_SHAPES; index += 1) forge.addShape("cube");

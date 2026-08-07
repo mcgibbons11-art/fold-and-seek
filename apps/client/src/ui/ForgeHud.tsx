@@ -962,9 +962,10 @@ function BuildPanel({
                 ? "Half of you is still showing. Fold tighter, or build wider."
                 : "You are standing beside your disguise rather than inside it."}
           </div>
-          <div style={labelStyle}>Stretch it</div>
+          <div style={labelStyle}>Stretch it by hand, or in steps</div>
           <div style={{ ...labelStyle, opacity: 0.6, textTransform: "none" }}>
-            Drag an arrow to move · hold Shift to turn · arrow keys nudge
+            Drag an arrow to move · Shift turns · Alt stretches that axis ·
+            Alt+Shift resizes the whole shape · arrow keys nudge
           </div>
           {(["X", "Y", "Z"] as const).map((name, axis) => (
             <div key={name} style={{ display: "flex", gap: 6, alignItems: "center" }}>
