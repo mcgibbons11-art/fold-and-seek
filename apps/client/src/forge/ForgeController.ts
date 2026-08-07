@@ -2451,8 +2451,20 @@ export class ForgeController {
 
     const centreU = (minU + maxU) / 2;
     const centreV = (minV + maxV) / 2;
-    // Spaced by distance so corners survive and pauses do not become clusters.
-    const spacing = longest / MAX_OUTLINE_POINTS;
+    // Spaced along the STROKE'S OWN LENGTH, not the bounding span. A square's
+    // perimeter is four times its span, so span-based spacing spent all the
+    // points a quarter of the way round: a carefully drawn square kept one
+    // side, and closePath bridged the other three with a single chord - which
+    // is how a perfect square came back as a triangle.
+    let arcLength = 0;
+    for (let index = 1; index < flat.length; index += 1) {
+      const from = flat[index - 1];
+      const to = flat[index];
+      if (from !== undefined && to !== undefined) {
+        arcLength += Math.hypot(to.u - from.u, to.v - from.v);
+      }
+    }
+    const spacing = Math.max(arcLength / (MAX_OUTLINE_POINTS - 1), 1e-6);
     const outline: [number, number][] = [];
     let lastU = Infinity;
     let lastV = Infinity;

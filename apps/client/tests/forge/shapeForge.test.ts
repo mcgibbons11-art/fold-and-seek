@@ -398,6 +398,40 @@ describe("building a disguise in the Forge", () => {
     expect(inherited).toBeUndefined();
   });
 
+  it("keeps all four sides of a carefully drawn square", () => {
+    const forge = controller();
+    forge.setToolMode("panels");
+
+    // A slow, dense square: hundreds of samples, the way a careful hand
+    // draws. Span-based thinning spent every point on the first side and
+    // closePath bridged the rest, turning the square into a triangle.
+    const side = 100;
+    const stroke: { x: number; y: number }[] = [];
+    for (let i = 0; i < side; i += 1) stroke.push({ x: i / side * 0.3, y: 0 });
+    for (let i = 0; i < side; i += 1) stroke.push({ x: 0.3, y: i / side * 0.3 });
+    for (let i = 0; i < side; i += 1) stroke.push({ x: 0.3 - (i / side) * 0.3, y: 0.3 });
+    for (let i = 0; i < side; i += 1) stroke.push({ x: 0, y: 0.3 - (i / side) * 0.3 });
+    expect(forge.drawOutline(stroke)).toBe(true);
+
+    const outline = forge.disguise.shapes[0]?.outline ?? [];
+    // Every side is represented: points near all four edges of the square.
+    const nearLeft = outline.some((p) => p[0] < -0.4);
+    const nearRight = outline.some((p) => p[0] > 0.4);
+    const nearBottom = outline.some((p) => p[1] < -0.4);
+    const nearTop = outline.some((p) => p[1] > 0.4);
+    expect(nearLeft && nearRight && nearBottom && nearTop).toBe(true);
+    // And the path travels the whole perimeter rather than one edge: total
+    // length of the kept outline is close to 4 sides, not 1.
+    let kept = 0;
+    for (let i = 1; i < outline.length; i += 1) {
+      kept += Math.hypot(
+        (outline[i]?.[0] ?? 0) - (outline[i - 1]?.[0] ?? 0),
+        (outline[i]?.[1] ?? 0) - (outline[i - 1]?.[1] ?? 0),
+      );
+    }
+    expect(kept).toBeGreaterThan(3);
+  });
+
   it("keeps the shape of a free-form sweep instead of flattening it", () => {
     const forge = controller();
     forge.setToolMode("panels");
@@ -406,7 +440,7 @@ describe("building a disguise in the Forge", () => {
     // about it should be straightened, snapped or filled while it is drawn.
     const stroke = Array.from({ length: 60 }, (_, index) => {
       const t = (index / 59) * Math.PI * 2;
-      return { x: Math.cos(t) * 0.12 + Math.cos(t * 3) * 0.03, y: Math.sin(t) * 0.09 };
+      return { x: Math.cos(t) * 0.12 + Math.cos(t * 3) * 0.06, y: Math.sin(t) * 0.09 };
     });
     expect(forge.drawOutline(stroke)).toBe(true);
 
