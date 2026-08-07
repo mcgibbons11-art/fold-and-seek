@@ -180,8 +180,10 @@ console.log("BUTTONS:", names.map((n) => n.replace(/\s+/g, " ")).slice(0, 24).jo
 // Draw a disguise: sweep an outline across empty space.
 const beforeDraw = Number((await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
 {
-  const from = await at(0.30, 0.62);
-  const to = await at(0.46, 0.62);
+  // Right of centre: the left third of the pane is the tool panel, and a
+  // press that lands on the HUD never reaches the canvas at all.
+  const from = await at(0.60, 0.55);
+  const to = await at(0.80, 0.55);
   await page.mouse.move(from.x, from.y);
   await page.mouse.down();
   for (let step = 1; step <= 18; step += 1) {

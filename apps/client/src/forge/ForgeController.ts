@@ -2284,6 +2284,11 @@ export class ForgeController {
     if (start === null) return;
     this.shapeDraw = { points: [{ x: start.x, y: start.y }], plane: start.clone() };
     this.canvas.style.cursor = "crosshair";
+    // Says so while the stroke is live, which is both the feedback a player
+    // needs and the only way to tell a draw that never started from one that
+    // started and collected nothing.
+    this.status = "Drawing…";
+    this.emit();
   }
 
   /** Where the pointer meets the drawing plane, or null when it misses. */
@@ -2304,6 +2309,11 @@ export class ForgeController {
     const draw = this.shapeDraw;
     this.shapeDraw = null;
     if (draw === null || this.locked) return;
+    if (draw.points.length < 3) {
+      this.status = `That was a click, not a drawing (${String(draw.points.length)} points).`;
+      this.emit();
+      return;
+    }
 
     const room = Math.max(0, MAX_SHAPES - this.state.shapes.length);
     const boxes = strokeToBoxes(draw.points, room, SHAPE_DRAW_MIN_M);
