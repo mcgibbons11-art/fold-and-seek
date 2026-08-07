@@ -489,21 +489,48 @@ export function createDrawnGeometry(
  */
 function withBoxUvs(geometry: THREE.BufferGeometry): THREE.BufferGeometry {
   geometry.center();
+  geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   const bounds = geometry.boundingBox;
   const position = geometry.getAttribute("position");
-  if (bounds !== null && position !== undefined) {
-    const spanX = Math.max(bounds.max.x - bounds.min.x, 1e-6);
-    const spanY = Math.max(bounds.max.y - bounds.min.y, 1e-6);
-    const uv = new Float32Array(position.count * 2);
-    for (let index = 0; index < position.count; index += 1) {
-      uv[index * 2] = (position.getX(index) - bounds.min.x) / spanX;
-      uv[index * 2 + 1] = (position.getY(index) - bounds.min.y) / spanY;
+  const normal = geometry.getAttribute("normal");
+  if (bounds === null || position === undefined) return geometry;
+
+  const spanX = Math.max(bounds.max.x - bounds.min.x, 1e-6);
+  const spanY = Math.max(bounds.max.y - bounds.min.y, 1e-6);
+  const spanZ = Math.max(bounds.max.z - bounds.min.z, 1e-6);
+  const uv = new Float32Array(position.count * 2);
+
+  for (let index = 0; index < position.count; index += 1) {
+    const x = position.getX(index);
+    const y = position.getY(index);
+    const z = position.getZ(index);
+    // The plane a face actually faces. Projecting everything on X and Y gave
+    // the extruded SIDE walls the same coordinate front to back - a zero-area
+    // patch of texture stretched along the whole wall, which is what the white
+    // streaks were. Each face is mapped on the two axes it spans instead.
+    const nx = Math.abs(normal?.getX(index) ?? 0);
+    const ny = Math.abs(normal?.getY(index) ?? 0);
+    const nz = Math.abs(normal?.getZ(index) ?? 1);
+    let u: number;
+    let v: number;
+    if (nz >= nx && nz >= ny) {
+      u = (x - bounds.min.x) / spanX;
+      v = (y - bounds.min.y) / spanY;
+    } else if (nx >= ny) {
+      u = (z - bounds.min.z) / spanZ;
+      v = (y - bounds.min.y) / spanY;
+    } else {
+      u = (x - bounds.min.x) / spanX;
+      v = (z - bounds.min.z) / spanZ;
     }
-    geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+    uv[index * 2] = u;
+    uv[index * 2 + 1] = v;
   }
+  geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   return geometry;
 }
+
 
 export function createShapeGeometry(profileId: ShapeProfileId): THREE.BufferGeometry {
   switch (profileId) {

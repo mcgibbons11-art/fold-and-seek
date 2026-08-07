@@ -47,6 +47,29 @@ describe("a drawn solid", () => {
     expect(maxU).toBeGreaterThan(0.95);
   });
 
+  it("gives the extruded sides real UV area, not a stretched line", () => {
+    // Projecting every face on X and Y gave the side walls one coordinate from
+    // front to back: a zero-area patch of texture smeared along the whole
+    // wall, which is what the white streaks were.
+    const geometry = createDrawnGeometry(square);
+    const position = geometry.getAttribute("position");
+    const normal = geometry.getAttribute("normal");
+    const uv = geometry.getAttribute("uv");
+
+    let sideVertices = 0;
+    let spread = 0;
+    const seen: number[] = [];
+    for (let index = 0; index < position.count; index += 1) {
+      // A wall faces sideways rather than front or back.
+      if (Math.abs(normal.getZ(index)) > 0.5) continue;
+      sideVertices += 1;
+      seen.push(uv.getX(index), uv.getY(index));
+    }
+    expect(sideVertices).toBeGreaterThan(0);
+    spread = Math.max(...seen) - Math.min(...seen);
+    expect(spread).toBeGreaterThan(0.2);
+  });
+
   it("stands the outline up as a solid with real depth", () => {
     const geometry = createDrawnGeometry(square);
     geometry.computeBoundingBox();
