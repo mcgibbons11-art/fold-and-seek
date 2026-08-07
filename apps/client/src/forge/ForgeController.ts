@@ -50,6 +50,8 @@ import {
   type FitBox,
   removeShapeById,
   shapeLabels,
+  strokeToBoxes,
+  type DrawPoint,
   type ShapeEdit,
 } from "./shapeAuthoring";
 import type { CharacterController } from "../inspector/CharacterController";
@@ -522,6 +524,8 @@ const GIZMO_PICK_RADIUS_M = WORLD_SCALE.playerHeight * 0.09;
 const SHAPE_NUDGE_M = 0.007;
 /** A gap this small after a drag was not intended, so it closes itself. */
 const AUTO_SEAT_M = 0.012;
+/** Smaller than this was a click, not a drawn shape. */
+const SHAPE_DRAW_MIN_M = 0.01;
 const SHAPE_MIN_SCALE = 0.02;
 const SHAPE_MAX_SCALE = 4;
 /** A drag the width of the body turns a shape most of a half circle. */
@@ -831,6 +835,8 @@ export class ForgeController {
   /** The shape the gizmo drives, and the row the object panel highlights. */
   private selectedShapeId: string | null = null;
   private shapeOutline: THREE.LineSegments | null = null;
+  private shapeDraw: { points: DrawPoint[]; plane: THREE.Vector3 } | null = null;
+  private drawProfileId: ShapeProfileId = "cube";
   /** Paint's own colour reader, for surfaces that declare no swatch. */
   private materialEyedropper: Eyedropper | null = null;
   private resizeGizmo: THREE.Group | null = null;
@@ -2328,6 +2334,98 @@ export class ForgeController {
     if (offset === null || Math.abs(offset.delta) > AUTO_SEAT_M) return;
     shape.position[offset.axis] = (shape.position[offset.axis] ?? 0) + offset.delta;
     this.status = "Seated flush.";
+  }
+
+  /**
+   * Starts drawing a shape on the screen.
+   *
+   * The rectangle is measured on a plane through the body facing the camera,
+   * so what the player draws around the body is the size they get on it.
+   */
+  private beginShapeDraw(): void {
+    this.dragPlane.setFromNormalAndCoplanarPoint(
+      this.camera.getWorldDirection(this.scratchForward),
+      this.mimic.root.position,
+    );
+    const start = this.pointerOnDragPlane();
+    if (start === null) return;
+    this.shapeDraw = { points: [{ x: start.x, y: start.y }], plane: start.clone() };
+    this.canvas.style.cursor = "crosshair";
+  }
+
+  /** Where the pointer meets the drawing plane, or null when it misses. */
+  private pointerOnDragPlane(): THREE.Vector3 | null {
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const hit = this.raycaster.ray.intersectPlane(this.dragPlane, this.scratchVector);
+    return hit === null ? null : hit.clone();
+  }
+
+  /**
+   * Turns the drawn rectangle into a shape.
+   *
+   * Depth comes from the smaller of the two drawn sides, because a rectangle
+   * says nothing about how deep it is and a slab as deep as it is wide is the
+   * answer that reads as an object rather than a card.
+   */
+  private endShapeDraw(): void {
+    const draw = this.shapeDraw;
+    this.shapeDraw = null;
+    if (draw === null || this.locked) return;
+
+    const room = Math.max(0, MAX_SHAPES - this.state.shapes.length);
+    const boxes = strokeToBoxes(draw.points, room, SHAPE_DRAW_MIN_M);
+    if (boxes.length === 0) {
+      if (draw.points.length > 2) {
+        this.status = "That was too small to draw. Sweep a bigger outline.";
+        this.audio.play("ui_deny");
+        this.emit();
+      }
+      return;
+    }
+
+    const before = cloneDisguiseState(this.state);
+    const bone = this.shapeBone();
+    const origin = this.pose.worldPositions[boneIndex(bone)];
+    let shapes = this.state.shapes;
+    let lastId = this.selectedShapeId;
+    for (const box of boxes) {
+      const edit = addShapeToList(shapes, this.drawProfileId, bone);
+      if (edit === null) break;
+      const shape = edit.shapes.at(-1);
+      if (shape === undefined) break;
+      shape.scale = [
+        clamp(box.width, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
+        clamp(box.height, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
+        clamp(Math.min(box.width, box.height), SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
+      ];
+      // Placed where it was drawn, in the carrying bone's frame.
+      shape.position = [
+        box.x - (origin?.x ?? 0),
+        box.y - (origin?.y ?? 0),
+        draw.plane.z - (origin?.z ?? 0),
+      ];
+      shapes = edit.shapes;
+      lastId = shape.id;
+    }
+    if (shapes === this.state.shapes) return;
+
+    this.state.shapes = [...shapes];
+    this.selectedShapeId = lastId;
+    this.commands.pushApplied(
+      createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "draw a disguise"),
+      this.state,
+    );
+    this.refreshAll(true);
+    this.emit();
+    this.audio.play("panel_snap");
+    this.status = `Drew that in ${String(boxes.length)} ${boxes.length === 1 ? "piece" : "pieces"}. Drag the arrows to reshape it.`;
+  }
+
+  /** The profile a drawn rectangle becomes. */
+  setDrawProfile(profileId: ShapeProfileId): void {
+    this.drawProfileId = profileId;
+    this.status = `Drawing ${profileId}s. Drag on empty space to draw one.`;
+    this.emit();
   }
 
   /** Removes the selected shape, leaving its neighbour selected. */
@@ -4625,6 +4723,12 @@ export class ForgeController {
         this.updateCamera();
       } else if (this.gizmoDrag !== null) {
         this.updateGizmoDrag();
+        if (this.shapeDraw !== null) {
+          const point = this.pointerOnDragPlane();
+          // Sampled sparsely: a freehand stroke fires far more moves than the
+          // outline needs, and every one of them costs a rasterise later.
+          if (point !== null) this.shapeDraw.points.push({ x: point.x, y: point.y });
+        }
       } else if (this.draggedHandle !== null) {
         this.pointerGestureDirty = true;
       } else if (this.draggedPanelSocket !== null) {
@@ -4653,6 +4757,8 @@ export class ForgeController {
           this.updateGizmoDrag();
         }
         this.endGizmoDrag();
+    this.endShapeDraw();
+        this.endShapeDraw();
       }
       if (this.draggedHandle !== null) {
         if (event.clientX !== this.lastPointerX || event.clientY !== this.lastPointerY) {
@@ -5164,6 +5270,15 @@ export class ForgeController {
       if (shapeId !== null) {
         this.selectShape(shapeId);
         this.audio.play("ui_click");
+        return true;
+      }
+
+      // Nothing under the pointer: the drag draws a shape instead of orbiting.
+      // One gesture for what otherwise costs an add, a drag out of the body,
+      // and a stretch on two axes - which is the single biggest saving
+      // available under a 115 second clock.
+      if (!this.locked) {
+        this.beginShapeDraw();
         return true;
       }
 

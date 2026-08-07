@@ -5,6 +5,7 @@ import {
   addShape,
   fitScore,
   snapOffset,
+  strokeToBoxes,
   duplicateShapeById,
   nextShapeId,
   removeShapeById,
@@ -134,5 +135,38 @@ describe("closing the gap between two built shapes", () => {
 
   it("says nothing when they already touch", () => {
     expect(snapOffset(box(0, 1), [box(1, 2)])).toBeNull();
+  });
+});
+
+describe("turning a drawn outline into a disguise", () => {
+  const line = (n: number, y: (i: number) => number) =>
+    Array.from({ length: n }, (_, i) => ({ x: i / n, y: y(i) }));
+
+  it("ignores a click, which is not a drawing", () => {
+    expect(strokeToBoxes([{ x: 0, y: 0 }], 16, 0.01)).toEqual([]);
+    expect(strokeToBoxes([{ x: 0, y: 0 }, { x: 0.001, y: 0 }], 16, 0.01)).toEqual([]);
+  });
+
+  it("fills each column the stroke crosses, so the outline survives", () => {
+    // A tall sweep and a short one must not come back the same, or the drawing
+    // said nothing about the shape.
+    const tall = strokeToBoxes(line(24, (i) => (i % 2 === 0 ? 0 : 0.8)), 16, 0.01);
+    const flat = strokeToBoxes(line(24, () => 0), 16, 0.01);
+    expect(tall.length).toBeGreaterThan(0);
+    expect(Math.max(...tall.map((b) => b.height))).toBeGreaterThan(
+      Math.max(...flat.map((b) => b.height)),
+    );
+  });
+
+  it("never spends more boxes than the disguise has room for", () => {
+    // Sixteen is the wire's ceiling; a drawing that overran it would be
+    // silently truncated somewhere less honest than here.
+    const busy = strokeToBoxes(line(200, (i) => Math.sin(i) * 0.5), 4, 0.01);
+    expect(busy.length).toBeLessThanOrEqual(4);
+  });
+
+  it("gives a flat stroke real thickness rather than an invisible sliver", () => {
+    const flat = strokeToBoxes(line(24, () => 0.2), 16, 0.02);
+    for (const box of flat) expect(box.height).toBeGreaterThanOrEqual(0.02);
   });
 });

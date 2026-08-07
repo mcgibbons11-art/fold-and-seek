@@ -195,3 +195,93 @@ export function snapOffset(
 
   return best === null ? null : { axis: best.axis, delta: best.delta };
 }
+
+/** A point on the drawing plane, in metres. */
+export interface DrawPoint {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** One box of a drawn silhouette: centre and size on the drawing plane. */
+export interface DrawnBox {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+/**
+ * Turns a drawn outline into the boxes that fill it.
+ *
+ * The whole point of drawing is that a player says "that shape" once, with one
+ * gesture, instead of assembling it from primitives under a clock. So the
+ * stroke is rasterised: its bounding box is divided into a coarse grid, every
+ * column the stroke passes through is filled from its lowest to its highest
+ * point, and each column becomes one box.
+ *
+ * Columns rather than free-form cells because a silhouette is what a hider is
+ * judged on, and a column-filled outline has the same outline as the drawing
+ * while costing a fraction of the shapes. Adjacent columns of equal height are
+ * merged for the same reason: sixteen is the ceiling, and a drawing that spent
+ * them all on one smooth edge would have nothing left for the rest of itself.
+ */
+export function strokeToBoxes(
+  points: readonly DrawPoint[],
+  maxBoxes: number,
+  minSize: number,
+): DrawnBox[] {
+  if (points.length < 2 || maxBoxes < 1) return [];
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const point of points) {
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+  }
+  const span = maxX - minX;
+  if (!Number.isFinite(span) || span < minSize) return [];
+
+  // One column per box allowed, so a drawing never overruns the ceiling.
+  const columns = Math.max(1, Math.min(maxBoxes, 12));
+  const width = span / columns;
+  const lows = new Array<number>(columns).fill(Infinity);
+  const highs = new Array<number>(columns).fill(-Infinity);
+
+  for (const point of points) {
+    const index = Math.min(columns - 1, Math.max(0, Math.floor((point.x - minX) / width)));
+    lows[index] = Math.min(lows[index] ?? Infinity, point.y);
+    highs[index] = Math.max(highs[index] ?? -Infinity, point.y);
+  }
+
+  const boxes: DrawnBox[] = [];
+  for (let index = 0; index < columns; index += 1) {
+    const low = lows[index];
+    const high = highs[index];
+    if (low === undefined || high === undefined || low === Infinity) continue;
+    // A stroke that crossed a column at a single height still has to become
+    // something visible, so a flat column takes the minimum thickness.
+    const height = Math.max(high - low, minSize);
+    const previous = boxes.at(-1);
+    if (
+      previous !== undefined &&
+      Math.abs(previous.height - height) < minSize &&
+      Math.abs(previous.y - (low + height / 2)) < minSize
+    ) {
+      // Same height as its neighbour: widen that box rather than spend another.
+      boxes[boxes.length - 1] = {
+        x: (previous.x - previous.width / 2 + minX + (index + 1) * width) / 2,
+        y: previous.y,
+        width: minX + (index + 1) * width - (previous.x - previous.width / 2),
+        height: previous.height,
+      };
+      continue;
+    }
+    boxes.push({
+      x: minX + (index + 0.5) * width,
+      y: low + height / 2,
+      width,
+      height,
+    });
+    if (boxes.length >= maxBoxes) break;
+  }
+  return boxes;
+}

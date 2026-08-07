@@ -892,7 +892,12 @@ function BuildPanel({
 }): ReactElement {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      <div style={labelStyle}>Add a shape</div>
+      <div style={labelStyle}>Draw what you want to be</div>
+      <div style={{ ...labelStyle, opacity: 0.6, textTransform: "none" }}>
+        Sweep the mouse over empty space and the outline becomes a solid you can
+        hide in. Reshape any piece with its arrows afterwards. The buttons pick
+        what a drawn piece is made of.
+      </div>
       <button
         type="button"
         className={PRESS_CLASS}
@@ -910,7 +915,10 @@ function BuildPanel({
             className={PRESS_CLASS}
             style={buttonStyle}
             disabled={state.locked}
-            onClick={() => controller.addShape(profileId)}
+            onClick={() => {
+              controller.setDrawProfile(profileId);
+              controller.addShape(profileId);
+            }}
           >
             {profileId}
           </button>
