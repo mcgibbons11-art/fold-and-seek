@@ -848,7 +848,14 @@ export class ForgeController {
   private selectedShapeId: string | null = null;
   private shapeOutline: THREE.LineSegments | null = null;
   private strokeTrace: THREE.Line | null = null;
-  private shapeDraw: { points: DrawPoint[]; plane: THREE.Vector3 } | null = null;
+  private shapeDraw: {
+    /** Every sample, in world space, exactly as the hand made it. */
+    points: THREE.Vector3[];
+    /** The plane's own axes, so a sweep can be read back as a flat outline. */
+    right: THREE.Vector3;
+    up: THREE.Vector3;
+    origin: THREE.Vector3;
+  } | null = null;
   private drawProfileId: ShapeProfileId = "cube";
   /** Paint's own colour reader, for surfaces that declare no swatch. */
   private materialEyedropper: Eyedropper | null = null;
@@ -2282,9 +2289,13 @@ export class ForgeController {
     if (this.locked || points.length < 2) return false;
     const first = points[0];
     if (first === undefined) return false;
+    // A flat stroke on the world XY plane, which is what a test can state
+    // plainly; the pointer path supplies real 3D samples and its own basis.
     this.shapeDraw = {
-      points: points.map((point) => ({ x: point.x, y: point.y })),
-      plane: new THREE.Vector3(first.x, first.y, 0),
+      points: points.map((point) => new THREE.Vector3(point.x, point.y, 0)),
+      right: new THREE.Vector3(1, 0, 0),
+      up: new THREE.Vector3(0, 1, 0),
+      origin: new THREE.Vector3(first.x, first.y, 0),
     };
     const before = this.state.shapes.length;
     this.endShapeDraw();
@@ -2305,7 +2316,14 @@ export class ForgeController {
     );
     const start = this.pointerOnDragPlane();
     if (start === null) return;
-    this.shapeDraw = { points: [{ x: start.x, y: start.y }], plane: start.clone() };
+    // The plane's own right and up, taken from the camera. A sweep is read
+    // back against these rather than against world X and Y - forcing a world
+    // axis flattened every horizontal move and drew nothing but vertical
+    // lines.
+    const right = new THREE.Vector3().crossVectors(this.camera.up, this.dragPlane.normal).normalize();
+    if (right.lengthSq() < 1e-8) right.set(1, 0, 0);
+    const up = new THREE.Vector3().crossVectors(this.dragPlane.normal, right).normalize();
+    this.shapeDraw = { points: [start.clone()], right, up, origin: start.clone() };
     this.canvas.style.cursor = DRAW_CURSOR;
     // Says so while the stroke is live, which is both the feedback a player
     // needs and the only way to tell a draw that never started from one that
@@ -2343,7 +2361,7 @@ export class ForgeController {
     // every frame drew a chord straight back to the start, so the trace showed
     // shapes nobody had swept yet and the drawing appeared to fill itself in
     // ahead of the cursor. The close happens on release, where it belongs.
-    const points = draw.points.map((point) => new THREE.Vector3(point.x, point.y, draw.plane.z));
+    const points = draw.points.map((point) => point.clone());
     this.strokeTrace.geometry.dispose();
     this.strokeTrace.geometry = new THREE.BufferGeometry().setFromPoints(points);
     this.strokeTrace.visible = true;
@@ -2374,51 +2392,49 @@ export class ForgeController {
       return;
     }
 
-    // The outline in its own local units, centred on itself. What the player
-    // swept IS the shape - one solid, at the size they drew it - rather than
-    // an approximation assembled out of boxes.
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    for (const point of draw.points) {
-      minX = Math.min(minX, point.x);
-      maxX = Math.max(maxX, point.x);
-      minY = Math.min(minY, point.y);
-      maxY = Math.max(maxY, point.y);
+    // NOTHING is interpreted until here. The stroke was collected exactly as
+    // the hand made it; only now is it read back against the plane it was
+    // drawn on, closed, and stood up as a solid.
+    const flat = draw.points.map((point) => {
+      const offset = SHAPE_MOVE_SCRATCH.copy(point).sub(draw.origin);
+      return { u: offset.dot(draw.right), v: offset.dot(draw.up) };
+    });
+    let minU = Infinity;
+    let maxU = -Infinity;
+    let minV = Infinity;
+    let maxV = -Infinity;
+    for (const point of flat) {
+      minU = Math.min(minU, point.u);
+      maxU = Math.max(maxU, point.u);
+      minV = Math.min(minV, point.v);
+      maxV = Math.max(maxV, point.v);
     }
-    const width = maxX - minX;
-    const height = maxY - minY;
-    if (width < SHAPE_DRAW_MIN_M && height < SHAPE_DRAW_MIN_M) {
+    const width = maxU - minU;
+    const height = maxV - minV;
+    const longest = Math.max(width, height);
+    if (longest < SHAPE_DRAW_MIN_M) {
       this.status = "Too small to draw. Sweep a bigger outline.";
       this.audio.play("ui_deny");
       this.emit();
       return;
     }
 
-    const centreX = (minX + maxX) / 2;
-    const centreY = (minY + maxY) / 2;
-    const longest = Math.max(width, height, 1e-6);
-    // Thinned by DISTANCE rather than by index. Dropping every Nth point
-    // throws away corners on a long sweep and keeps redundant ones where the
-    // hand slowed down, so the solid stopped resembling the drawing; spacing
-    // them evenly keeps the outline the player actually made.
+    const centreU = (minU + maxU) / 2;
+    const centreV = (minV + maxV) / 2;
+    // Spaced by distance so corners survive and pauses do not become clusters.
     const spacing = longest / MAX_OUTLINE_POINTS;
     const outline: [number, number][] = [];
-    let lastX = Infinity;
-    let lastY = Infinity;
-    for (const point of draw.points) {
-      if (Math.hypot(point.x - lastX, point.y - lastY) < spacing) continue;
-      lastX = point.x;
-      lastY = point.y;
-      outline.push([(point.x - centreX) / longest, (point.y - centreY) / longest]);
+    let lastU = Infinity;
+    let lastV = Infinity;
+    for (const point of flat) {
+      if (Math.hypot(point.u - lastU, point.v - lastV) < spacing) continue;
+      lastU = point.u;
+      lastV = point.v;
+      outline.push([(point.u - centreU) / longest, (point.v - centreV) / longest]);
       if (outline.length >= MAX_OUTLINE_POINTS) break;
     }
     if (outline.length < 3) return;
 
-    // Built as ONE command rather than an add followed by an edit, so a sweep
-    // is taken back by a single undo - two would leave an empty solid behind
-    // and read as the tool half-forgetting what you drew.
     const before = cloneDisguiseState(this.state);
     const edit = addShapeToList(this.state.shapes, "drawn", this.shapeBone());
     if (edit === null) {
@@ -2432,31 +2448,42 @@ export class ForgeController {
     this.state.shapes = edit.shapes;
     this.selectedShapeId = shape.id;
     shape.outline = outline;
-    // Drawn to the size it was swept, not shrunk to a token and not blown up
-    // into an invisible mountain: the outline's own span in world metres.
     shape.scale = [
       clamp(longest, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
       clamp(longest, SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
       clamp(Math.max(longest * DRAWN_THICKNESS_SHARE, SHAPE_MIN_SCALE), SHAPE_MIN_SCALE, SHAPE_MAX_SCALE),
     ];
 
-    // Where it was drawn, converted into the bone's frame. Subtracting the
-    // bone's position is not enough - the renderer turns the stored offset by
-    // the bone's rotation, so a raw world offset gets rotated twice and the
-    // solid lands nowhere near the stroke.
-    const origin = this.pose.worldPositions[boneIndex(shape.bone)];
-    const local = new THREE.Vector3(
-      centreX - (origin?.x ?? 0),
-      centreY - (origin?.y ?? 0),
-      draw.plane.z - (origin?.z ?? 0),
+    // Standing in the plane it was drawn on, facing the camera that drew it,
+    // then expressed in the carrying bone's frame.
+    const boneIdx = boneIndex(shape.bone);
+    const origin = this.pose.worldPositions[boneIdx];
+    const boneTurn = this.pose.worldRotations[boneIdx];
+    const inverse = SHAPE_ROTATE_SCRATCH.set(
+      boneTurn?.x ?? 0,
+      boneTurn?.y ?? 0,
+      boneTurn?.z ?? 0,
+      boneTurn?.w ?? 1,
+    ).invert();
+
+    const centre = draw.origin
+      .clone()
+      .addScaledVector(draw.right, centreU)
+      .addScaledVector(draw.up, centreV);
+    const local = centre.sub(
+      SHAPE_MOVE_SCRATCH.set(origin?.x ?? 0, origin?.y ?? 0, origin?.z ?? 0),
     );
-    const boneTurn = this.pose.worldRotations[boneIndex(shape.bone)];
-    if (boneTurn !== undefined) {
-      local.applyQuaternion(
-        SHAPE_ROTATE_SCRATCH.set(boneTurn.x, boneTurn.y, boneTurn.z, boneTurn.w).invert(),
-      );
-    }
+    local.applyQuaternion(inverse);
     shape.position = [local.x, local.y, local.z];
+
+    const facing = new THREE.Matrix4().makeBasis(
+      draw.right,
+      draw.up,
+      new THREE.Vector3().crossVectors(draw.right, draw.up).normalize(),
+    );
+    const worldTurn = new THREE.Quaternion().setFromRotationMatrix(facing);
+    const localTurn = inverse.clone().multiply(worldTurn);
+    shape.rotation = [localTurn.x, localTurn.y, localTurn.z, localTurn.w];
 
     this.commands.pushApplied(
       createReplaceCommand(before, cloneDisguiseState(this.state), performance.now(), "draw a disguise"),
@@ -4716,7 +4743,7 @@ export class ForgeController {
         // outline, and none of them orbit the camera.
         this.updatePointerNdc(event);
         const point = this.pointerOnDragPlane();
-        if (point !== null) this.shapeDraw.points.push({ x: point.x, y: point.y });
+        if (point !== null) this.shapeDraw.points.push(point.clone());
         this.traceStroke();
       } else if (this.gizmoDrag !== null) {
         this.updateGizmoDrag();
@@ -4745,7 +4772,7 @@ export class ForgeController {
       if (this.shapeDraw !== null) {
         this.updatePointerNdc(event);
         const drawn = this.pointerOnDragPlane();
-        if (drawn !== null) this.shapeDraw.points.push({ x: drawn.x, y: drawn.y });
+        if (drawn !== null) this.shapeDraw.points.push(drawn.clone());
         this.traceStroke();
         // The release ends the stroke, whatever else the pointer was doing.
         this.endShapeDraw();

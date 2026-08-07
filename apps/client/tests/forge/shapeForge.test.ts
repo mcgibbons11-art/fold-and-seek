@@ -375,6 +375,35 @@ describe("building a disguise in the Forge", () => {
     expect(after[2]).toBeCloseTo(before[2] ?? 0, 6);
   });
 
+  it("keeps the shape of a free-form sweep instead of flattening it", () => {
+    const forge = controller();
+    forge.setToolMode("panels");
+
+    // A duck-ish squiggle: it wanders in both axes and doubles back. Nothing
+    // about it should be straightened, snapped or filled while it is drawn.
+    const stroke = Array.from({ length: 60 }, (_, index) => {
+      const t = (index / 59) * Math.PI * 2;
+      return { x: Math.cos(t) * 0.12 + Math.cos(t * 3) * 0.03, y: Math.sin(t) * 0.09 };
+    });
+    expect(forge.drawOutline(stroke)).toBe(true);
+
+    const outline = forge.disguise.shapes[0]?.outline ?? [];
+    expect(outline.length).toBeGreaterThan(8);
+    // Spread on BOTH axes. The bug that made every drawing a vertical line
+    // showed up exactly here: one axis collapsed to nothing.
+    const spanX = Math.max(...outline.map((p) => p[0])) - Math.min(...outline.map((p) => p[0]));
+    const spanY = Math.max(...outline.map((p) => p[1])) - Math.min(...outline.map((p) => p[1]));
+    expect(spanX).toBeGreaterThan(0.2);
+    expect(spanY).toBeGreaterThan(0.2);
+    // And it wanders rather than marching one way: a squiggle reverses.
+    const reversals = outline.filter((point, index) =>
+      index > 1 &&
+      Math.sign(point[0] - (outline[index - 1]?.[0] ?? 0)) !==
+        Math.sign((outline[index - 1]?.[0] ?? 0) - (outline[index - 2]?.[0] ?? 0)),
+    ).length;
+    expect(reversals).toBeGreaterThan(1);
+  });
+
   it("turns one lasso sweep into one closed solid you can reshape", () => {
     const forge = controller();
     forge.setToolMode("panels");
