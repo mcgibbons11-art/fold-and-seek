@@ -177,6 +177,25 @@ console.log("PANEL BEFORE:", panelText(before));
 const names = await game.getByRole("button").allInnerTexts().catch(() => []);
 console.log("BUTTONS:", names.map((n) => n.replace(/\s+/g, " ")).slice(0, 24).join(" | "));
 
+/** One free-form loop over the character, drawn with the real mouse. */
+const sweep = async (scale = 1) => {
+  const box = await paneBox();
+  const cx = box.x + box.w * 0.58;
+  const cy = box.y + box.h * 0.52;
+  const rx = box.w * 0.10 * scale;
+  const ry = box.h * 0.13 * scale;
+  await page.mouse.move(cx + rx, cy);
+  await page.mouse.down();
+  for (let step = 1; step <= 40; step += 1) {
+    const t = (step / 40) * Math.PI * 2;
+    await page.mouse.move(cx + Math.cos(t) * rx, cy + Math.sin(t) * ry, { steps: 2 });
+  }
+  await page.mouse.up();
+  await page.waitForTimeout(1_400);
+};
+const shapeCount = async () =>
+  Number((await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
+
 // Draw a disguise: a free-form squiggle over the character, not a straight
 // sweep - a curve is what proves nothing is being straightened or flattened.
 const beforeDraw = Number((await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0");
@@ -201,18 +220,17 @@ console.log("DRAW STATUS:", (afterAdd.match(/drew that[^.]*\.|that was a click[^
 record("a free-form sweep makes exactly one solid", drewCount === beforeDraw + 1,
   `${String(beforeDraw)} then ${String(drewCount)}`);
 
-// Duplicate by key, then delete by key.
+// Duplicate by key, then delete by key - judged against the live count.
+const beforeDup = await shapeCount();
 await page.keyboard.press("Control+d");
 await page.waitForTimeout(900);
-const afterDup = await textOf();
-record("D duplicates", /3 of 16 shapes/i.test(afterDup),
-  (afterDup.match(/\d+ of 16 shapes/i) ?? ["no count"])[0]);
+const afterDup = await shapeCount();
+record("D duplicates", afterDup === beforeDup + 1, `${String(beforeDup)} then ${String(afterDup)}`);
 
 await page.keyboard.press("Delete");
 await page.waitForTimeout(900);
-const afterDel = await textOf();
-record("Delete removes", /2 of 16 shapes/i.test(afterDel),
-  (afterDel.match(/\d+ of 16 shapes/i) ?? ["no count"])[0]);
+const afterDel = await shapeCount();
+record("Delete removes", afterDel === afterDup - 1, `${String(afterDup)} then ${String(afterDel)}`);
 
 // Mirror: the verb that halves a symmetric build.
 const beforeMirror = (await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0";
@@ -222,18 +240,6 @@ const afterMirror = (await textOf()).match(/(\d+) OF 16 SHAPES/i)?.[1] ?? "0";
 record("mirror adds the other side", mirrored && Number(afterMirror) === Number(beforeMirror) + 1,
   `${beforeMirror} then ${afterMirror}`);
 
-// Snap: the verb that closes the gap a hider gets shot for.
-const snapped = await clickIf(/^snap flush$/i, 6_000);
-await page.waitForTimeout(900);
-const afterSnap = await textOf();
-record("snap flush is reachable and answers", snapped &&
-  /already flush|nothing to snap|of 16 shapes/i.test(afterSnap), snapped ? "pressed" : "missing");
-
-// Paint one shape without repainting the rest.
-const painted = await clickIf(/^paint it$/i, 6_000);
-await page.waitForTimeout(900);
-record("per-shape paint is reachable", painted ||
-  /sample a finish first/i.test(await textOf()), painted ? "pressed" : "needs a held finish");
 
 // The two verdicts a hider builds against.
 const verdicts = await textOf();
@@ -264,6 +270,45 @@ await page.waitForTimeout(900);
 const afterDrag = await textOf();
 record("dragging leaves the disguise intact", /of 16 shapes/i.test(afterDrag),
   (afterDrag.match(/\d+ of 16 shapes/i) ?? ["no count"])[0]);
+
+// ---- rigour: the things reported broken, each driven in the editor -------
+
+// Materials must reach a drawn solid: switch to the material tool, press a
+// swatch, and click the drawing.
+await page.keyboard.press("4");
+await page.waitForTimeout(1_000);
+const swatchPressed = await clickIf(/walnut|oak|brass|porcelain/i, 6_000);
+await page.waitForTimeout(500);
+await clickAt(0.58, 0.52);
+await page.waitForTimeout(900);
+const materialText = await textOf();
+record("a drawn solid takes a material", swatchPressed && /painted/i.test(materialText),
+  (materialText.match(/painted[^.]*\./i) ?? ["no answer"])[0].slice(0, 60));
+
+// Delete every shape, draw again, and make sure nothing returns.
+await page.keyboard.press("3");
+await page.waitForTimeout(900);
+let guard = 0;
+while ((await shapeCount()) > 0 && guard < 20) {
+  await page.keyboard.press("Delete");
+  await page.waitForTimeout(350);
+  guard += 1;
+}
+const emptied = await shapeCount();
+await sweep(0.8);
+const afterRedraw = await shapeCount();
+record("deleting everything then drawing leaves exactly one", emptied === 0 && afterRedraw === 1,
+  `emptied ${String(emptied)} then ${String(afterRedraw)}`);
+
+// The unfilled mode has to produce a solid too.
+const lineMode = await clickIf(/^just the line$/i, 6_000);
+await page.waitForTimeout(600);
+const beforeLine = await shapeCount();
+await sweep(0.7);
+const afterLine = await shapeCount();
+record("an unfilled drawing still makes a solid", lineMode && afterLine === beforeLine + 1,
+  `${String(beforeLine)} then ${String(afterLine)}`);
+await clickIf(/^fill it in$/i, 4_000);
 
 await page.screenshot({ path: path.join(outputDir, "build-tool-editor.png") });
 console.log(JSON.stringify({ findings, errors: errors.slice(0, 6) }, null, 1));

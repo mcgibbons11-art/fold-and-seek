@@ -858,6 +858,8 @@ export class ForgeController {
   private shapeIdFloor = 0;
   /** Whether a drawn outline closes into a slab or stands as the line itself. */
   private fillDrawings = true;
+  /** The shape under the press, selected only if the pointer never sweeps. */
+  private pendingShapeSelect: string | null = null;
   private shapeOutline: THREE.LineSegments | null = null;
   private strokeTrace: THREE.Line | null = null;
   private shapeDraw: {
@@ -2404,10 +2406,19 @@ export class ForgeController {
     this.shapeDraw = null;
     if (this.strokeTrace !== null) this.strokeTrace.visible = false;
     this.canvas.style.cursor = this.mode === "panels" ? DRAW_CURSOR : "crosshair";
+    const pendingSelect = this.pendingShapeSelect;
+    this.pendingShapeSelect = null;
     if (draw === null || this.locked) return;
     if (draw.points.length < 3) {
-      this.status = "That was a click. Hold the button and sweep to draw.";
-      this.emit();
+      // It never moved, so it was the click it looked like: select what was
+      // pressed, or explain the gesture when the press hit nothing.
+      if (pendingSelect !== null) {
+        this.selectShape(pendingSelect);
+        this.audio.play("ui_click");
+      } else {
+        this.status = "That was a click. Hold the button and sweep to draw.";
+        this.emit();
+      }
       return;
     }
 
@@ -5339,18 +5350,14 @@ export class ForgeController {
         this.audio.play("ui_click");
         return true;
       }
-      const shapeId = this.pickShape();
-      if (shapeId !== null) {
-        this.selectShape(shapeId);
-        this.audio.play("ui_click");
-        return true;
-      }
-
-      // Nothing under the pointer: the drag draws a shape instead of orbiting.
-      // One gesture for what otherwise costs an add, a drag out of the body,
-      // and a stretch on two axes - which is the single biggest saving
-      // available under a 115 second clock.
+      // Select-versus-draw is decided by MOVEMENT, not by what is under the
+      // press. Deciding at press time meant a press that landed on any built
+      // shape selected it instead of starting a stroke, so once the first
+      // piece existed nothing overlapping could ever be drawn - and a
+      // disguise is nothing but overlapping pieces. The press starts a draw
+      // either way; a release that never moved becomes the click it was.
       if (!this.locked) {
+        this.pendingShapeSelect = this.pickShape();
         this.beginShapeDraw();
         return true;
       }
