@@ -86,7 +86,7 @@ describe("shapes on a disguise", () => {
 
     visual.applyMaterials([{ slotId: "body", swatchId: "mimic_porcelain" }]);
     const pale = visual.shapeMeshes[0]?.material;
-    visual.applyMaterials([{ slotId: "body", swatchId: "mimic_walnut" }]);
+    visual.applyMaterials([{ slotId: "body", swatchId: "wood_walnut" }]);
     const dark = visual.shapeMeshes[0]?.material;
 
     expect(pale).toBeDefined();

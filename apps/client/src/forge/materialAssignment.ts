@@ -22,12 +22,23 @@ export const EYE_SLOT_ID = "eyes";
 export type SlotAssignmentError = "unknown-slot" | "illegal-swatch";
 
 /** Slot ids the Forge is allowed to write. */
+/**
+ * A built shape's own slot, which is its id.
+ *
+ * Shapes are created at runtime, so their slots cannot be listed ahead of time
+ * the way bones and sockets are. The shape of the id is the check.
+ */
+export function isShapeSlot(slotId: string): boolean {
+  return /^shape_\d{4,}$/.test(slotId);
+}
+
 export function isAssignableSlot(slotId: string): boolean {
   return (
     slotId === BODY_SLOT_ID ||
     slotId === EYE_SLOT_ID ||
     isBoneName(slotId) ||
-    isPanelSocketName(slotId)
+    isPanelSocketName(slotId) ||
+    isShapeSlot(slotId)
   );
 }
 

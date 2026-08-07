@@ -2683,7 +2683,23 @@ export class ForgeController {
   }
 
   sampleUnderPointer(): void {
-    // Own body first (2026-08-05): pointing at your own part copies the
+    // A built shape first, since it stands in front of the body: copying one
+    // jar's finish onto its rim is the ordinary case once anything has been
+    // built at all.
+    const shapeId = this.pickShape();
+    const built = shapeId === null ? undefined : this.state.shapes.find((e) => e.id === shapeId);
+    if (built !== undefined) {
+      const worn = resolvedSwatchFor(this.state.materials, built.materialSlotId, DEFAULT_BODY_SWATCH_ID);
+      const swatch = swatchById(worn);
+      if (swatch !== null) {
+        this.sampledSwatchId = worn;
+        this.audio.play("material_sample");
+        this.status = `Sampled ${swatch.label} from that shape.`;
+        this.emit();
+        return;
+      }
+    }
+    // Own body next (2026-08-05): pointing at your own part copies the
     // swatch it wears, the way paint's dropper reads its own strokes.
     const slot = this.pickSegmentSlot();
     const bone = slot >= 0 ? SEGMENT_BONES[slot] : undefined;
@@ -5037,6 +5053,19 @@ export class ForgeController {
       this.materialDropperArmed = false;
       this.sampleUnderPointer();
       return true;
+    }
+    // Built shapes take the swatch before the body does. They stand in front
+    // of it - that is the point of them - so a click that lands on one was
+    // meant for it, and a player painting a jar should not have to switch back
+    // to the Build tool to do it.
+    const shapeId = this.pickShape();
+    if (shapeId !== null) {
+      const shape = this.state.shapes.find((entry) => entry.id === shapeId);
+      if (shape !== undefined) {
+        this.selectShape(shapeId);
+        this.assignSwatch(shape.materialSlotId);
+        return true;
+      }
     }
     const slot = this.pickSegmentSlot();
     if (slot >= 0) {

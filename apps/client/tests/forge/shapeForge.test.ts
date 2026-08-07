@@ -325,6 +325,24 @@ describe("building a disguise in the Forge", () => {
     expect(copy?.materialSlotId).toBe(source?.materialSlotId);
   });
 
+  it("takes a swatch on a shape through the material tool, not only the build panel", () => {
+    const forge = controller();
+    forge.addShape("cylinder");
+    const shape = forge.disguise.shapes[0];
+    expect(shape).toBeDefined();
+
+    // Assigning by the shape's own slot is what the material tool does when a
+    // click lands on a built shape rather than on the body behind it.
+    forge.assignSwatch(shape?.materialSlotId ?? "", "wood_walnut");
+    const worn = forge.disguise.materials.find((m) => m.slotId === shape?.materialSlotId);
+    expect(worn?.swatchId).toBe("wood_walnut");
+
+    // And the body is untouched, which is the whole reason each shape has a
+    // slot: painting the rim must not repaint the jar.
+    const body = forge.disguise.materials.find((m) => m.slotId === "body");
+    expect(body?.swatchId).not.toBe("wood_walnut");
+  });
+
   it("refuses to build past the wire's ceiling rather than dropping shapes", () => {
     const forge = controller();
     for (let index = 0; index < MAX_SHAPES; index += 1) forge.addShape("cube");
